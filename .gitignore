@@ -1,0 +1,10 @@
+# Mac OS cache files
+*/**/.DS_Store
+
+# C extensions
+*.so
+
+# Distribution / packaging
+bin/
+build/
+dist/
