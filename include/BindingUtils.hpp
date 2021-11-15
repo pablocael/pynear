@@ -11,6 +11,10 @@ class BindingUtils {
 public:
     template <class T, int... Dims>
     static py::array_t<T> bufferToNumpyNdArray(T* buffer) {
+        /*
+         *  :param buffer: this buffer will be destroyed automatically so this
+         *  function will take over the ownership.
+         */
 
         py::capsule free_when_done(buffer, [](void *rawbuff) {
                 T* buff = reinterpret_cast<T*>(rawbuff);

@@ -1,18 +1,22 @@
-#include "VPTree.hpp"
-#include "BindingUtils.hpp"
+/*
+ *  MIT Licence
+ *  Copyright 2021 Pablo Carneiro Elias
+ */
 
 #include <iostream>
 
+#include "VPTree.hpp"
+#include "BindingUtils.hpp"
+
+
 VPTree::VPTree() {
-    // TODO implement
+    // TODO(pablo.cael) implement
 }
 
-py::array_t<double> VPTree::execute()
-{
+py::array_t<double> VPTree::execute() {
     double *foo = new double[100];
-    for (size_t i = 0; i < 100; i++)
-    {
-        foo[i] = (double)i;
+    for (size_t i = 0; i < 100; i++) {
+        foo[i] = static_cast<double>(i);
     }
 
     return BindingUtils::bufferToNumpyNdArray<double, 10, 10>(foo);
@@ -21,6 +25,9 @@ py::array_t<double> VPTree::execute()
 void VPTree::test(py::array_t<double> array)
 {
     auto buff = array.request();
-    std::cout << buff.shape[0] << ", " << buff.shape[1] << "," << buff.shape[2]  << std::endl;
+    for(auto e: buff.shape)
+    {
+        std::cout << e << std::endl;
+    }
 
 }
