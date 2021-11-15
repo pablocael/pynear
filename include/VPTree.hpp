@@ -10,4 +10,5 @@ class VPTree {
 public:
     VPTree();
     py::array_t<double> execute();
+    void test(py::array_t<double> array);
 };

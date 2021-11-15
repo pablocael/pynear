@@ -2,52 +2,41 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
+#include <type_traits>
 
 namespace py = pybind11;
 
 class BindingUtils {
 
 public:
-    template <class T>
-    static py::array_t<T> bufferToNumpy1d(T* buffer, int dim) {
+    template <class T, int... Dims>
+    static py::array_t<T> bufferToNumpyNdArray(T* buffer) {
+
         py::capsule free_when_done(buffer, [](void *rawbuff) {
                 T* buff = reinterpret_cast<T*>(rawbuff);
                 delete[] buff;
         });
 
-        return py::array_t<T>(
-                {dim}, // shape
-                {sizeof(T)}, // C-style contiguous strides for double
-                buffer,
-                free_when_done
-            );
-    }
+        const int numDims = sizeof...(Dims);
+        const int dims[] = {Dims...};
 
-    template <class T>
-    static py::array_t<T> bufferToNumpy2d(T* buffer, int dim0, int dim1) {
-        py::capsule free_when_done(buffer, [](void *rawbuff) {
-                T* buff = reinterpret_cast<T*>(rawbuff);
-                delete[] buff;
-        });
+        int totalSize = 0;
+        std::vector<int> offsets(numDims);
+        for(int i = 0; i < numDims; ++i)
+        {
+            totalSize *= dims[i];
+        }
 
-        return py::array_t<T>(
-                {dim0, dim1}, // shape
-                {dim1*sizeof(T), sizeof(T)}, // C-style contiguous strides for double
-                buffer,
-                free_when_done
-            );
-    }
-
-    template <class T>
-    static py::array_t<T> bufferToNumpy3d(T* buffer, int dim0, int dim1, int dim2) {
-        py::capsule free_when_done(buffer, [](void *rawbuff) {
-                T* buff = reinterpret_cast<T*>(rawbuff);
-                delete[] buff;
-        });
+        int offset = 1;
+        for(int i = 0; i < numDims; ++i)
+        {
+            offset *= dims[i];
+            offsets[i] = sizeof(T) * totalSize / offset;
+        }
 
         return py::array_t<T>(
-                {dim0, dim1, dim2}, // shape
-                {dim1 * dim2*sizeof(T), dim2 * sizeof(T), sizeof(T)}, // C-style contiguous strides for double
+                {Dims...}, // shape
+                std::move(offsets), // C-style contiguous strides for double
                 buffer,
                 free_when_done
             );

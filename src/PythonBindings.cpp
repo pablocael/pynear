@@ -8,5 +8,6 @@ namespace py = pybind11;
 PYBIND11_MODULE(pyvptree, m) {
     py::class_<VPTree>(m, "VPTree")
         .def(py::init<>())
-        .def("execute", &VPTree::execute);
+        .def("execute", &VPTree::execute)
+        .def("test", &VPTree::test);
 }
