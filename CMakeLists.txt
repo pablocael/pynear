@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.10)
 
 
 project(VPTree LANGUAGES CXX VERSION 1.0.0)
+include(GNUInstallDirs)
+
 set(CMAKE_CXX_STANDARD 17)
 
 find_package(pybind11 REQUIRED)
@@ -30,19 +32,18 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 set(CONFIG_NAME ${PROJECT_NAME}Config)
 
 pybind11_add_module(pyvptree MODULE src/PythonBindings.cpp src/VPTree.cpp)
-add_dependencies(pyvptree ${PROJECT_NAME})
 
 target_include_directories(pyvptree PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
-    PRIVATE src)
+)
 
-install(TARGETS pyvptree ${PROJECT_NAME} EXPORT ${CONFIG_NAME}
-    ARCHIVE  DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY  DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    RUNTIME  DESTINATION ${CMAKE_INSTALL_BINDIR})
-
-install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME})
+install(TARGETS ${PROJECT_NAME} pyvptree EXPORT ${CONFIG_NAME}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME}
+)
 
 # Install the config file into the project name within share so it can be found by other cmake projects
 install(EXPORT ${CONFIG_NAME} DESTINATION share/${PROJECT_NAME}/cmake)
