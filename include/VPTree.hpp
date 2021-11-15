@@ -3,4 +3,5 @@
 class VPTree {
 public:
     VPTree();
+    void execute();
 };

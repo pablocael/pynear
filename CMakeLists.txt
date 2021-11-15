@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.10)
 
+
 project(VPTree LANGUAGES CXX VERSION 1.0.0)
 set(CMAKE_CXX_STANDARD 17)
 
+find_package(pybind11 REQUIRED)
 set(DEFAULT_BUILD_TYPE "Release")
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -27,7 +29,15 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 
 set(CONFIG_NAME ${PROJECT_NAME}Config)
 
-install(TARGETS ${PROJECT_NAME} EXPORT ${CONFIG_NAME}
+pybind11_add_module(pyvptree MODULE src/PythonBindings.cpp src/VPTree.cpp)
+add_dependencies(pyvptree ${PROJECT_NAME})
+
+target_include_directories(pyvptree PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+    PRIVATE src)
+
+install(TARGETS pyvptree ${PROJECT_NAME} EXPORT ${CONFIG_NAME}
     ARCHIVE  DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY  DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME  DESTINATION ${CMAKE_INSTALL_BINDIR})
