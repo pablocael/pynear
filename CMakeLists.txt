@@ -6,7 +6,9 @@ include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 17)
 
+find_package(PythonLibs REQUIRED)
 find_package(pybind11 REQUIRED)
+
 set(DEFAULT_BUILD_TYPE "Release")
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -17,13 +19,16 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 enable_testing()
-
 add_library(${PROJECT_NAME} src/VPTree.cpp)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
+    ${pybind11_INCLUDE_DIR}
+    ${PYTHON_INCLUDE_DIRS}
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
     PRIVATE src)
+
+target_link_libraries(${PROJECT_NAME} ${PYTHON_LIBRARIES})
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
     VERSION ${PROJECT_VERSION}
