@@ -3,6 +3,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <type_traits>
+#include <vector>
 
 namespace py = pybind11;
 
