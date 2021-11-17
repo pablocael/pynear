@@ -28,7 +28,7 @@ add_subdirectory(${CMAKE_CURRENT_BINARY_DIR}/googletest-src
                  EXCLUDE_FROM_ALL)
 
 # Now simply link against gtest or gtest_main as needed. Eg
-add_executable(vptree-tests vptree-tests.cpp)
+add_executable(vptree-tests VPTreeTests.cpp)
 target_link_libraries(vptree-tests VPTree gmock_main)
 
 gtest_discover_tests(vptree-tests)
