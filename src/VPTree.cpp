@@ -37,6 +37,9 @@ void VPTree<T>::build(const std::vector<T>& array, unsigned int dimension) {
     auto* root = new VPLevelPartition(-1, 0, (array.size() / dimension) - 1);
     _toSplit.push_back(root);
 
+    // prevent reallocating distances vector by creating a full distance vector
+    std::vector<double> distances(array.size() / dimension);
+
     while(!_toSplit.empty()) {
 
         VPLevelPartition* current = _toSplit.back();
@@ -55,14 +58,12 @@ void VPTree<T>::build(const std::vector<T>& array, unsigned int dimension) {
         // put vantage point as the first element within the examples list
         swapElements<T>(array, vpIndex, start);
 
-        std::vector<double> distances;
-        vptree::math::distancesToRef(array, start+1, end, start, distances);
+        vptree::math::distancesToRef(array, start, end, start, distances);
 
-         /* std::nth_element( */ 
-         /*        _items.begin() + lower + 1, */ 
-         /*        _items.begin() + median, */
-         /*        _items.begin() + upper, */
-         /*        DistanceComparator( _items[lower] )); */
+        unsigned int median = (end - start+) / 2;
+
+        // partition in order to keep all elements smaller than median in the left and larger in the right
+         std::nth_element(distances.begin(), distances.begin() + median, distances.end());
 
          /*    // what was the median? */
          /*    node->threshold = distance( _items[lower], _items[median] ); */

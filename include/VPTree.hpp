@@ -53,6 +53,8 @@ private:
 template <typename T>
 class VPTree {
 public:
+    // TODO: create and Item element containing original index and comparator. We need to reorder elements keeping original index
+    // TODO: create another constructor for IVF with custom ids
     VPTree(const std::vector<T>& array, unsigned int dimension);
     /*
      *  Builds a Vantage Point tree using each element of the given array as one coordinate buffer

@@ -44,6 +44,7 @@ inline double distance(const std::vector<unsigned char>& coordinates, unsigned i
 
 template <typename T>
 inline void distancesToRef(const std::vector<T>& coordinates, unsigned int startIndex, unsigned int endIndex, unsigned int referencePointIndex, unsigned int dim, std::vector<double>& distances)
+    // distances vector is already allocated with full size to fit all distances
     // here we should find the median of distances to all elements between startIndex and endIndex to the referencePointIndex.
     // we first calculate those distances
     //
@@ -53,7 +54,6 @@ inline void distancesToRef(const std::vector<T>& coordinates, unsigned int start
     for(int i = 0; i < range; ++i) {
 
         unsigned int pointIndex = startIndex + i;
-        double d = distance<T>(coordinates, pointIndex, referencePointIndex, dim);
-        distances.push_back(d);
+        distances[i] = distance<T>(coordinates, pointIndex, referencePointIndex, dim);
     }
 };
