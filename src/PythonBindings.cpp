@@ -5,12 +5,16 @@
 
 namespace py = pybind11;
 
+double dist(const double& p1, const double& p2) {
+    return abs(p1 - p2);
+}
+
 class VPTreeNumpyAdapter {
 public:
     VPTreeNumpyAdapter();
 
 private:
-    vptree::VPTree<double> _tree;
+    vptree::VPTree<double, dist> _tree;
 
 };
 

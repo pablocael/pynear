@@ -11,8 +11,5 @@ namespace vptree::tests
 {
     TEST(MathUtilsTest, Test) {
 
-        std::vector<double> v = { 0, 0, 0, 0, 1, 1, 1, 1 };
-        double s = vptree::math::distance2(v, 0, 1, 4);
-        ASSERT_DOUBLE_EQ(s, 4);
     }
 }

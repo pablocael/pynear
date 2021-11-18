@@ -5,6 +5,7 @@
 
 namespace vptree {
 
+template <typename T>
 class VPLevelPartition {
 public:
     VPLevelPartition(double radius, unsigned int start, unsigned int end) {
@@ -34,9 +35,16 @@ public:
     bool isEmpty() { return _indexStart == -1 || _indexStart == -1; }
     unsigned int start() { return _indexStart; }
     unsigned int end() { return _indexEnd; }
+    void setRadius(double radius) { _radius = radius; }
+
+    void setChild(VPLevelPartition<T>* left, VPLevelPartition<T>* right) {
+        _left = left;
+        _right = right;
+    }
 
 private:
     double _radius;
+
 
     //
     // _indexStart and _indexEnd are index pointers to examples within the examples list, not index of coordinates within the coordinate buffer.
@@ -45,36 +53,46 @@ private:
     unsigned int _indexStart; // points to the first of the example in which this level starts
     unsigned int _indexEnd;
 
-    VPLevelPartition* _left = nullptr;
-    VPLevelPartition* _right = nullptr;
+    VPLevelPartition<T>* _left = nullptr;
+    VPLevelPartition<T>* _right = nullptr;
 };
 
 
-template <typename T>
+template <typename T, double(*distance)(const T&, const T&)>
 class VPTree {
 public:
     // TODO: create and Item element containing original index and comparator. We need to reorder elements keeping original index
     // TODO: create another constructor for IVF with custom ids
-    VPTree(const std::vector<T>& array, unsigned int dimension);
+    VPTree(const std::vector<T>& array);
+
+protected:
     /*
      *  Builds a Vantage Point tree using each element of the given array as one coordinate buffer
-     *  using L2 Metric Distance.
-     *
-     *  :param array: an array containing N * D elements, where N is the number of examples (e.g: points in D dimensions) and D is the size of the dimensional space.
-     *  :param dimension: the number of coordinates of each example within the array. Must be dimension >= 1.
+     *  using the given metric distance.
      */
+    void build(const std::vector<T>& array);
+    unsigned int selectVantagePoint(unsigned int fromIndex, unsigned int toIndex);
+
+    /*
+     * A vantage point distance comparator. Will check which from two points are closer to the reference vantage point.
+     * This is used to find the median distance from vantage point in order to split the VPLevelPartition into two sets.
+     */
+    struct VPDistanceComparator {
+
+        const T& item;
+        VPDistanceComparator( const T& item ) : item(item) {}
+        bool operator()(const T& a, const T& b) {
+            return distance( item, a ) < distance( item, b );
+            
+        }
+        
+    };
 
 protected:
-    void build(const std::vector<T>& array, unsigned int dimension);
-    unsigned int selectVantagePoint(unsigned int from, unsigned int to);
 
-protected:
-
-    VPLevelPartition _rootPartition;
-
-    unsigned int _dimension;
-    std::vector<T> _coordinatesBuffer;
-    std::function<double(const std::vector<T>&, unsigned int, unsigned int)> _metric;
+    std::vector<T> _examples;
+    VPLevelPartition<T>* _rootPartition = nullptr;
+    const unsigned int MIN_POINTS_PER_PARTITION = 20;
 };
 
 } // namespace vptree
