@@ -6,6 +6,7 @@
 #include <vector>
 #include <random>
 #include <chrono>
+#include <random>
 #include <iostream>
 #include <Eigen/Core>
 
@@ -20,11 +21,17 @@ namespace vptree::tests
 {
     TEST(VPTests, TestCreation) {
 
-        const unsigned int numPoints = 10000;
+        std::default_random_engine generator;
+        std::uniform_real_distribution<double> distribution(-10,10);
+
+        const unsigned int numPoints = 1000;
         std::vector<Eigen::Vector3d> points;
         points.reserve(numPoints);
-        for(auto point: points) {
-            point.setRandom();
+        points.resize(numPoints);
+        for(Eigen::Vector3d& point: points) {
+            point[0] = distribution(generator);
+            point[1] = distribution(generator);
+            point[2] = distribution(generator);
         }
 
         std::cout << "Building tree with " << numPoints << " points " << std::endl;

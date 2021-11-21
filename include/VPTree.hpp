@@ -85,7 +85,8 @@ protected:
 
         auto* root = new VPLevelPartition<T>(-1, 0, _examples.size() - 1);
         _toSplit.push_back(root);
-
+        _rootPartition = root;
+        
         while(!_toSplit.empty()) {
 
             VPLevelPartition<T>* current = _toSplit.back();
@@ -104,7 +105,7 @@ protected:
             // put vantage point as the first element within the examples list
             std::swap<T>(_examples[vpIndex], _examples[start]);
 
-            unsigned int median = (end - start) / 2;
+            unsigned int median = (end + start) / 2;
 
             // partition in order to keep all elements smaller than median in the left and larger in the right
             std::nth_element(_examples.begin() + start + 1, _examples.begin() + median, _examples.begin() + end, VPDistanceComparator(_examples[start]));
@@ -119,18 +120,26 @@ protected:
             auto* left = new VPLevelPartition<T>(-1, start + 1, median);
             _toSplit.push_back(left);
 
-            auto* right = new VPLevelPartition<T>(-1, start + 1, median);
+            auto* right = new VPLevelPartition<T>(-1, median + 1, end);
             _toSplit.push_back(right);
 
             current->setChild(left, right);
+            _numTotalLevels++;
         }
     }
 
     unsigned int selectVantagePoint(unsigned int fromIndex, unsigned int toIndex) {
 
         // for now, simple random point selection as basic strategy: TODO: better vantage point selection
+        //
+        assert( fromIndex >= 0 && fromIndex < _examples.size() && toIndex >= 0 && toIndex < _examples.size() && fromIndex <= toIndex && "fromIndex and toIndex must be in a valid range" );
+
         unsigned int range = (toIndex-fromIndex) + 1;
         return fromIndex + (rand() % range);
+    }
+
+    unsigned int getNumLevels() {
+        return _numTotalLevels;
     }
 
     /*
@@ -148,6 +157,8 @@ protected:
     };
 
 protected:
+
+    unsigned int _numTotalLevels = 0;
 
     std::vector<T> _examples;
     VPLevelPartition<T>* _rootPartition = nullptr;
