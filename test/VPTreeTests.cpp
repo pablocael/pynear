@@ -50,7 +50,6 @@ namespace vptree::tests
 
         const unsigned int numPoints = 1000000;
         std::vector<Eigen::Vector3d> points;
-        points.reserve(numPoints);
         points.resize(numPoints);
         for(Eigen::Vector3d& point: points) {
             point[0] = distribution(generator);
@@ -67,18 +66,17 @@ namespace vptree::tests
         std::cout << "Process took" << diff.count() << " seconds " << std::endl;
 
         std::cout << "Searching within the tree with " << numPoints << " points " << std::endl;
-        start = std::chrono::steady_clock::now();
 
         std::vector<Eigen::Vector3d> queries;
-        points.reserve(200);
-        points.resize(200);
+        queries.resize(5000);
         for(Eigen::Vector3d& point: queries) {
             point[0] = distribution(generator);
             point[1] = distribution(generator);
             point[2] = distribution(generator);
         }
         std::vector<VPTree<Eigen::Vector3d,distance>::VPTreeSearchResultElement> results;
-        tree.search(queries, 100, results);
+        start = std::chrono::steady_clock::now();
+        tree.search(queries, 2, results);
         end = std::chrono::steady_clock::now();
         diff = end - start;
         std::cout << "Process took" << diff.count() << " seconds " << std::endl;
