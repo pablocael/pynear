@@ -87,6 +87,8 @@ public:
         std::vector<double> distances;
     };
 
+    VPTree() = default;
+
     VPTree(const std::vector<T>& array) {
 
         _examples.reserve(array.size());
