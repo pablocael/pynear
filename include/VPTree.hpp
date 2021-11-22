@@ -65,20 +65,36 @@ private:
 template <typename T, double(*distance)(const T&, const T&)>
 class VPTree {
 public:
-    // TODO: create and Item element containing original index and comparator. We need to reorder elements keeping original index
-    // TODO: create another constructor for IVF with custom ids
+
     VPTree(const std::vector<T>& array) {
 
-        _examples = ::std::move(array);
+        _examples.reserve(array.size());
+        _examples.resize(array.size());
+        for(unsigned int i = 0; i < array.size(); ++i) {
+            _examples[i] = VPTreeElement(i, array[i]);
+        }
+
         build(_examples);
     }
 
 protected:
+    struct VPTreeElement {
+
+        VPTreeElement() = default;
+        VPTreeElement(unsigned int index, const T& value) {
+            originalIndex = index;
+            val = value;
+        }
+
+        unsigned int originalIndex;
+        T val;
+    };
+
     /*
      *  Builds a Vantage Point tree using each element of the given array as one coordinate buffer
      *  using the given metric distance.
      */
-    void build(const std::vector<T>& array) { 
+    void build(const std::vector<VPTreeElement>& array) {
 
         // Select vantage point
         std::vector<VPLevelPartition<T>*> _toSplit;
@@ -86,7 +102,7 @@ protected:
         auto* root = new VPLevelPartition<T>(-1, 0, _examples.size() - 1);
         _toSplit.push_back(root);
         _rootPartition = root;
-        
+
         while(!_toSplit.empty()) {
 
             VPLevelPartition<T>* current = _toSplit.back();
@@ -103,7 +119,7 @@ protected:
             unsigned vpIndex = selectVantagePoint(start, end);
 
             // put vantage point as the first element within the examples list
-            std::swap<T>(_examples[vpIndex], _examples[start]);
+            std::swap(_examples[vpIndex], _examples[start]);
 
             unsigned int median = (end + start) / 2;
 
@@ -111,7 +127,7 @@ protected:
             std::nth_element(_examples.begin() + start + 1, _examples.begin() + median, _examples.begin() + end, VPDistanceComparator(_examples[start]));
 
             // distance from vantage point (which is at start index) and the median element
-            double medianDistance = distance(_examples[start], _examples[median]);
+            double medianDistance = distance(_examples[start].val, _examples[median].val);
             current->setRadius(medianDistance);
 
             // Schedule to build next levels
@@ -131,6 +147,7 @@ protected:
     unsigned int selectVantagePoint(unsigned int fromIndex, unsigned int toIndex) {
 
         // for now, simple random point selection as basic strategy: TODO: better vantage point selection
+        // considering length of active region border (as in Yianilos (1993) paper)
         //
         assert( fromIndex >= 0 && fromIndex < _examples.size() && toIndex >= 0 && toIndex < _examples.size() && fromIndex <= toIndex && "fromIndex and toIndex must be in a valid range" );
 
@@ -149,9 +166,9 @@ protected:
     struct VPDistanceComparator {
 
         const T& item;
-        VPDistanceComparator( const T& item ) : item(item) {}
-        bool operator()(const T& a, const T& b) {
-            return distance( item, a ) < distance( item, b );
+        VPDistanceComparator( const VPTreeElement& item ) : item(item.val) {}
+        bool operator()(const VPTreeElement& a, const VPTreeElement& b) {
+            return distance( item, a.val ) < distance( item, b.val );
         }
 
     };
@@ -160,7 +177,7 @@ protected:
 
     unsigned int _numTotalLevels = 0;
 
-    std::vector<T> _examples;
+    std::vector<VPTreeElement> _examples;
     VPLevelPartition<T>* _rootPartition = nullptr;
     const unsigned int MIN_POINTS_PER_PARTITION = 20;
 };
