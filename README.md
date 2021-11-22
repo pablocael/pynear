@@ -1,7 +1,7 @@
 # vptree-cpp
  C++ efficient Vantage Point Tree Implementation with Python 3 bindings.
  
- PS: this project is an Work in Progress
+ PS: this project is a Work in Progress
 
 
 # Compiling
