@@ -128,7 +128,6 @@ public:
         }
     }
 
-
 protected:
 
     /*
