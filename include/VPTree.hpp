@@ -100,6 +100,25 @@ public:
 
     void search(const std::vector<T>& queries, unsigned int k, std::vector<VPTree::VPTreeSearchResultElement>& results) {
 
+        if(_rootPartition == nullptr) {
+            return;
+        }
+
+
+        // we must return one result per queries
+        results.resize(queries.size());
+
+        for(int i = 0; i < queries.size(); ++i) {
+
+            const T& query = queries[i];
+            std::priority_queue<VPTreeSearchElement> knnQueue;
+            search(_rootPartition, query, k, knnQueue);
+
+            // we must always return k elements for each search unless there is no k elements
+            assert(static_cast<unsigned int>(knnQueue.size()) == std::min<unsigned int>(_examples.size(), k));
+
+            fillSearchResult(knnQueue, results[i]);
+        }
     }
 
 
@@ -125,6 +144,11 @@ protected:
 
             unsigned int start =  current->start();
             unsigned int end = current->end();
+
+            if(start >= end) {
+                // stop dividing if there is only one point inside
+                continue;
+            }
 
             unsigned vpIndex = selectVantagePoint(start, end);
 
@@ -164,33 +188,48 @@ protected:
         }
     };
 
-    void search(VPLevelPartition* partition, const T& val, unsigned int k) {
+    void search(VPLevelPartition* partition, const T& val, unsigned int k, std::priority_queue<VPTreeSearchElement>& knnQueue) {
 
-        std::priority_queue<VPTreeSearchElement> knnQueue;
         double tau = std::numeric_limits<double>::max();
-
-
         std::vector<VPLevelPartition*> toSearch = {partition};
-
 
         while(!toSearch.empty()) {
 
             auto* current = toSearch.back();
             toSearch.pop_back();
 
-            if(current->left() == nullptr || current->right() == nullptr) {
-
-                // perform exaustive search since there is no more subdivision
-            }
-
             double dist = distance(val, _examples[current->start()].val);
+            if(dist < tau) {
 
-
-            if(dist < partition.radius()) {
-                // we need to seach inside the vantage point partition
-                toSearch.push_back(partition->left());
+                if(knnQueue.size() == k) {
+                    knnQueue.pop();
+                }
+                knnQueue.push(VPTreeSearchElement(current->start(), dist));
+                tau = knnQueue.top().dist;
             }
 
+            if(dist > current->radius()) {
+                // must search outside
+                if(current->right() != nullptr) {
+                    toSearch.push_back(current->right());
+                }
+
+                // may need to search inside as well
+                if(dist - current->radius() < tau && current->left() != nullptr) {
+                    toSearch.push_back(current->left());
+                }
+            }
+            else {
+                // must search inside
+                if(current->left() != nullptr) {
+                    toSearch.push_back(current->left());
+                }
+
+                // may need to search outside as well
+                if(current->radius() - dist < tau && current->right() != nullptr) {
+                    toSearch.push_back(current->right());
+                }
+            }
         }
     }
 
@@ -203,6 +242,20 @@ protected:
 
         unsigned int range = (toIndex-fromIndex) + 1;
         return fromIndex + (rand() % range);
+    }
+
+    // Fill result element from serach element internal structure
+    // After a call to that function, knnQueue gets invalidated!
+    void fillSearchResult(std::priority_queue<VPTreeSearchElement>& knnQueue, VPTreeSearchResultElement& element) {
+        element.distances.reserve(knnQueue.size());
+        element.indexes.reserve(knnQueue.size());
+
+        while(!knnQueue.empty()) {
+            const VPTreeSearchElement& top = knnQueue.top();
+            element.distances.push_back(top.dist);
+            element.indexes.push_back(top.index);
+            knnQueue.pop();
+        }
     }
 
     /*

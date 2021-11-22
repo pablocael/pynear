@@ -24,7 +24,7 @@ namespace vptree::tests
         std::default_random_engine generator;
         std::uniform_real_distribution<double> distribution(-10,10);
 
-        const unsigned int numPoints = 1000;
+        const unsigned int numPoints = 10000;
         std::vector<Eigen::Vector3d> points;
         points.reserve(numPoints);
         points.resize(numPoints);
@@ -40,6 +40,47 @@ namespace vptree::tests
         VPTree<Eigen::Vector3d, distance> tree(points);
         auto end = std::chrono::steady_clock::now();
         std::chrono::duration<double> diff = end - start;
+        std::cout << "Process took" << diff.count() << " seconds " << std::endl;
+    }
+
+    TEST(VPTests, TestSearch) {
+
+        std::default_random_engine generator;
+        std::uniform_real_distribution<double> distribution(-10,10);
+
+        const unsigned int numPoints = 1000000;
+        std::vector<Eigen::Vector3d> points;
+        points.reserve(numPoints);
+        points.resize(numPoints);
+        for(Eigen::Vector3d& point: points) {
+            point[0] = distribution(generator);
+            point[1] = distribution(generator);
+            point[2] = distribution(generator);
+        }
+
+        std::cout << "Building tree with " << numPoints << " points " << std::endl;
+        auto start = std::chrono::steady_clock::now();
+
+        VPTree<Eigen::Vector3d, distance> tree(points);
+        auto end = std::chrono::steady_clock::now();
+        std::chrono::duration<double> diff = end - start;
+        std::cout << "Process took" << diff.count() << " seconds " << std::endl;
+
+        std::cout << "Searching within the tree with " << numPoints << " points " << std::endl;
+        start = std::chrono::steady_clock::now();
+
+        std::vector<Eigen::Vector3d> queries;
+        points.reserve(200);
+        points.resize(200);
+        for(Eigen::Vector3d& point: queries) {
+            point[0] = distribution(generator);
+            point[1] = distribution(generator);
+            point[2] = distribution(generator);
+        }
+        std::vector<VPTree<Eigen::Vector3d,distance>::VPTreeSearchResultElement> results;
+        tree.search(queries, 100, results);
+        end = std::chrono::steady_clock::now();
+        diff = end - start;
         std::cout << "Process took" << diff.count() << " seconds " << std::endl;
     }
 }
