@@ -1,3 +1,8 @@
+/*
+ *  MIT Licence
+ *  Copyright 2021 Pablo Carneiro Elias
+ */
+
 #pragma once
 
 #include <pybind11/pybind11.h>

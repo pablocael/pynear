@@ -36,7 +36,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 
 set(CONFIG_NAME ${PROJECT_NAME}Config)
 
-pybind11_add_module(pyvptree MODULE src/PythonBindings.cpp src/VPTree.cpp)
+pybind11_add_module(pyvptree MODULE src/PythonBindings.cpp )
 
 target_include_directories(pyvptree PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
