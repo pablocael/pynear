@@ -16,6 +16,8 @@ make install
 
 # Development
 
+The C++ code is a one header file within include/VPTree.hpp.
+
 To use the project with some compiling tools on can use CMake to export the compile commands:
 
 ```console
