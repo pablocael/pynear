@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.10)
 
 include(GoogleTest)
+find_package(OpenMP)
 
 # Download and unpack googletest at configure time
 configure_file(CMakeLists.txt.in googletest-download/CMakeLists.txt)
@@ -29,6 +30,6 @@ add_subdirectory(${CMAKE_CURRENT_BINARY_DIR}/googletest-src
 
 # Now simply link against gtest or gtest_main as needed. Eg
 add_executable(vptree-tests VPTreeTests.cpp)
-target_link_libraries(vptree-tests VPTree gmock_main)
+target_link_libraries(vptree-tests VPTree gmock_main OpenMP::OpenMP_CXX)
 
 gtest_discover_tests(vptree-tests)

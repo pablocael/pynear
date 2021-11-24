@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD 17)
 
 find_package(PythonLibs REQUIRED)
 find_package(pybind11 REQUIRED)
+find_package(OpenMP)
 
 set(DEFAULT_BUILD_TYPE "Release")
 
@@ -38,6 +39,7 @@ set(CONFIG_NAME ${PROJECT_NAME}Config)
 
 pybind11_add_module(pyvptree MODULE src/PythonBindings.cpp )
 
+target_link_libraries(pyvptree PUBLIC OpenMP::OpenMP_CXX)
 target_include_directories(pyvptree PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>

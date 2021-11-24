@@ -13,6 +13,7 @@
 #include <iostream>
 #include <algorithm>
 #include <functional>
+#include <omp.h>
 
 namespace vptree {
 
@@ -115,8 +116,8 @@ public:
         // we must return one result per queries
         results.resize(queries.size());
 
+        #pragma omp parallel for
         for(int i = 0; i < queries.size(); ++i) {
-
             const T& query = queries[i];
             std::priority_queue<VPTreeSearchElement> knnQueue;
             search(_rootPartition, query, k, knnQueue);
@@ -128,6 +129,28 @@ public:
         }
     }
 
+    // An optimized version for 1 NN search
+    void search1NN(const std::vector<T>& queries, std::vector<unsigned int>& indices, std::vector<double>& distances) {
+
+        if(_rootPartition == nullptr) {
+            return;
+        }
+
+
+        // we must return one result per queries
+        indices.resize(queries.size());
+        distances.resize(queries.size());
+
+        #pragma omp parallel for
+        for(int i = 0; i < queries.size(); ++i) {
+            const T& query = queries[i];
+            double dist = 0;
+            unsigned int index = -1;
+            search1NN(_rootPartition, query, index, dist);
+            distances[i] = dist;
+            indices[i] = index;
+        }
+    }
 protected:
 
     /*
@@ -233,6 +256,49 @@ protected:
 
                 // may need to search outside as well
                 if(current->radius() - dist < tau && current->right() != nullptr) {
+                    toSearch.push_back(current->right());
+                }
+            }
+        }
+    }
+
+    void search1NN(VPLevelPartition* partition, const T& val, unsigned int& resultIndex, double& resultDist) {
+
+        resultDist = std::numeric_limits<double>::max();
+        resultIndex = -1;
+
+        std::vector<VPLevelPartition*> toSearch = {partition};
+
+        while(!toSearch.empty()) {
+
+            auto* current = toSearch.back();
+            toSearch.pop_back();
+
+            double dist = distance(val, _examples[current->start()].val);
+            if(dist < resultDist) {
+                resultDist = dist;
+                resultIndex = current->start();
+            }
+
+            if(dist > current->radius()) {
+                // must search outside
+                if(current->right() != nullptr) {
+                    toSearch.push_back(current->right());
+                }
+
+                // may need to search inside as well
+                if(dist - current->radius() < resultDist && current->left() != nullptr) {
+                    toSearch.push_back(current->left());
+                }
+            }
+            else {
+                // must search inside
+                if(current->left() != nullptr) {
+                    toSearch.push_back(current->left());
+                }
+
+                // may need to search outside as well
+                if(current->radius() - dist < resultDist && current->right() != nullptr) {
                     toSearch.push_back(current->right());
                 }
             }
