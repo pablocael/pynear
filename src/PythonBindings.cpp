@@ -32,11 +32,11 @@ public:
         _tree = vptree::VPTree<arrayd, dist>(array);
     }
 
-    std::tuple<std::vector<std::vector<unsigned int>>, std::vector<std::vector<double>>> search(const ndarrayd& queries, unsigned int k) {
+    std::tuple<std::vector<std::vector<unsigned int>>, std::vector<std::vector<double>>> searchKNN(const ndarrayd& queries, unsigned int k) {
 
 
         std::vector<vptree::VPTree<arrayd,dist>::VPTreeSearchResultElement> results;
-        _tree.search(queries, k, results);
+        _tree.searchKNN(queries, k, results);
 
         std::vector<std::vector<unsigned int>> indexes;
         std::vector<std::vector<double>> distances;
@@ -49,6 +49,15 @@ public:
         return std::make_tuple(indexes, distances);
     }
 
+    std::tuple<std::vector<unsigned int>, std::vector<double>> search1NN(const ndarrayd& queries) {
+
+
+        std::vector<unsigned int> indices; std::vector<double> distances;
+        _tree.search1NN(queries, indices, distances);
+
+        return std::make_tuple(indices, distances);
+    }
+
 private:
     vptree::VPTree<arrayd, dist> _tree;
 
@@ -58,5 +67,6 @@ PYBIND11_MODULE(pyvptree, m) {
     py::class_<VPTreeNumpyAdapter>(m, "VPTree")
         .def(py::init<>())
         .def("set", &VPTreeNumpyAdapter::set)
-        .def("search", &VPTreeNumpyAdapter::search);
+        .def("searchKNN", &VPTreeNumpyAdapter::searchKNN)
+        .def("search1NN", &VPTreeNumpyAdapter::search1NN);
 }

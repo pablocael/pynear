@@ -106,7 +106,7 @@ public:
         build(_examples);
     }
 
-    void search(const std::vector<T>& queries, unsigned int k, std::vector<VPTree::VPTreeSearchResultElement>& results) {
+    void searchKNN(const std::vector<T>& queries, unsigned int k, std::vector<VPTree::VPTreeSearchResultElement>& results) {
 
         if(_rootPartition == nullptr) {
             return;
@@ -116,11 +116,11 @@ public:
         // we must return one result per queries
         results.resize(queries.size());
 
-        #pragma omp parallel for
+        #pragma omp parallel for schedule (static,1) num_threads(8)
         for(int i = 0; i < queries.size(); ++i) {
             const T& query = queries[i];
             std::priority_queue<VPTreeSearchElement> knnQueue;
-            search(_rootPartition, query, k, knnQueue);
+            searchKNN(_rootPartition, query, k, knnQueue);
 
             // we must always return k elements for each search unless there is no k elements
             assert(static_cast<unsigned int>(knnQueue.size()) == std::min<unsigned int>(_examples.size(), k));
@@ -141,7 +141,7 @@ public:
         indices.resize(queries.size());
         distances.resize(queries.size());
 
-        #pragma omp parallel for
+        #pragma omp parallel for schedule (static,1) num_threads(8)
         for(int i = 0; i < queries.size(); ++i) {
             const T& query = queries[i];
             double dist = 0;
@@ -217,7 +217,7 @@ protected:
         }
     };
 
-    void search(VPLevelPartition* partition, const T& val, unsigned int k, std::priority_queue<VPTreeSearchElement>& knnQueue) {
+    void searchKNN(VPLevelPartition* partition, const T& val, unsigned int k, std::priority_queue<VPTreeSearchElement>& knnQueue) {
 
         double tau = std::numeric_limits<double>::max();
         std::vector<VPLevelPartition*> toSearch = {partition};
