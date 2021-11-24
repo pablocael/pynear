@@ -20,20 +20,19 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 enable_testing()
-add_library(${PROJECT_NAME} src/VPTree.cpp)
+add_library(${PROJECT_NAME} INTERFACE)
 
-target_include_directories(${PROJECT_NAME} PUBLIC
+target_include_directories(${PROJECT_NAME} INTERFACE
     ${pybind11_INCLUDE_DIR}
     ${PYTHON_INCLUDE_DIRS}
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
-    PRIVATE src)
-
-target_link_libraries(${PROJECT_NAME} ${PYTHON_LIBRARIES})
+)
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION 1)
+set_target_properties(${PROJECT_NAME} PROPERTIES PUBLIC_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/include/VPTree.hpp")
 
 set(CONFIG_NAME ${PROJECT_NAME}Config)
 
