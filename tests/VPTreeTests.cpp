@@ -48,7 +48,7 @@ namespace vptree::tests
         std::default_random_engine generator;
         std::uniform_real_distribution<double> distribution(-10,10);
 
-        const unsigned int numPoints = 1e7;
+        const unsigned int numPoints = 4e8;
         std::vector<Eigen::Vector3d> points;
         points.resize(numPoints);
         for(Eigen::Vector3d& point: points) {
