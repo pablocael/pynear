@@ -3,8 +3,15 @@
  
  PS: this project is a Work in Progress
 
+# Install pyvptree
+python setup.py install
 
-# Compiling
+
+# Using C++ library
+You can install vptree C++ library header using cmake. The library is a single header only.
+
+To install, run:
+
 ```console
 mkdir build
 cd build
