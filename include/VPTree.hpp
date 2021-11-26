@@ -187,7 +187,7 @@ protected:
             unsigned int median = (end + start) / 2;
 
             // partition in order to keep all elements smaller than median in the left and larger in the right
-            std::nth_element(_examples.begin() + start + 1, _examples.begin() + median, _examples.begin() + end, VPDistanceComparator(_examples[start]));
+            std::nth_element(_examples.begin() + start + 1, _examples.begin() + median, _examples.begin() + end + 1, VPDistanceComparator(_examples[start]));
 
             // distance from vantage point (which is at start index) and the median element
             double medianDistance = distance(_examples[start].val, _examples[median].val);
@@ -228,12 +228,12 @@ protected:
             toSearch.pop_back();
 
             double dist = distance(val, _examples[current->start()].val);
-            if(dist < tau) {
+            if(dist < tau || knnQueue.size() < k) {
 
                 if(knnQueue.size() == k) {
                     knnQueue.pop();
                 }
-                knnQueue.push(VPTreeSearchElement(current->start(), dist));
+                knnQueue.push(VPTreeSearchElement(_examples[current->start()].originalIndex, dist));
                 tau = knnQueue.top().dist;
             }
 
@@ -277,7 +277,7 @@ protected:
             double dist = distance(val, _examples[current->start()].val);
             if(dist < resultDist) {
                 resultDist = dist;
-                resultIndex = current->start();
+                resultIndex = _examples[current->start()].originalIndex;
             }
 
             if(dist > current->radius()) {

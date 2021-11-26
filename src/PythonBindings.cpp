@@ -55,7 +55,7 @@ public:
         std::vector<unsigned int> indices; std::vector<double> distances;
         _tree.search1NN(queries, indices, distances);
 
-        return std::make_tuple(indices, distances);
+        return std::make_tuple(std::move(indices), std::move(distances));
     }
 
 private:

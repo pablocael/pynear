@@ -62,4 +62,4 @@ install(TARGETS ${PROJECT_NAME} pyvptree COMPONENT python EXPORT ${CONFIG_NAME}
 install(EXPORT ${CONFIG_NAME} DESTINATION share/${PROJECT_NAME}/cmake)
 
 export(TARGETS ${PROJECT_NAME} FILE ${CONFIG_NAME}.cmake)
-add_subdirectory(test)
+add_subdirectory(tests)
