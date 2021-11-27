@@ -53,7 +53,6 @@ def test_dataset_split_less_than_k():
         tau = float('inf')
         for i, p in enumerate(data):
             d = np.linalg.norm(q-p)
-            print(qi, i, d)
             l = len(max_heap)
             if d < tau or l < K:
 
@@ -75,12 +74,6 @@ def test_dataset_split_less_than_k():
 
     exaustive_result = list(zip(exaustive_indices, exaustive_distances))
     vptree_result = list(zip(vptree_indices, vptree_distances))
-
-    print('EX')
-    print(exaustive_result)
-
-    print('VP')
-    print(vptree_result)
 
     assert(len(exaustive_result) == len(vptree_result))
 
