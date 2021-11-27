@@ -15,6 +15,8 @@
 #include <functional>
 #include <omp.h>
 
+#include <unordered_set>
+
 namespace vptree {
 
 class VPLevelPartition {
@@ -46,6 +48,7 @@ public:
     bool isEmpty() { return _indexStart == -1 || _indexStart == -1; }
     unsigned int start() { return _indexStart; }
     unsigned int end() { return _indexEnd; }
+    unsigned int size() { return _indexEnd - _indexStart + 1; }
     void setRadius(double radius) { _radius = radius; }
     double radius() { return _radius; }
 
@@ -116,7 +119,7 @@ public:
         // we must return one result per queries
         results.resize(queries.size());
 
-        #pragma omp parallel for schedule (static,1) num_threads(8)
+        /* #pragma omp parallel for schedule (static,1) num_threads(8) */
         for(int i = 0; i < queries.size(); ++i) {
             const T& query = queries[i];
             std::priority_queue<VPTreeSearchElement> knnQueue;
@@ -141,7 +144,7 @@ public:
         indices.resize(queries.size());
         distances.resize(queries.size());
 
-        #pragma omp parallel for schedule (static,1) num_threads(8)
+        /* #pragma omp parallel for schedule (static,1) num_threads(8) */
         for(int i = 0; i < queries.size(); ++i) {
             const T& query = queries[i];
             double dist = 0;
@@ -174,7 +177,7 @@ protected:
             unsigned int start =  current->start();
             unsigned int end = current->end();
 
-            if(start >= end) {
+            if(start == end) {
                 // stop dividing if there is only one point inside
                 continue;
             }
@@ -194,13 +197,18 @@ protected:
             current->setRadius(medianDistance);
 
             // Schedule to build next levels
-            //
             // Left is every one within the median distance radius
-            auto* left = new VPLevelPartition(-1, start + 1, median);
-            _toSplit.push_back(left);
+            VPLevelPartition* left = nullptr;
+            if(start + 1 <= median) {
+                left = new VPLevelPartition(-1, start + 1, median);
+                _toSplit.push_back(left);
+            }
 
-            auto* right = new VPLevelPartition(-1, median + 1, end);
-            _toSplit.push_back(right);
+            VPLevelPartition* right = nullptr;
+            if(median + 1 <= end) {
+                right = new VPLevelPartition(-1, median + 1, end);
+                _toSplit.push_back(right);
+            }
 
             current->setChild(left, right);
         }
@@ -233,18 +241,26 @@ protected:
                 if(knnQueue.size() == k) {
                     knnQueue.pop();
                 }
-                knnQueue.push(VPTreeSearchElement(_examples[current->start()].originalIndex, dist));
+                unsigned int indexToAdd = _examples[current->start()].originalIndex;
+                knnQueue.push(VPTreeSearchElement(indexToAdd, dist));
+
                 tau = knnQueue.top().dist;
             }
 
+            unsigned int neighborsSoFar = knnQueue.size();
             if(dist > current->radius()) {
                 // must search outside
                 if(current->right() != nullptr) {
                     toSearch.push_back(current->right());
                 }
 
-                // may need to search inside as well
-                if(dist - current->radius() < tau && current->left() != nullptr) {
+                // may need to search inside as well if distance to the farther point found is larger than distance
+                // to the vantage point region border
+                // also, we need to force searching into external region partition if number of
+                // found points so far is not enough to complete K using only right partition
+                unsigned int rightPartitionSize = (current->right() != nullptr) ? current->right()->size() : 0;
+                bool notEnoughPointsOutside = rightPartitionSize < (k - neighborsSoFar);
+                if((notEnoughPointsOutside || (dist - current->radius() < tau)) && current->left() != nullptr) {
                     toSearch.push_back(current->left());
                 }
             }
@@ -255,7 +271,13 @@ protected:
                 }
 
                 // may need to search outside as well
-                if(current->radius() - dist < tau && current->right() != nullptr) {
+                // may need to search inside as well if distance to the farther point found is larger than distance
+                // to the vantage point region border
+                // also, we need to force searching into external region partition if number of
+                // found points so far is not enough to complete K using only right partition
+                unsigned int leftPartitionSize = (current->left() != nullptr) ? current->left()->size() : 0;
+                bool notEnoughPointsInside = leftPartitionSize < (k - neighborsSoFar);
+                if((notEnoughPointsInside || (current->radius() - dist < tau)) && current->right() != nullptr) {
                     toSearch.push_back(current->right());
                 }
             }
