@@ -74,7 +74,7 @@ vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
 
 # Searching for the nearest neighbor (K=1)
 
-There is ano optimized version of KNN for K=1:
+There is an optimized version of KNN for K=1:
 
 ```python
 
