@@ -1,6 +1,6 @@
 # Introduction
 
-pyvptree is a python library, developed in C++, for efficient KNN search using L2 distance (for points in multidimensional space using VPTreeL2Index), or Hamming distances (for binary features represented by uint8 type, using VPTreeBinaryIndex). 
+pyvptree is a python library, internally built in C++, for efficient KNN search using L2 distance (for points in multidimensional space using VPTreeL2Index), or Hamming distances (for binary features represented by uint8 type, using VPTreeBinaryIndex). 
 
 # How this library works
 
