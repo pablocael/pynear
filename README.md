@@ -126,3 +126,10 @@ To run C++ tests, run the below command, after running cmake:
 make test
 ```
 
+# TODO
+
+- Index serialization / deserialization
+- Index split into multiple machines remotely to search faster
+- Use AVX2 for more efficiently search 256 and 512 binary features
+
+
