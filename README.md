@@ -1,14 +1,16 @@
 # vptree-cpp
- A C++ efficient Vantage Point Tree Implementation for KNN search using L2 distance, for point features, or Hamming distances, for binary features.
+ A C++ efficient Vantage Point Tree Implementation for KNN search using L2 distance (for points in multidimensional space), or Hamming distances (for binary features represented by uint8 type).
  
  This library provides no feature compresion strategy (yet), and only sypport raw (uncompressed) feature search.
  
  This library has python3 bindings.
  
- PS: this project is a Work in Progress
 
-# Install pyvptree
+# Installation
+
+```console
 python setup.py install
+```
 
 # Usage
 
@@ -75,6 +77,11 @@ vptree_indices, vptree_distances = vptree.search1NN(queries)
 ```
 
 Which is considerably faster than calling the generic searchKNN with K=1. This option is available for both L2 and Binary indices.
+
+
+# Benchmarks
+
+(Work in progress, soon)
 
 # Using the C++ library
 You can install vptree C++ library header using cmake. The library is a single header only.
