@@ -15,8 +15,6 @@
 #include <functional>
 #include <omp.h>
 
-#include <unordered_set>
-
 namespace vptree {
 
 class VPLevelPartition {

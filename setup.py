@@ -129,6 +129,9 @@ setup(
     ext_modules=[CMakeExtension("pyvptree")],
     cmdclass={"build_ext": CMakeBuild},
     zip_safe=False,
+    install_requires=[
+       'numpy>=1.21.2'
+    ],
     extras_require={"test": ["pytest>=6.0"]},
     python_requires=">=3.6",
 )

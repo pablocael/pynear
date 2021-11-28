@@ -1,32 +1,224 @@
+#
+# MIT Licence
+# Copyright 2021 Pablo Carneiro Elias
+#
+
 import pyvptree
 import numpy as np
 import heapq
 
-# def build_knn_index(features, features_ids):
+def test_binary():
 
-#     # d is the bit dimension of the binary vector (in bits), tipically 256
-#     # so, if your feature has 32 uint8 dimensions, it will have 256 bits (recommended size is 256 bit due to optimized settings)
-#     d = features.shape[1] * 8
-#     quantizer = faiss.IndexBinaryFlat(d)
+    np.random.seed(seed=42)
 
-#     # Number of clusters.
-#     nlist = int(np.sqrt(features.shape[0]))
+    dimension = 32
+    num_points = 2021
+    data = np.random.normal(scale=255, loc=0, size=(num_points, dimension)).astype(dtype=np.uint8)
 
-#     logger.debug(f'building index with dimension size = {d}, input features shape is {features.shape}, number of clusters is {nlist}')
-#     index = faiss.IndexBinaryIVF(quantizer, d, nlist)
-#     index.nprobe = d  # Number of nearest clusters to be searched per query.
-#     data = np.uint8(features)
-#     index.train(data)
-#     index.add_with_ids(data, np.array(features_ids, dtype=np.int64))
-#     return index
+    num_queries = 8
+    queries = np.random.normal(scale=255, loc=0, size=(num_queries, dimension)).astype(dtype=np.uint8)
 
-# def find_feature_neighbors(index, query_features, k=1):
+    K = 2
 
-#     if query_features is None or len(query_features) == 0:
-#         return None, None
+    # check exaustivelly and find the correct answer
+    exaustive_indices = []
+    exaustive_distances = []
+    for qi, q in enumerate(queries):
 
-#     logger.debug(f'performing search in index with query feature shape = {query_features.shape}')
-#     return index.search(np.uint8(query_features), k=k)
+        max_heap = []
+        tau = float('inf')
+        for i, p in enumerate(data):
+            d = np.count_nonzero(q!=p)
+            l = len(max_heap)
+            if d < tau or l < K:
+
+                if len(max_heap) == K:
+                    heapq.heappop(max_heap)
+
+                heapq.heappush(max_heap, (-d,i))
+                tau = -max_heap[0][0]
+
+        exaustive_distances.append([-v[0] for v in max_heap])
+        exaustive_indices.append([v[1] for v in max_heap])
+
+
+    # now try same search with vp tree
+
+    vptree = pyvptree.VPTreeBinaryIndex()
+    vptree.set(data)
+    vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
+
+    assert(len(vptree_indices) == len(exaustive_indices))
+    assert(len(vptree_distances) == len(exaustive_distances))
+
+    # check if distances are same
+    for i in range(len(exaustive_distances)):
+        vp = vptree_distances[i]
+        ex = exaustive_distances[i]
+        assert(sorted(vp) == sorted(ex))
+
+    # do not check indices since in discrete binary data there can be multiple valid solutions to KNN with a higher probability than in the continuous case
+
+def test_large_binary():
+
+    np.random.seed(seed=42)
+
+    dimension = 32
+    num_points = 40021
+    data = np.random.normal(scale=255, loc=0, size=(num_points, dimension)).astype(dtype=np.uint8)
+    print('>>>data', data[:50])
+
+    num_queries = 8
+    queries = np.random.normal(scale=255, loc=0, size=(num_queries, dimension)).astype(dtype=np.uint8)
+
+    K = 3
+
+    # check exaustivelly and find the correct answer
+    exaustive_indices = []
+    exaustive_distances = []
+    for qi, q in enumerate(queries):
+
+        max_heap = []
+        tau = float('inf')
+        for i, p in enumerate(data):
+            d = np.count_nonzero(q!=p)
+            l = len(max_heap)
+            if d < tau or l < K:
+
+                if len(max_heap) == K:
+                    heapq.heappop(max_heap)
+
+                heapq.heappush(max_heap, (-d,i))
+                tau = -max_heap[0][0]
+
+        exaustive_distances.append([-v[0] for v in max_heap])
+        exaustive_indices.append([v[1] for v in max_heap])
+
+
+    # now try same search with vp tree
+
+    vptree = pyvptree.VPTreeBinaryIndex()
+    vptree.set(data)
+    vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
+
+    exaustive_result = list(zip(exaustive_indices, exaustive_distances))
+    vptree_result = list(zip(vptree_indices, vptree_distances))
+
+    assert(len(exaustive_result) == len(vptree_result))
+
+    # check if distances are same
+    for i in range(len(exaustive_distances)):
+        vp = vptree_distances[i]
+        ex = exaustive_distances[i]
+        assert(sorted(vp) == sorted(ex))
+
+    # do not check indices since in discrete binary data there can be multiple valid solutions to KNN with a higher probability than in the continuous case
+
+def test_k_equals_dataset():
+
+    np.random.seed(seed=42)
+
+    dimension = 5
+    num_points = 2021
+    data = np.random.rand(int(num_points), dimension)
+
+    num_queries = 8
+    queries = np.random.rand(num_queries, dimension)
+
+    K = num_points
+
+    # check exaustivelly and find the correct answer
+    exaustive_indices = []
+    exaustive_distances = []
+    for qi, q in enumerate(queries):
+
+        max_heap = []
+        tau = float('inf')
+        for i, p in enumerate(data):
+            d = np.linalg.norm(q-p)
+            l = len(max_heap)
+            if d < tau or l < K:
+
+                if len(max_heap) == K:
+                    heapq.heappop(max_heap)
+
+                heapq.heappush(max_heap, (-d,i))
+                tau = -max_heap[0][0]
+
+        exaustive_distances.append([-v[0] for v in max_heap])
+        exaustive_indices.append([v[1] for v in max_heap])
+
+
+    # now try same search with vp tree
+
+    vptree = pyvptree.VPTreeL2Index()
+    vptree.set(data)
+    vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
+
+    exaustive_result = list(zip(exaustive_indices, exaustive_distances))
+    vptree_result = list(zip(vptree_indices, vptree_distances))
+
+    assert(len(exaustive_result) == len(vptree_result))
+
+    # check if indices are same
+    for i in range(len(exaustive_result)):
+        vp = vptree_result[i]
+        ex = exaustive_result[i]
+        assert(sorted(vp[0]) == sorted(ex[0]))
+        assert(sorted(vp[1]) == sorted(ex[1]))
+
+def test_large_dataset():
+
+    np.random.seed(seed=42)
+
+    dimension = 8
+    num_points = 401001
+    data = np.random.rand(int(num_points), dimension)
+
+    num_queries = 8
+    queries = np.random.rand(num_queries, dimension)
+
+    K = 3
+
+    # check exaustivelly and find the correct answer
+    exaustive_indices = []
+    exaustive_distances = []
+    for qi, q in enumerate(queries):
+
+        max_heap = []
+        tau = float('inf')
+        for i, p in enumerate(data):
+            d = np.linalg.norm(q-p)
+            l = len(max_heap)
+            if d < tau or l < K:
+
+                if len(max_heap) == K:
+                    heapq.heappop(max_heap)
+
+                heapq.heappush(max_heap, (-d,i))
+                tau = -max_heap[0][0]
+
+        exaustive_distances.append([-v[0] for v in max_heap])
+        exaustive_indices.append([v[1] for v in max_heap])
+
+
+    # now try same search with vp tree
+
+    vptree = pyvptree.VPTreeL2Index()
+    vptree.set(data)
+    vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
+
+    exaustive_result = list(zip(exaustive_indices, exaustive_distances))
+    vptree_result = list(zip(vptree_indices, vptree_distances))
+
+    assert(len(exaustive_result) == len(vptree_result))
+
+    # check if indices are same
+    for i in range(len(exaustive_result)):
+        vp = vptree_result[i]
+        ex = exaustive_result[i]
+        assert(sorted(vp[0]) == sorted(ex[0]))
+        assert(sorted(vp[1]) == sorted(ex[1]))
 
 def test_dataset_split_less_than_k():
     """doc
@@ -68,7 +260,7 @@ def test_dataset_split_less_than_k():
 
     # now try same search with vp tree
 
-    vptree = pyvptree.VPTree()
+    vptree = pyvptree.VPTreeL2Index()
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
 
@@ -123,7 +315,7 @@ def test_query_larger_than_dataset():
 
     # now try same search with vp tree
 
-    vptree = pyvptree.VPTree()
+    vptree = pyvptree.VPTreeL2Index()
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
 
@@ -177,7 +369,7 @@ def test_compare_with_exaustive_KNN():
 
     # now try same search with vp tree
 
-    vptree = pyvptree.VPTree()
+    vptree = pyvptree.VPTreeL2Index()
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
 
@@ -224,7 +416,7 @@ def test_compare_with_exaustive_1NN():
 
     # now try same search with vp tree
 
-    vptree = pyvptree.VPTree()
+    vptree = pyvptree.VPTreeL2Index()
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.search1NN(queries)
 
