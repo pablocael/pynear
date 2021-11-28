@@ -16,6 +16,10 @@ This library still provides no feature compresion strategy (yet), and only syppo
 python setup.py install
 ```
 
+# Requeriments
+
+This library needs OpenMP support to be built and installed. The whole compilation procces occur automatically by performing the installation step above.
+
 # Usage
 
 ## Searching L2 Features
