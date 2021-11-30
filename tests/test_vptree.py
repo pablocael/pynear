@@ -7,6 +7,10 @@ import pyvptree
 import numpy as np
 import heapq
 
+def hamming_distance(a, b):
+    r = (1 << np.arange(8))[:,None]
+    return np.count_nonzero((np.bitwise_xor(a,b) & r) != 0)
+
 def test_binary():
 
     np.random.seed(seed=42)
@@ -28,7 +32,7 @@ def test_binary():
         max_heap = []
         tau = float('inf')
         for i, p in enumerate(data):
-            d = np.count_nonzero(q!=p)
+            d = hamming_distance(p, q)
             l = len(max_heap)
             if d < tau or l < K:
 
@@ -81,7 +85,7 @@ def test_large_binary():
         max_heap = []
         tau = float('inf')
         for i, p in enumerate(data):
-            d = np.count_nonzero(q!=p)
+            d = hamming_distance(p, q)
             l = len(max_heap)
             if d < tau or l < K:
 

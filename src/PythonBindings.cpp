@@ -8,6 +8,8 @@
 #include <pybind11/stl.h>
 #include <VPTree.hpp>
 
+#include <nmmintrin.h>
+#include <stdint.h>
 #include <omp.h>
 
 namespace py = pybind11;
@@ -28,13 +30,30 @@ double distL2(const arrayd& p1, const arrayd& p2) {
     return std::sqrt(result);
 }
 
-double distHamming(const arrayli& p1, const arrayli& p2) {
+/* double distHamming(const arrayli& p1, const arrayli& p2) { */
 
-    unsigned int result = 0;
-    for(int i = 0; i < p1.size(); ++i) {
-        result += static_cast<unsigned int>(p1[i] != p2[i]);
+/*     unsigned int result = 0; */
+/*     for(int i = 0; i < p1.size(); ++i) { */
+/*         result += static_cast<unsigned int>(p1[i] != p2[i]); */
+/*     } */
+
+/*     return result; */
+/* } */
+
+inline int pop_count(uint64_t x, uint64_t y) {
+    return __builtin_popcountll(x ^ y);
+}
+
+double distHamming(const std::vector<unsigned char>& p1, const std::vector<unsigned char>& p2) {
+
+    // assume v1 and v2 sizes are multiple of 8
+    // assume 32 bytes for now
+    double result = 0;
+    const uint64_t* a = (reinterpret_cast<const uint64_t*>(&p1[0]));
+    const uint64_t* b = (reinterpret_cast<const uint64_t*>(&p2[0]));
+    for(int i = 0; i < p1.size()/sizeof(uint64_t); i++) {
+        result += pop_count(a[i], b[i]);
     }
-
     return result;
 }
 
