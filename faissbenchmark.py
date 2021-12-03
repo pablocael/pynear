@@ -25,14 +25,14 @@ def find_faiss_feature_neighbors(index, query_features, k=1):
 if __name__ == '__main__':
     np.random.seed(seed=42)
 
-    dimension = 32
-    num_points = 421030
+    dimension = 4
+    num_points = 821030
     data = np.random.normal(scale=255, loc=0, size=(num_points, dimension)).astype(dtype=np.uint8)
 
-    num_queries = 500
+    num_queries = 5000
     queries = np.random.normal(scale=255, loc=0, size=(num_queries, dimension)).astype(dtype=np.uint8)
 
-    K = 2
+    K = 32
 
     start = time.time()
     print('start creation of faiss index ...')

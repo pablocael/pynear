@@ -70,7 +70,6 @@ def test_large_binary():
     dimension = 32
     num_points = 40021
     data = np.random.normal(scale=255, loc=0, size=(num_points, dimension)).astype(dtype=np.uint8)
-    print('>>>data', data[:50])
 
     num_queries = 8
     queries = np.random.normal(scale=255, loc=0, size=(num_queries, dimension)).astype(dtype=np.uint8)

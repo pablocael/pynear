@@ -51,6 +51,8 @@ double distHamming(const std::vector<unsigned char>& p1, const std::vector<unsig
     double result = 0;
     const uint64_t* a = (reinterpret_cast<const uint64_t*>(&p1[0]));
     const uint64_t* b = (reinterpret_cast<const uint64_t*>(&p2[0]));
+
+#pragma omp parallel for reduction(+:result)
     for(int i = 0; i < p1.size()/sizeof(uint64_t); i++) {
         result += pop_count(a[i], b[i]);
     }

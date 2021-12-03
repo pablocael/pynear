@@ -14,6 +14,9 @@
 #include <algorithm>
 #include <functional>
 #include <omp.h>
+#include <unordered_set>
+
+#define ENABLE_OMP_PARALLEL 1
 
 namespace vptree {
 
@@ -117,7 +120,9 @@ public:
         // we must return one result per queries
         results.resize(queries.size());
 
+#if(ENABLE_OMP_PARALLEL)
         #pragma omp parallel for schedule (static,1) num_threads(8)
+#endif
         for(int i = 0; i < queries.size(); ++i) {
             const T& query = queries[i];
             std::priority_queue<VPTreeSearchElement> knnQueue;
@@ -142,7 +147,9 @@ public:
         indices.resize(queries.size());
         distances.resize(queries.size());
 
+#if(ENABLE_OMP_PARALLEL)
         #pragma omp parallel for schedule (static,1) num_threads(8)
+#endif
         for(int i = 0; i < queries.size(); ++i) {
             const T& query = queries[i];
             double dist = 0;
@@ -163,7 +170,7 @@ protected:
         // Select vantage point
         std::vector<VPLevelPartition*> _toSplit;
 
-        auto* root = new VPLevelPartition(-1, 0, _examples.size() - 1);
+        auto* root = new VPLevelPartition(0, 0, _examples.size() - 1);
         _toSplit.push_back(root);
         _rootPartition = root;
 
@@ -190,7 +197,7 @@ protected:
             // partition in order to keep all elements smaller than median in the left and larger in the right
             std::nth_element(_examples.begin() + start + 1, _examples.begin() + median, _examples.begin() + end + 1, VPDistanceComparator(_examples[start]));
 
-            // distance from vantage point (which is at start index) and the median element
+            /* // distance from vantage point (which is at start index) and the median element */
             double medianDistance = distance(_examples[start].val, _examples[median].val);
             current->setRadius(medianDistance);
 
@@ -223,14 +230,34 @@ protected:
         }
     };
 
+    void exaustivePartitionSearch(VPLevelPartition* partition, const T& val, unsigned int k, std::priority_queue<VPTreeSearchElement>& knnQueue, double tau) {
+        for(int i = partition->start(); i <= partition->end(); ++i) {
+
+            double dist = distance(val, _examples[i].val);
+            if(dist < tau || knnQueue.size() < k) {
+
+                if(knnQueue.size() == k) {
+                    knnQueue.pop();
+                }
+                unsigned int indexToAdd = _examples[i].originalIndex;
+                knnQueue.push(VPTreeSearchElement(indexToAdd, dist));
+
+                tau = knnQueue.top().dist;
+            }
+        }
+    }
+
     void searchKNN(VPLevelPartition* partition, const T& val, unsigned int k, std::priority_queue<VPTreeSearchElement>& knnQueue) {
 
         double tau = std::numeric_limits<double>::max();
-        std::vector<VPLevelPartition*> toSearch = {partition};
+
+        // stores the distance to the partition border at the time of the storage. Since tau value will change
+        // whiling performing the DFS search from on level, the storage distance will be checked again when about
+        // to dive into that partition. It might not be necessary to dig into the partition anymore if tau decreased.
+        std::vector<std::tuple<double,VPLevelPartition*>> toSearch = {{-1, partition}};
 
         while(!toSearch.empty()) {
-
-            auto* current = toSearch.back();
+            auto[distToBorder, current] = toSearch.back();
             toSearch.pop_back();
 
             double dist = distance(val, _examples[current->start()].val);
@@ -245,38 +272,69 @@ protected:
                 tau = knnQueue.top().dist;
             }
 
+            if(distToBorder >= 0 && distToBorder > tau) {
+
+                // distance to this partition border change and its not necessary to search within it anymore
+                continue;
+            }
+
             unsigned int neighborsSoFar = knnQueue.size();
             if(dist > current->radius()) {
                 // must search outside
-                if(current->right() != nullptr) {
-                    toSearch.push_back(current->right());
+
+                /*
+                    We may need to search inside as well. We will schedule this partition to be queried later.
+                    We add it first (if needed) and the outside partition after: since we are doing DFS, we do LIFO
+                    By the time this partition is accessed later, it might be rejected since tau might decrease
+                    during the search of the outside partition (which will be searched for sure)
+
+                    We store current toBorder distance to use later to compare to latest value of tau, so the partition might
+                    not even need to be searched, depending on the tau resulting from the DFS search in outside partition.
+
+                    The exact same logic is applied to the inside case in the else statement.
+
+                */
+                if(current->left() != nullptr) {
+
+                    unsigned int rightPartitionSize = (current->right() != nullptr) ? current->right()->size() : 0;
+                    bool notEnoughPointsOutside = rightPartitionSize < (k - neighborsSoFar);
+                    double toBorder = dist - current->radius();
+
+                    // we might not have enough point outside to reject the inside partition, so we might need to search for both
+                    if(notEnoughPointsOutside) {
+                        toSearch.push_back({-1, current->left()});
+                    }
+                    else if(toBorder <= tau) {
+                        toSearch.push_back({toBorder, current->left()});
+                    }
                 }
 
-                // may need to search inside as well if distance to the farther point found is larger than distance
-                // to the vantage point region border
-                // also, we need to force searching into external region partition if number of
-                // found points so far is not enough to complete K using only right partition
-                unsigned int rightPartitionSize = (current->right() != nullptr) ? current->right()->size() : 0;
-                bool notEnoughPointsOutside = rightPartitionSize < (k - neighborsSoFar);
-                if((notEnoughPointsOutside || (dist - current->radius() < tau)) && current->left() != nullptr) {
-                    toSearch.push_back(current->left());
+                // now schedule outside
+                if(current->right() != nullptr) {
+                    toSearch.push_back({-1, current->right()});
                 }
             }
             else {
                 // must search inside
-                if(current->left() != nullptr) {
-                    toSearch.push_back(current->left());
+                // logic is analogous to the outside case
+
+                if(current->right() != nullptr) {
+
+                    unsigned int leftPartitionSize = (current->left() != nullptr) ? current->left()->size() : 0;
+                    bool notEnoughPointsInside = leftPartitionSize < (k - neighborsSoFar);
+                    double toBorder = current->radius() - dist;
+
+                    if(notEnoughPointsInside) {
+                        toSearch.push_back({-1, current->right()});
+                    }
+                    else if(toBorder <= tau) {
+                        toSearch.push_back({toBorder, current->right()});
+                    }
                 }
 
-                // may need to search outside as well
-                // may need to search inside as well if distance to the farther point found is larger than distance
-                // to the vantage point region border
-                // also, we need to force searching into external region partition if number of
-                // found points so far is not enough to complete K using only right partition
-                unsigned int leftPartitionSize = (current->left() != nullptr) ? current->left()->size() : 0;
-                bool notEnoughPointsInside = leftPartitionSize < (k - neighborsSoFar);
-                if((notEnoughPointsInside || (current->radius() - dist < tau)) && current->right() != nullptr) {
-                    toSearch.push_back(current->right());
+                // now schedule inside
+                if(current->left() != nullptr) {
+                    toSearch.push_back({-1, current->left()});
                 }
             }
         }
@@ -287,11 +345,11 @@ protected:
         resultDist = std::numeric_limits<double>::max();
         resultIndex = -1;
 
-        std::vector<VPLevelPartition*> toSearch = {partition};
+        std::vector<std::tuple<double,VPLevelPartition*>> toSearch = {{-1, partition}};
 
         while(!toSearch.empty()) {
 
-            auto* current = toSearch.back();
+            auto[distToBorder, current] = toSearch.back();
             toSearch.pop_back();
 
             double dist = distance(val, _examples[current->start()].val);
@@ -300,26 +358,34 @@ protected:
                 resultIndex = _examples[current->start()].originalIndex;
             }
 
+            if(distToBorder >= 0 && distToBorder > resultDist) {
+
+                // distance to this partition border change and its not necessary to search within it anymore
+                continue;
+            }
+
             if(dist > current->radius()) {
-                // must search outside
-                if(current->right() != nullptr) {
-                    toSearch.push_back(current->right());
+                // may need to search inside as well
+                double toBorder = dist - current->radius();
+                if(toBorder < resultDist && current->left() != nullptr) {
+                    toSearch.push_back({toBorder, current->left()});
                 }
 
-                // may need to search inside as well
-                if(dist - current->radius() < resultDist && current->left() != nullptr) {
-                    toSearch.push_back(current->left());
+                // must search outside
+                if(current->right() != nullptr) {
+                    toSearch.push_back({-1, current->right()});
                 }
             }
             else {
-                // must search inside
-                if(current->left() != nullptr) {
-                    toSearch.push_back(current->left());
+                double toBorder = current->radius() - dist;
+                // may need to search outside as well
+                if(toBorder < resultDist && current->right() != nullptr) {
+                    toSearch.push_back({toBorder, current->right()});
                 }
 
-                // may need to search outside as well
-                if(current->radius() - dist < resultDist && current->right() != nullptr) {
-                    toSearch.push_back(current->right());
+                // must search inside
+                if(current->left() != nullptr) {
+                    toSearch.push_back({-1, current->left()});
                 }
             }
         }
