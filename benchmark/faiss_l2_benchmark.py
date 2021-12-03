@@ -19,7 +19,6 @@ def find_faiss_feature_neighbors(index, query_features, k=1):
 if __name__ == '__main__':
     np.random.seed(seed=42)
 
-    dimension = 8
     test_results = {}
     print('start starting test of faiss L2 index ...')
     num_queries = 5000
