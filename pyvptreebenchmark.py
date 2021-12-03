@@ -3,7 +3,7 @@ import pyvptree
 import numpy as np
 
 def build_vptree_binary_knn_index(features):
-    vptree = pyvptree.VPTreeBinaryIndex()
+    vptree = pyvptree.VPTreeL2Index()
     vptree.set(features)
     return vptree
 
@@ -16,14 +16,14 @@ def find_vptree_feature_neighbors(index, query_features, k=1):
 if __name__ == '__main__':
     np.random.seed(seed=42)
 
-    dimension = 32
+    dimension = 6
     num_points = 821030
     data = np.random.normal(scale=255, loc=0, size=(num_points, dimension)).astype(dtype=np.uint8)
 
     num_queries = 5000
     queries = np.random.normal(scale=255, loc=0, size=(num_queries, dimension)).astype(dtype=np.uint8)
 
-    K = 1
+    K = 2
 
     start = time.time()
     print('start creation of vptree index ...')
