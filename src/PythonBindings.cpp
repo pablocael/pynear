@@ -15,9 +15,43 @@
 namespace py = pybind11;
 
 using arrayd = std::vector<double>;
-using arrayli = std::vector<unsigned char>;
+using arrayli = std::vector<uint64_t>;
 using ndarrayd = std::vector<arrayd>;
 using ndarrayli = std::vector<arrayli>;
+
+typedef int32_t hamdis_t;
+
+inline int popcount64(uint64_t x) {
+    return __builtin_popcountl(x);
+}
+
+/* Hamming distances for multiples of 64 bits */
+template <size_t nbits>
+hamdis_t hamming(const uint64_t* bs1, const uint64_t* bs2) {
+    const size_t nwords = nbits / 64;
+    size_t i;
+    hamdis_t h = 0;
+    for (i = 0; i < nwords; i++)
+        h += popcount64(bs1[i] ^ bs2[i]);
+    return h;
+}
+
+/* specialized (optimized) functions */
+template <>
+hamdis_t hamming<64>(const uint64_t* pa, const uint64_t* pb) {
+    return popcount64(pa[0] ^ pb[0]);
+}
+
+template <>
+hamdis_t hamming<128>(const uint64_t* pa, const uint64_t* pb) {
+    return popcount64(pa[0] ^ pb[0]) + popcount64(pa[1] ^ pb[1]);
+}
+
+template <>
+hamdis_t hamming<256>(const uint64_t* pa, const uint64_t* pb) {
+    return popcount64(pa[0] ^ pb[0]) + popcount64(pa[1] ^ pb[1]) +
+            popcount64(pa[2] ^ pb[2]) + popcount64(pa[3] ^ pb[3]);
+}
 
 double distL2(const arrayd& p1, const arrayd& p2) {
 
@@ -30,34 +64,27 @@ double distL2(const arrayd& p1, const arrayd& p2) {
     return std::sqrt(result);
 }
 
-/* double distHamming(const arrayli& p1, const arrayli& p2) { */
+double distHamming(const arrayli& p1, const arrayli& p2) {
 
-/*     unsigned int result = 0; */
-/*     for(int i = 0; i < p1.size(); ++i) { */
-/*         result += static_cast<unsigned int>(p1[i] != p2[i]); */
-/*     } */
-
-/*     return result; */
-/* } */
+    return hamming<128>(&p1[0], &p2[0]);
+}
 
 inline int pop_count(uint64_t x, uint64_t y) {
     return __builtin_popcountll(x ^ y);
 }
 
-double distHamming(const std::vector<unsigned char>& p1, const std::vector<unsigned char>& p2) {
+/* double distHamming(const std::vector<unsigned char>& p1, const std::vector<unsigned char>& p2) { */
 
-    // assume v1 and v2 sizes are multiple of 8
-    // assume 32 bytes for now
-    double result = 0;
-    const uint64_t* a = (reinterpret_cast<const uint64_t*>(&p1[0]));
-    const uint64_t* b = (reinterpret_cast<const uint64_t*>(&p2[0]));
-
-#pragma omp parallel for reduction(+:result)
-    for(int i = 0; i < p1.size()/sizeof(uint64_t); i++) {
-        result += pop_count(a[i], b[i]);
-    }
-    return result;
-}
+/*     // assume v1 and v2 sizes are multiple of 8 */
+/*     // assume 32 bytes for now */
+/*     double result = 0; */
+/*     const uint64_t* a = (reinterpret_cast<const uint64_t*>(&p1[0])); */
+/*     const uint64_t* b = (reinterpret_cast<const uint64_t*>(&p2[0])); */
+/*     for(int i = 0; i < p1.size()/sizeof(uint64_t); i++) { */
+/*         result += pop_count(a[i], b[i]); */
+/*     } */
+/*     return result; */
+/* } */
 
 class VPTreeNumpyAdapter {
 public:
