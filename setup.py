@@ -38,7 +38,7 @@ class CMakeBuild(build_ext):
         # CMake lets you override the generator - we need to check this.
         # Can be set with Conda-Build, for example.
         cmake_generator = os.environ.get("CMAKE_GENERATOR", "")
-        cxx_flags = os.environ.get("CXX_FLAGS", "")
+        cxx_flags = os.environ.get("CXX_FLAGS", "-flto -Wall -march=native -mavx")
 
         # Set Python_EXECUTABLE instead if you use PYBIND11_FINDPYTHON
         # EXAMPLE_VERSION_INFO shows you how to pass a value into the C++ code

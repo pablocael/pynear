@@ -16,10 +16,37 @@ This library still provides no feature compresion strategy (yet), and only syppo
 python setup.py install
 ```
 
+Performance can dramatically decrase if this library is compiled without support to Open MP and AVX. This library was not tested under windows.
+
 # Requeriments
 
 This library needs OpenMP support to be built and installed. The whole compilation procces occur automatically by performing the installation step above.
 
+# Benchmarks - Faiss comparison
+
+pyvptree shows really good results for dimensions up to 16 using L2 Index (e.g: euclidean distance function), but shows poor reults for higher dimensions. This happens because in higher dimensions, all points tend to have similar distances from any reference point. This is due to the nature of the L2 distance: when number of coordinates increase, the number of terms in the sum within the distance function increases, and each coordinate has less contribution. In result, a point has to be radically different in one or many coordinates to make a big difference in the distance relative value. Since all points have similar distance from a vantage point, it becomes hard to properly divide the set of points in a meaningful way. All points tends to locate close to the partition boundary, which make necessary to always search into neighbor partitions, resulting in a near linear exaustive search in high dimensions. Faiss, in the other hand, uses KD-Trees, which although suffers from the same problem in higher dimensions, it behaves better up to higher dimensions compared to the vantage point tree. Another aspect to consider is distance function optimization: faiss has really good optimizations for taking advantage of processor pipeline, caching, to prevent branching and to make good use of parallelism. The implementation of this module in C++ also make use of openmp and processor pipeline optimization, but not as deep as faiss library.
+
+For binary index, faiss is much superior because binary data is quite always in high dimensions and faiss is also specially optimized for binary data, since it hamming distance function is highly optimized. It very hard to beat faiss when comes to binary indices.
+
+For conclusion, as the graphs below can show, pyvptree beat faiss for L2 indices up to about 14-dimensional data.
+
+Its also important to say that faiss has dozens of advanced features such as many compression techniques and different types of indices, which this library does not intent to provide for now.
+
+
+Below there are some comparisons between pyvptree and faiss.
+
+All benchmarks were run in a Intel(R) Core(TM) i7-4870HQ CPU @ 2.50GHz (Haswell - 4th Generation Intel Core) CPU, running macOS 12.0.1.
+Python version used is 3.9.8.
+
+In the below graphs, K is the number of neighbors used in the search.
+
+## Benchmark - pyvptree.VPTreeL2Index vs faiss.IndexFlatL2
+
+![](benchmark/results/l2_K1_8D_vs_time.png)
+![](benchmark/results/l2_K2_8D_vs_time.png)
+![](benchmark/results/l2_K3_8D_vs_time.png)
+![](benchmark/results/l2_K32_8D_vs_time.png)
+![](benchmark/results/l2_K2_1000000P_vs_time.png)
 # Usage
 
 ## Searching L2 Features
@@ -87,10 +114,6 @@ vptree_indices, vptree_distances = vptree.search1NN(queries)
 Which is considerably faster than calling the generic searchKNN with K=1. This option is available for both L2 and Binary indices.
 
 
-# Benchmarks
-
-(Work in progress, soon)
-
 # Using the C++ library
 You can install vptree C++ library header using cmake. The library is a single header only.
 
@@ -126,10 +149,16 @@ To run C++ tests, run the below command, after running cmake:
 make test
 ```
 
+For running python tests:
+
+```console
+python3 -m pytest
+```
+
+
 # TODO
 
 - Index serialization / deserialization
 - Index split into multiple machines remotely to search faster
-- Use AVX2 for more efficiently search 256 and 512 binary features
-
+- Improve binary index using bach calculation and AVX2
 
