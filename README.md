@@ -26,7 +26,7 @@ pyvptree shows really good results for dimensions up to 16 using L2 Index (e.g: 
 
 For binary index, faiss is much superior because binary data is quite always high dimensional (e.g: image descriptors are tipically 32 or 64-dimensional) and faiss is also specially optimized for binary data with a highly optimized implementation of the hamming distance function. It is very hard to beat faiss when comes to binary indices.
 
-For conclusion, as the graphs below can show, pyvptree can beat faiss for L2 indices up to about 14-dimensional data.
+For conclusion, as the graphs below can show, pyvptree can beat faiss for L2 indices up to about 11-dimensional data.
 
 Its also important to say that faiss has dozens of advanced features such as many compression techniques and different types of indices and development support, which this library does not intent to provide fully for now.
 
