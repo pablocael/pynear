@@ -6,8 +6,6 @@ pyvptree is a python library, internally built in C++, for efficient KNN search 
 
 This library implements a [Vantage Point Tree](https://en.wikipedia.org/wiki/Vantage-point_tree) to perform search within multidimensional metric spaces using arbitrary distance functions.
 
-Vantage Point Trees allow for more efficient search since they avoid the Curse of Dimensionality problem and work as a binary tree partition of the search space.
- 
 This library still provides no feature compresion strategy (yet), and only sypport raw (uncompressed) feature search.
 
 # Installation
