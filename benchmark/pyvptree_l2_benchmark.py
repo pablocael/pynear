@@ -3,6 +3,8 @@ import time
 import pyvptree
 import numpy as np
 
+import dicutil
+
 def build_vptree_l2_knn_index(features):
     vptree = pyvptree.VPTreeL2Index()
     vptree.set(features)
@@ -37,18 +39,16 @@ if __name__ == '__main__':
                     avg_search_time += time.time() - start
 
                 avg_search_time = avg_search_time / 3
-                test_results[dimension] = {
-                    K: {
-                        num_points: {
-                            'K': K,
-                            'index_type': 'pyvptree.VPTreeL2Index',
-                            'dimension': dimension,
-                            'num_points': num_points,
-                            'creation_time': creation_time,
-                            'avg_search_time': avg_search_time
-                        }
-                    },
-                }
+                test_results = dicutil.set_dict(test_results, [dimension, K, num_points],
+                    {
+                        'K': K,
+                        'index_type': 'pyvptree.VPTreeL2Index',
+                        'dimension': dimension,
+                        'num_points': num_points,
+                        'creation_time': creation_time,
+                        'avg_search_time': avg_search_time
+                    }
+                )
                 print(f'test time: {avg_search_time}')
 
 
