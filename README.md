@@ -166,4 +166,5 @@ python3 -m pytest
 - Index serialization / deserialization
 - Index split into multiple machines remotely to search faster
 - Improve binary index using bach calculation and AVX2
+- Create specialized data containers for each feature size (32, 64, etc..) instead of always using bytes, to improve hamming distance calculations.
 
