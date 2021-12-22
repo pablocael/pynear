@@ -10,6 +10,7 @@ pyvptree_l2_data = None
 with open("benchmark/results/pyvptree_l2_test_result.json", "r") as read_file:
     pyvptree_l2_data = json.load(read_file)
 
+print(pyvptree_l2_data)
 print('generating L2 index bench mark ... ')
 # L2 result:
 

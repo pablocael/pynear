@@ -22,7 +22,7 @@ namespace vptree {
 
 class VPLevelPartition {
 public:
-    VPLevelPartition(double radius, unsigned int start, unsigned int end) {
+    VPLevelPartition(float radius, unsigned int start, unsigned int end) {
         // For each partition, the vantage point is the first point within the partition (pointed by indexStart)
 
         _radius = radius;
@@ -50,8 +50,8 @@ public:
     unsigned int start() { return _indexStart; }
     unsigned int end() { return _indexEnd; }
     unsigned int size() { return _indexEnd - _indexStart + 1; }
-    void setRadius(double radius) { _radius = radius; }
-    double radius() { return _radius; }
+    void setRadius(float radius) { _radius = radius; }
+    float radius() { return _radius; }
 
     void setChild(VPLevelPartition* left, VPLevelPartition* right) {
         _left = left;
@@ -62,7 +62,7 @@ public:
     VPLevelPartition* right() { return _right; }
 
 private:
-    double _radius;
+    float _radius;
 
     // _indexStart and _indexEnd are index pointers to examples within the examples list, not index of coordinates
     // within the coordinate buffer.For instance, _indexEnd pointing to last element of a coordinate buffer of 9 entries
@@ -76,7 +76,7 @@ private:
 };
 
 
-template <typename T, double(*distance)(const T&, const T&)>
+template <typename T, float(*distance)(const T&, const T&)>
 class VPTree {
 public:
 
@@ -94,7 +94,7 @@ public:
 
     struct VPTreeSearchResultElement {
         std::vector<unsigned int> indexes;
-        std::vector<double> distances;
+        std::vector<float> distances;
     };
 
     VPTree() = default;
@@ -136,7 +136,7 @@ public:
     }
 
     // An optimized version for 1 NN search
-    void search1NN(const std::vector<T>& queries, std::vector<unsigned int>& indices, std::vector<double>& distances) {
+    void search1NN(const std::vector<T>& queries, std::vector<unsigned int>& indices, std::vector<float>& distances) {
 
         if(_rootPartition == nullptr) {
             return;
@@ -152,7 +152,7 @@ public:
 #endif
         for(int i = 0; i < queries.size(); ++i) {
             const T& query = queries[i];
-            double dist = 0;
+            float dist = 0;
             unsigned int index = -1;
             search1NN(_rootPartition, query, index, dist);
             distances[i] = dist;
@@ -198,7 +198,7 @@ protected:
             std::nth_element(_examples.begin() + start + 1, _examples.begin() + median, _examples.begin() + end + 1, VPDistanceComparator(_examples[start]));
 
             /* // distance from vantage point (which is at start index) and the median element */
-            double medianDistance = distance(_examples[start].val, _examples[median].val);
+            float medianDistance = distance(_examples[start].val, _examples[median].val);
             current->setRadius(medianDistance);
 
             // Schedule to build next levels
@@ -221,19 +221,19 @@ protected:
 
     // Internal temporary struct to organize K closest elements in a priorty queue
     struct VPTreeSearchElement {
-        VPTreeSearchElement(int index, double dist) :
+        VPTreeSearchElement(int index, float dist) :
             index(index), dist(dist) {}
         int index;
-        double dist;
+        float dist;
         bool operator<(const VPTreeSearchElement& v) const {
             return dist < v.dist;
         }
     };
 
-    void exaustivePartitionSearch(VPLevelPartition* partition, const T& val, unsigned int k, std::priority_queue<VPTreeSearchElement>& knnQueue, double tau) {
+    void exaustivePartitionSearch(VPLevelPartition* partition, const T& val, unsigned int k, std::priority_queue<VPTreeSearchElement>& knnQueue, float tau) {
         for(int i = partition->start(); i <= partition->end(); ++i) {
 
-            double dist = distance(val, _examples[i].val);
+            float dist = distance(val, _examples[i].val);
             if(dist < tau || knnQueue.size() < k) {
 
                 if(knnQueue.size() == k) {
@@ -249,18 +249,18 @@ protected:
 
     void searchKNN(VPLevelPartition* partition, const T& val, unsigned int k, std::priority_queue<VPTreeSearchElement>& knnQueue) {
 
-        double tau = std::numeric_limits<double>::max();
+        float tau = std::numeric_limits<float>::max();
 
         // stores the distance to the partition border at the time of the storage. Since tau value will change
         // whiling performing the DFS search from on level, the storage distance will be checked again when about
         // to dive into that partition. It might not be necessary to dig into the partition anymore if tau decreased.
-        std::vector<std::tuple<double,VPLevelPartition*>> toSearch = {{-1, partition}};
+        std::vector<std::tuple<float,VPLevelPartition*>> toSearch = {{-1, partition}};
 
         while(!toSearch.empty()) {
             auto[distToBorder, current] = toSearch.back();
             toSearch.pop_back();
 
-            double dist = distance(val, _examples[current->start()].val);
+            float dist = distance(val, _examples[current->start()].val);
             if(dist < tau || knnQueue.size() < k) {
 
                 if(knnQueue.size() == k) {
@@ -298,7 +298,7 @@ protected:
 
                     unsigned int rightPartitionSize = (current->right() != nullptr) ? current->right()->size() : 0;
                     bool notEnoughPointsOutside = rightPartitionSize < (k - neighborsSoFar);
-                    double toBorder = dist - current->radius();
+                    float toBorder = dist - current->radius();
 
                     // we might not have enough point outside to reject the inside partition, so we might need to search for both
                     if(notEnoughPointsOutside) {
@@ -322,7 +322,7 @@ protected:
 
                     unsigned int leftPartitionSize = (current->left() != nullptr) ? current->left()->size() : 0;
                     bool notEnoughPointsInside = leftPartitionSize < (k - neighborsSoFar);
-                    double toBorder = current->radius() - dist;
+                    float toBorder = current->radius() - dist;
 
                     if(notEnoughPointsInside) {
                         toSearch.push_back({-1, current->right()});
@@ -340,19 +340,19 @@ protected:
         }
     }
 
-    void search1NN(VPLevelPartition* partition, const T& val, unsigned int& resultIndex, double& resultDist) {
+    void search1NN(VPLevelPartition* partition, const T& val, unsigned int& resultIndex, float& resultDist) {
 
-        resultDist = std::numeric_limits<double>::max();
+        resultDist = std::numeric_limits<float>::max();
         resultIndex = -1;
 
-        std::vector<std::tuple<double,VPLevelPartition*>> toSearch = {{-1, partition}};
+        std::vector<std::tuple<float,VPLevelPartition*>> toSearch = {{-1, partition}};
 
         while(!toSearch.empty()) {
 
             auto[distToBorder, current] = toSearch.back();
             toSearch.pop_back();
 
-            double dist = distance(val, _examples[current->start()].val);
+            float dist = distance(val, _examples[current->start()].val);
             if(dist < resultDist) {
                 resultDist = dist;
                 resultIndex = _examples[current->start()].originalIndex;
@@ -366,7 +366,7 @@ protected:
 
             if(dist > current->radius()) {
                 // may need to search inside as well
-                double toBorder = dist - current->radius();
+                float toBorder = dist - current->radius();
                 if(toBorder < resultDist && current->left() != nullptr) {
                     toSearch.push_back({toBorder, current->left()});
                 }
@@ -377,7 +377,7 @@ protected:
                 }
             }
             else {
-                double toBorder = current->radius() - dist;
+                float toBorder = current->radius() - dist;
                 // may need to search outside as well
                 if(toBorder < resultDist && current->right() != nullptr) {
                     toSearch.push_back({toBorder, current->right()});

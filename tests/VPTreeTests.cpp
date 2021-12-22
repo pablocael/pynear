@@ -15,11 +15,10 @@
 
 using namespace testing;
 
-double distance( const Eigen::Vector3d& v1, const Eigen::Vector3d& v2 ) {
+float distance( const Eigen::Vector3d& v1, const Eigen::Vector3d& v2 ) {
 
     return (v2-v1).norm();
 }
-
 
 /* inline uint_fast8_t popcnt_u128(__uint128_t n) */
 /* { */
@@ -37,11 +36,11 @@ inline int pop_count(uint64_t x, uint64_t y) {
     return __builtin_popcountll(x ^ y);
 }
 
-double distHamming(const std::vector<unsigned char>& p1, const std::vector<unsigned char>& p2) {
+float distHamming(const std::vector<unsigned char>& p1, const std::vector<unsigned char>& p2) {
 
     // assume v1 and v2 sizes are multiple of 8
     // assume 32 bytes for now
-    double result = 0;
+    float result = 0;
     const uint64_t* a = (reinterpret_cast<const uint64_t*>(&p1[0]));
     const uint64_t* b = (reinterpret_cast<const uint64_t*>(&p2[0]));
     for(int i = 0; i < p1.size()/sizeof(uint64_t); i++) {
@@ -151,7 +150,7 @@ namespace vptree::tests
     TEST(VPTests, TestCreation) {
 
         std::default_random_engine generator;
-        std::uniform_real_distribution<double> distribution(-10,10);
+        std::uniform_real_distribution<float> distribution(-10,10);
 
         const unsigned int numPoints = 10000;
         std::vector<Eigen::Vector3d> points;
@@ -168,7 +167,7 @@ namespace vptree::tests
 
         VPTree<Eigen::Vector3d, distance> tree(points);
         auto end = std::chrono::steady_clock::now();
-        std::chrono::duration<double> diff = end - start;
+        std::chrono::duration<float> diff = end - start;
         std::cout << "Process took" << diff.count() << " seconds " << std::endl;
     }
 
@@ -176,7 +175,7 @@ namespace vptree::tests
 
         return;
         std::default_random_engine generator;
-        std::uniform_real_distribution<double> distribution(-10,10);
+        std::uniform_real_distribution<float> distribution(-10,10);
 
         const unsigned int numPoints = 4e8;
         std::vector<Eigen::Vector3d> points;
@@ -192,7 +191,7 @@ namespace vptree::tests
 
         VPTree<Eigen::Vector3d, distance> tree(points);
         auto end = std::chrono::steady_clock::now();
-        std::chrono::duration<double> diff = end - start;
+        std::chrono::duration<float> diff = end - start;
         std::cout << "Process took " << diff.count() << " seconds " << std::endl;
 
         std::cout << "Searching within the tree with " << numPoints << " points " << std::endl;
@@ -205,7 +204,7 @@ namespace vptree::tests
             point[2] = distribution(generator);
         }
         /* std::vector<VPTree<Eigen::Vector3d,distance>::VPTreeSearchResultElement> results; */
-        std::vector<unsigned int> indices; std::vector<double> distances;
+        std::vector<unsigned int> indices; std::vector<float> distances;
         start = std::chrono::steady_clock::now();
         tree.search1NN(queries, indices, distances);
         end = std::chrono::steady_clock::now();

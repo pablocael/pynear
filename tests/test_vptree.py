@@ -6,10 +6,28 @@
 import pyvptree
 import numpy as np
 import heapq
+import math
 
 def hamming_distance(a, b):
     r = (1 << np.arange(8))[:,None]
     return np.count_nonzero((np.bitwise_xor(a,b) & r) != 0)
+
+def compare_results(distances1, distances2):
+    assert len(distances1) == len(distances2)
+    if type(distances1[0]) is not list:
+        distances1.sort()
+        distances2.sort()
+
+    for i in range(len(distances1)):
+        x = distances1[i]
+        y = distances2[i]
+        if type(x) == list:
+            xsorted = sorted(x)
+            ysorted = sorted(y)
+            for j in range(len(xsorted)):
+                assert math.isclose(xsorted[j], ysorted[j], abs_tol=1e-2)
+        else:
+            assert math.isclose(x, y, abs_tol=1e-1)
 
 def test_binary():
 
@@ -52,16 +70,7 @@ def test_binary():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
 
-    assert(len(vptree_indices) == len(exaustive_indices))
-    assert(len(vptree_distances) == len(exaustive_distances))
-
-    # check if distances are same
-    for i in range(len(exaustive_distances)):
-        vp = vptree_distances[i]
-        ex = exaustive_distances[i]
-        assert(sorted(vp) == sorted(ex))
-
-    # do not check indices since in discrete binary data there can be multiple valid solutions to KNN with a higher probability than in the continuous case
+    compare_results(vptree_distances, exaustive_distances)
 
 def test_large_binary():
 
@@ -104,29 +113,18 @@ def test_large_binary():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
 
-    exaustive_result = list(zip(exaustive_indices, exaustive_distances))
-    vptree_result = list(zip(vptree_indices, vptree_distances))
-
-    assert(len(exaustive_result) == len(vptree_result))
-
-    # check if distances are same
-    for i in range(len(exaustive_distances)):
-        vp = vptree_distances[i]
-        ex = exaustive_distances[i]
-        assert(sorted(vp) == sorted(ex))
-
-    # do not check indices since in discrete binary data there can be multiple valid solutions to KNN with a higher probability than in the continuous case
+    compare_results(vptree_distances, exaustive_distances)
 
 def test_k_equals_dataset():
 
     np.random.seed(seed=42)
 
-    dimension = 5
+    dimension = 8
     num_points = 2021
-    data = np.random.rand(int(num_points), dimension)
+    data = np.random.rand(int(num_points), dimension).astype(dtype=np.float32)
 
     num_queries = 8
-    queries = np.random.rand(num_queries, dimension)
+    queries = np.random.rand(num_queries, dimension).astype(dtype=np.float32)
 
     K = num_points
 
@@ -158,17 +156,7 @@ def test_k_equals_dataset():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
 
-    exaustive_result = list(zip(exaustive_indices, exaustive_distances))
-    vptree_result = list(zip(vptree_indices, vptree_distances))
-
-    assert(len(exaustive_result) == len(vptree_result))
-
-    # check if indices are same
-    for i in range(len(exaustive_result)):
-        vp = vptree_result[i]
-        ex = exaustive_result[i]
-        assert(sorted(vp[0]) == sorted(ex[0]))
-        assert(sorted(vp[1]) == sorted(ex[1]))
+    compare_results(vptree_distances, exaustive_distances)
 
 def test_large_dataset():
 
@@ -176,10 +164,10 @@ def test_large_dataset():
 
     dimension = 8
     num_points = 401001
-    data = np.random.rand(int(num_points), dimension)
+    data = np.random.rand(int(num_points), dimension).astype(dtype=np.float32)
 
     num_queries = 8
-    queries = np.random.rand(num_queries, dimension)
+    queries = np.random.rand(num_queries, dimension).astype(dtype=np.float32)
 
     K = 3
 
@@ -211,17 +199,7 @@ def test_large_dataset():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
 
-    exaustive_result = list(zip(exaustive_indices, exaustive_distances))
-    vptree_result = list(zip(vptree_indices, vptree_distances))
-
-    assert(len(exaustive_result) == len(vptree_result))
-
-    # check if indices are same
-    for i in range(len(exaustive_result)):
-        vp = vptree_result[i]
-        ex = exaustive_result[i]
-        assert(sorted(vp[0]) == sorted(ex[0]))
-        assert(sorted(vp[1]) == sorted(ex[1]))
+    compare_results(vptree_distances, exaustive_distances)
 
 def test_dataset_split_less_than_k():
     """doc
@@ -267,18 +245,7 @@ def test_dataset_split_less_than_k():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
 
-    exaustive_result = list(zip(exaustive_indices, exaustive_distances))
-    vptree_result = list(zip(vptree_indices, vptree_distances))
-
-    assert(len(exaustive_result) == len(vptree_result))
-
-    # check if indices are same
-    for i in range(len(exaustive_result)):
-        vp = vptree_result[i]
-        ex = exaustive_result[i]
-        assert(sorted(vp[0]) == sorted(ex[0]))
-        assert(sorted(vp[1]) == sorted(ex[1]))
-
+    compare_results(vptree_distances, exaustive_distances)
 
 def test_query_larger_than_dataset():
 
@@ -287,10 +254,10 @@ def test_query_larger_than_dataset():
 
     num_points = 5
     dimension = 8
-    data = np.random.rand(int(num_points), dimension)
+    data = np.random.rand(int(num_points), dimension).astype(dtype=np.float32)
 
     num_queries = 8
-    queries = np.random.rand(num_queries, dimension)
+    queries = np.random.rand(num_queries, dimension).astype(dtype=np.float32)
 
     K = 3
 
@@ -322,17 +289,7 @@ def test_query_larger_than_dataset():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
 
-    exaustive_result = list(zip(exaustive_indices, exaustive_distances))
-    vptree_result = list(zip(vptree_indices, vptree_distances))
-
-    assert(len(exaustive_result) == len(vptree_result))
-
-    # check if indices are same
-    for i in range(len(exaustive_result)):
-        vp = vptree_result[i]
-        ex = exaustive_result[i]
-        assert(sorted(vp[0]) == sorted(ex[0]))
-        assert(sorted(vp[1]) == sorted(ex[1]))
+    compare_results(vptree_distances, exaustive_distances)
 
 def test_compare_with_exaustive_KNN():
 
@@ -341,10 +298,10 @@ def test_compare_with_exaustive_KNN():
 
     num_points = 21231
     dimension = 8
-    data = np.random.rand(int(num_points), dimension)
+    data = np.random.rand(int(num_points), dimension).astype(dtype=np.float32)
 
     num_queries = 23
-    queries = np.random.rand(num_queries, dimension)
+    queries = np.random.rand(num_queries, dimension).astype(dtype=np.float32)
 
     K = 3
 
@@ -376,18 +333,7 @@ def test_compare_with_exaustive_KNN():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
 
-    exaustive_result = list(zip(exaustive_indices, exaustive_distances))
-    vptree_result = list(zip(vptree_indices, vptree_distances))
-
-    assert(len(exaustive_result) == len(vptree_result))
-
-    # check if indices are same
-    for i in range(len(exaustive_result)):
-        vp = vptree_result[i]
-        ex = exaustive_result[i]
-        assert(sorted(vp[0]) == sorted(ex[0]))
-        assert(sorted(vp[1]) == sorted(ex[1]))
-
+    compare_results(vptree_distances, exaustive_distances)
 
 def test_compare_with_exaustive_1NN():
 
@@ -396,10 +342,10 @@ def test_compare_with_exaustive_1NN():
 
     num_points = 21231
     dimension = 8
-    data = np.random.rand(int(num_points), dimension)
+    data = np.random.rand(int(num_points), dimension).astype(dtype=np.float32)
 
     num_queries = 23
-    queries = np.random.rand(num_queries, dimension)
+    queries = np.random.rand(num_queries, dimension).astype(dtype=np.float32)
 
     # check exaustivelly and find the correct answer
     exaustive_indices = []
@@ -423,15 +369,4 @@ def test_compare_with_exaustive_1NN():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.search1NN(queries)
 
-    exaustive_result = list(zip(exaustive_indices, exaustive_distances))
-    vptree_result = list(zip(vptree_indices, vptree_distances))
-
-    assert(len(exaustive_result) == len(vptree_result))
-
-    # check if indices are same
-    for i in range(len(exaustive_result)):
-        vp = vptree_result[i]
-        ex = exaustive_result[i]
-        assert(vp[0] == ex[0])
-        assert(vp[1] == ex[1])
-
+    compare_results(vptree_distances, exaustive_distances)
