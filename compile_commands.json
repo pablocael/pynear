@@ -1,0 +1,32 @@
+[
+{
+  "directory": "/Users/pablocael/Documents/pyvptree/build",
+  "command": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++ -Dpyvptree_EXPORTS -I/Users/pablocael/Documents/pyvptree/include -isystem /usr/local/include -isystem /usr/local/opt/python@3.9/Frameworks/Python.framework/Versions/3.9/include/python3.9 -O3 -DNDEBUG -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX12.0.sdk -fPIC -fvisibility=hidden -flto -Xclang -fopenmp -std=gnu++2a -o CMakeFiles/pyvptree.dir/src/PythonBindings.cpp.o -c /Users/pablocael/Documents/pyvptree/src/PythonBindings.cpp",
+  "file": "/Users/pablocael/Documents/pyvptree/src/PythonBindings.cpp"
+},
+{
+  "directory": "/Users/pablocael/Documents/pyvptree/build/tests",
+  "command": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++  -I/usr/local/opt/python@3.9/Frameworks/Python.framework/Versions/3.9/include/python3.9 -I/Users/pablocael/Documents/pyvptree/include -isystem /usr/local/include -isystem /Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googlemock/include -isystem /Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googlemock -isystem /Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googletest/include -isystem /Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googletest -O3 -DNDEBUG -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX12.0.sdk -Xclang -fopenmp -std=gnu++2a -o CMakeFiles/vptree-tests.dir/VPTreeTests.cpp.o -c /Users/pablocael/Documents/pyvptree/tests/VPTreeTests.cpp",
+  "file": "/Users/pablocael/Documents/pyvptree/tests/VPTreeTests.cpp"
+},
+{
+  "directory": "/Users/pablocael/Documents/pyvptree/build/tests/googletest-build/googlemock",
+  "command": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++  -I/Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googlemock/include -I/Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googlemock -isystem /Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googletest/include -isystem /Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googletest -O3 -DNDEBUG -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX12.0.sdk  -DGTEST_HAS_PTHREAD=1   -std=c++2a -o CMakeFiles/gmock.dir/src/gmock-all.cc.o -c /Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googlemock/src/gmock-all.cc",
+  "file": "/Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googlemock/src/gmock-all.cc"
+},
+{
+  "directory": "/Users/pablocael/Documents/pyvptree/build/tests/googletest-build/googlemock",
+  "command": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++  -isystem /Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googlemock/include -isystem /Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googlemock -isystem /Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googletest/include -isystem /Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googletest -O3 -DNDEBUG -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX12.0.sdk  -DGTEST_HAS_PTHREAD=1   -std=c++2a -o CMakeFiles/gmock_main.dir/src/gmock_main.cc.o -c /Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googlemock/src/gmock_main.cc",
+  "file": "/Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googlemock/src/gmock_main.cc"
+},
+{
+  "directory": "/Users/pablocael/Documents/pyvptree/build/tests/googletest-build/googletest",
+  "command": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++  -I/Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googletest/include -I/Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googletest -O3 -DNDEBUG -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX12.0.sdk  -DGTEST_HAS_PTHREAD=1   -std=c++2a -o CMakeFiles/gtest.dir/src/gtest-all.cc.o -c /Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googletest/src/gtest-all.cc",
+  "file": "/Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googletest/src/gtest-all.cc"
+},
+{
+  "directory": "/Users/pablocael/Documents/pyvptree/build/tests/googletest-build/googletest",
+  "command": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++  -isystem /Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googletest/include -isystem /Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googletest -O3 -DNDEBUG -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX12.0.sdk  -DGTEST_HAS_PTHREAD=1   -std=c++2a -o CMakeFiles/gtest_main.dir/src/gtest_main.cc.o -c /Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googletest/src/gtest_main.cc",
+  "file": "/Users/pablocael/Documents/pyvptree/build/tests/googletest-src/googletest/src/gtest_main.cc"
+}
+]

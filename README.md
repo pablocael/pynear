@@ -43,11 +43,10 @@ In the below graphs, K is the number of neighbors used in the search.
 
 ## Benchmark - pyvptree.VPTreeL2Index vs faiss.IndexFlatL2
 
-![](benchmark/results/l2_K1_8D_vs_time.png)
-![](benchmark/results/l2_K2_8D_vs_time.png)
 ![](benchmark/results/l2_K3_8D_vs_time.png)
-![](benchmark/results/l2_K32_8D_vs_time.png)
-![](benchmark/results/l2_K2_1000000P_vs_time.png)
+![](benchmark/results/l2_K3_16D_vs_time.png)
+![](benchmark/results/l2_K32_16D_vs_time.png)
+![](benchmark/results/l2_K3_1000000P_vs_time.png)
 
 
 ## Benchmark - pyvptree.VPTreeBinaryIndex vs faiss.IndexBinaryFlat

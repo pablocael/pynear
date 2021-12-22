@@ -19,10 +19,10 @@ if __name__ == '__main__':
     test_results = {}
     print('start starting test of vptree L2 index ...')
     num_queries = 5000
-    for dimension in [3, 4, 8, 16, 32, 64, 128, 256]:
+    for dimension in [3, 4, 8, 16, 32]:
         for K in [1, 3, 8, 32]:
             for num_points in [200000, 500000, 1000000]:
-                print(f'running case K = {K}, num_points = {num_points}')
+                print(f'running case: dimension = {dimension}, K = {K}, num_points = {num_points}')
                 data = np.random.random((num_points, dimension)).astype(np.float32)
 
                 start = time.time()

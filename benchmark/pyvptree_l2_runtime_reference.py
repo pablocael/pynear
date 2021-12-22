@@ -4,11 +4,11 @@ import pyvptree
 
 np.random.seed(seed=42)
 
-dimension = 32
-num_points = 50000
+dimension = 64 
+num_points = 500000
 data = np.random.rand(int(num_points), dimension)
 
-num_queries = 250
+num_queries = 5000
 queries = np.random.rand(num_queries, dimension)
 
 K = 16
