@@ -43,6 +43,8 @@ In the below graphs, K is the number of neighbors used in the search.
 
 ## Benchmark - pyvptree.VPTreeL2Index vs faiss.IndexFlatL2
 
+For all benchmarks, 5000 query points were used per search.
+
 ![](benchmark/results/l2_K3_8D_vs_time.png)
 ![](benchmark/results/l2_K3_16D_vs_time.png)
 ![](benchmark/results/l2_K32_16D_vs_time.png)
