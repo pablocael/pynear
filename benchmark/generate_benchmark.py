@@ -19,7 +19,7 @@ dimension = 16
 for K in [1, 3, 8, 32]:
     x = [200000, 500000, 1000000]
     y = [faiss_l2_data[str(dimension)][str(K)][str(v)]['avg_search_time'] for v in x]
-    plt.figure().set_dpi(120);
+
     plt.gcf().set_size_inches(8, 5)
     plt.gca().yaxis.set_major_formatter(StrMethodFormatter('{x:,.2f}'))
     plt.gca().xaxis.set_major_formatter(StrMethodFormatter('{x:,.0f}'))
