@@ -25,9 +25,12 @@ using ndarrayli = std::vector<arrayli>;
 
 typedef float hamdis_t;
 
-inline int popcount64(uint64_t x) {
-    return __builtin_popcountll(x);
-}
+#if defined(_MSC_VER)
+#define ALIGN_16 __declspec(align(16))
+#elif defined(__GNUC__)
+#define ALIGN_16 __attribute__((__aligned__(16)))
+#endif
+
 
 /* Hamming distances for multiples of 64 bits */
 template <size_t nbits>
@@ -36,25 +39,25 @@ hamdis_t hamming(const uint64_t* bs1, const uint64_t* bs2) {
     size_t i;
     hamdis_t h = 0;
     for (i = 0; i < nwords; i++)
-        h += popcount64(bs1[i] ^ bs2[i]);
+        h += _mm_popcnt_u64(bs1[i] ^ bs2[i]);
     return h;
 }
 
 /* specialized (optimized) functions */
 template <>
 hamdis_t hamming<64>(const uint64_t* pa, const uint64_t* pb) {
-    return popcount64(pa[0] ^ pb[0]);
+    return _mm_popcnt_u64(pa[0] ^ pb[0]);
 }
 
 template <>
 hamdis_t hamming<128>(const uint64_t* pa, const uint64_t* pb) {
-    return popcount64(pa[0] ^ pb[0]) + popcount64(pa[1] ^ pb[1]);
+    return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]);
 }
 
 template <>
 hamdis_t hamming<256>(const uint64_t* pa, const uint64_t* pb) {
-    return popcount64(pa[0] ^ pb[0]) + popcount64(pa[1] ^ pb[1]) +
-            popcount64(pa[2] ^ pb[2]) + popcount64(pa[3] ^ pb[3]);
+    return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]) +
+            _mm_popcnt_u64(pa[2] ^ pb[2]) + _mm_popcnt_u64(pa[3] ^ pb[3]);
 }
 
 inline float sum8(__m256 x) {
@@ -114,7 +117,7 @@ double dist_optimized_double(const arrayd& p1, const arrayd& p2) {
 static inline __m128 masked_read (int d, const float *x)
 {
     assert (0 <= d && d < 4);
-    __attribute__((__aligned__(16))) float buf[4] = {0, 0, 0, 0};
+    ALIGN_16 float buf[4] = {0, 0, 0, 0};
     switch (d) {
       case 3:
         buf[2] = x[2];
@@ -138,27 +141,27 @@ float dist_optimized_float(const arrayf& p1, const arrayf& p2) {
     while (d >= 8) {
         __m256 mx = _mm256_loadu_ps (x); x += 8;
         __m256 my = _mm256_loadu_ps (y); y += 8;
-        const __m256 a_m_b1 = mx - my;
-        msum1 += a_m_b1 * a_m_b1;
+        const __m256 a_m_b1 = _mm256_sub_ps(mx, my);
+        msum1 = _mm256_add_ps(msum1, _mm256_mul_ps(a_m_b1, a_m_b1));
         d -= 8;
     }
 
     __m128 msum2 = _mm256_extractf128_ps(msum1, 1);
-    msum2 +=       _mm256_extractf128_ps(msum1, 0);
+    msum2 =       _mm_add_ps(msum2, _mm256_extractf128_ps(msum1, 0));
 
     if (d >= 4) {
         __m128 mx = _mm_loadu_ps (x); x += 4;
         __m128 my = _mm_loadu_ps (y); y += 4;
-        const __m128 a_m_b1 = mx - my;
-        msum2 += a_m_b1 * a_m_b1;
+        const __m128 a_m_b1 = _mm_sub_ps(mx, my);
+        msum2 = _mm_add_ps(msum2, _mm_mul_ps(a_m_b1, a_m_b1));
         d -= 4;
     }
 
     if (d > 0) {
         __m128 mx = masked_read (d, x);
         __m128 my = masked_read (d, y);
-        __m128 a_m_b1 = mx - my;
-        msum2 += a_m_b1 * a_m_b1;
+        const __m128 a_m_b1 = _mm_sub_ps(mx, my);
+        msum2 = _mm_add_ps(msum2, _mm_mul_ps(a_m_b1, a_m_b1));
     }
 
     msum2 = _mm_hadd_ps (msum2, msum2);
@@ -182,10 +185,6 @@ float distL2(const arrayd& p1, const arrayd& p2) {
 hamdis_t distHamming(const arrayli& p1, const arrayli& p2) {
 
     return hamming<256>(reinterpret_cast<const uint64_t*>(&p1[0]), reinterpret_cast<const uint64_t*>(&p2[0]));
-}
-
-inline int pop_count(uint64_t x, uint64_t y) {
-    return __builtin_popcountll(x ^ y);
 }
 
 class VPTreeNumpyAdapter {
@@ -275,6 +274,7 @@ private:
     vptree::VPTree<arrayli, distHamming> _tree;
 
 };
+
 PYBIND11_MODULE(pyvptree, m) {
     py::class_<VPTreeNumpyAdapter>(m, "VPTreeL2Index")
         .def(py::init<>())
