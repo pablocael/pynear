@@ -106,8 +106,8 @@ double dist_optimized_double(const arrayd& p1, const arrayd& p2) {
 /* result = _mm256_fmadd_pd(diff, diff, result); */
     }
 
-    // retrieve squared distance (avoid sqrt)
-    return sum4(result);
+    double out = sum4(result);
+    return std::sqrt(out);
 }
 
 // reads 0 <= d < 4 floats as __m128
@@ -163,10 +163,23 @@ float dist_optimized_float(const arrayf& p1, const arrayf& p2) {
 
     msum2 = _mm_hadd_ps (msum2, msum2);
     msum2 = _mm_hadd_ps (msum2, msum2);
-    return  _mm_cvtss_f32 (msum2);
+    float result = _mm_cvtss_f32 (msum2);
+    return std::sqrt(result);
 }
 
-float distL2(const arrayd& p1, const arrayd& p2) {
+double distL2d(const arrayd& p1, const arrayd& p2) {
+
+    double result = 0;
+    auto i = p1.size();
+    while (i--) {
+        double d = (p1[i] - p2[i]);
+        result += d * d;
+    }
+
+    return std::sqrt(result);
+}
+
+float distL2f(const arrayf& p1, const arrayf& p2) {
 
     float result = 0;
     auto i = p1.size();
@@ -175,8 +188,7 @@ float distL2(const arrayd& p1, const arrayd& p2) {
         result += d * d;
     }
 
-    // retrieve squared distance (avoid sqrt)
-    return result;
+    return std::sqrt(result);
 }
 
 hamdis_t distHamming(const arrayli& p1, const arrayli& p2) {
@@ -211,12 +223,6 @@ public:
             distances[i] = std::move(results[i].distances);
         }
 
-        // calculate sqrt of each distance since our distance L2 function returns squared distance
-        for(auto& v: distances) {
-            for(auto& d: v) {
-                d = sqrt(d);
-            }
-        }
         return std::make_tuple(indexes, distances);
     }
 
@@ -226,9 +232,6 @@ public:
         std::vector<unsigned int> indices; std::vector<float> distances;
         _tree.search1NN(queries, indices, distances);
 
-        for(auto& v: distances) {
-            v = sqrt(v);
-        }
         return std::make_tuple(std::move(indices), std::move(distances));
     }
 
