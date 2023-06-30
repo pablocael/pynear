@@ -8,7 +8,12 @@
 #include <pybind11/stl.h>
 #include <VPTree.hpp>
 
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
 #include <nmmintrin.h>
+#endif
+
 #include <stdint.h>
 #include <omp.h>
 #include <immintrin.h>

@@ -5,9 +5,14 @@ from pybind11.setup_helpers import Pybind11Extension, build_ext
 from setuptools import setup
 
 if sys.platform == "win32":
-    extra_compile_args = ["/Wall", "/arch:AVX"]
+    extra_compile_args = ["/Wall", "/arch:AVX", "/openmp"]  # /LTCG unrecognized here
+    extra_link_args = ["/LTCG"]  # /openmp unrecognized here
+elif sys.platform == "darwin":
+    extra_compile_args = ["-flto", "-Wall", "-march=native", "-mavx", "-fopenmp"]
+    extra_link_args = ["-fopenmp", "-lomp"]
 else:
-    extra_compile_args = ["-flto", "-Wall", "-march=native", "-mavx"]
+    extra_compile_args = ["-flto", "-Wall", "-march=native", "-mavx", "-fopenmp"]
+    extra_link_args = ["-fopenmp", "-lgomp"]
 
 ext_modules = [
     Pybind11Extension(
@@ -16,6 +21,7 @@ ext_modules = [
         include_dirs=["include"],
         cxx_std=17,
         extra_compile_args=extra_compile_args,
+        extra_link_args=extra_link_args,
     ),
 ]
 
