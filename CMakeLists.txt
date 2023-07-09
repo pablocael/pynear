@@ -32,7 +32,7 @@ target_include_directories(${PROJECT_NAME} INTERFACE
 set_target_properties(${PROJECT_NAME} PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION 1)
-set_target_properties(${PROJECT_NAME} PROPERTIES PUBLIC_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/include/VPTree.hpp")
+set_target_properties(${PROJECT_NAME} PROPERTIES PUBLIC_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/include/VPTree.hpp", "${CMAKE_CURRENT_SOURCE_DIR}/include/DistanceFunctions.hpp")
 
 set(CONFIG_NAME ${PROJECT_NAME}Config)
 
