@@ -16,7 +16,7 @@ jobs:
       env:
         # skip pypy 3.7 and 3.8 as numpy does not support it
         CIBW_SKIP: cp36-* pp37-* pp38-*
-        CIBW_ARCHS_WINDOWS: auto64
+        CIBW_ARCHS: auto64
         CIBW_BEFORE_ALL_MACOS: "brew install llvm libomp"
         CIBW_ENVIRONMENT_MACOS: CC="clang" CXX="clang++" PATH="/usr/local/opt/llvm/bin:$PATH" LDFLAGS="-L/usr/local/opt/llvm/lib" CPPFLAGS="-I/usr/local/opt/llvm/include"
         CIBW_BEFORE_BUILD_MACOS: "clang --version"
