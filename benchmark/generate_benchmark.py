@@ -15,7 +15,7 @@ print('generating L2 index bench mark ... ')
 # L2 result:
 
 # Compare fixed K and fixed dimension, time vs numpoints (for various Ks)
-dimension = 16 
+dimension = 16
 for K in [1, 3, 8, 32]:
     x = [200000, 500000, 1000000]
     y = [faiss_l2_data[str(dimension)][str(K)][str(v)]['avg_search_time'] for v in x]
@@ -38,7 +38,7 @@ K = 3
 num_points = 1000000
 x = [3, 4, 8, 16, 32]
 y = [faiss_l2_data[str(v)][str(K)][str(num_points)]['avg_search_time'] for v in x]
-plt.figure().set_dpi(120);
+plt.figure().set_dpi(120)
 plt.gca().yaxis.set_major_formatter(StrMethodFormatter('{x:,.2f}'))
 plt.title(f'Search L2 Index, faiss vs pyvptree K={K}, number of points={num_points}')
 plt.plot(x, y, "-b", label="faiss", color='red')

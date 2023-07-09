@@ -4,6 +4,7 @@ import faiss
 import numpy as np
 import dicutil
 
+
 def build_faiss_l2_knn_index(features, features_ids):
 
     # d is the bit dimension of the binary vector (in bits), tipically 256
@@ -17,6 +18,7 @@ def build_faiss_l2_knn_index(features, features_ids):
 
 def find_faiss_feature_neighbors(index, query_features, k=1):
     return index.search(query_features, k=k)
+
 
 if __name__ == '__main__':
     np.random.seed(seed=42)
@@ -43,16 +45,15 @@ if __name__ == '__main__':
                     avg_search_time += time.time() - start
 
                 avg_search_time = avg_search_time / 3
-                test_results = dicutil.set_dict(test_results, [dimension, K, num_points],
-                    {
+                test_results = dicutil.set_dict(
+                    test_results, [dimension, K, num_points], {
                         'K': K,
                         'index_type': 'faiss.IndexFlatL2',
                         'dimension': dimension,
                         'num_points': num_points,
                         'creation_time': creation_time,
                         'avg_search_time': avg_search_time
-                     }
-                )
+                    })
 
                 print(f'test time: {avg_search_time}')
 
