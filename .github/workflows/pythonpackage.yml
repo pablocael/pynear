@@ -17,6 +17,7 @@ jobs:
         CIBW_SKIP: cp36-*
         CIBW_ARCHS_WINDOWS: auto64
         CIBW_BEFORE_ALL_MACOS: "brew install llvm libomp"
+        CIBW_BEFORE_ALL_LINUX: "apt install python3-sklearn python3-sklearn-lib"
         CIBW_ENVIRONMENT_MACOS: CC="clang" CXX="clang++" PATH="/usr/local/opt/llvm/bin:$PATH" LDFLAGS="-L/usr/local/opt/llvm/lib" CPPFLAGS="-I/usr/local/opt/llvm/include"
         CIBW_BEFORE_BUILD_MACOS: "clang --version"
         CIBW_BUILD_VERBOSITY: 1

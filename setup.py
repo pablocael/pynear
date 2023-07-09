@@ -39,7 +39,7 @@ setup(
     ext_modules=ext_modules,
     zip_safe=False,
     install_requires=["numpy>=1.21.2"],
-    extras_require={"test": ["pytest>=6.0"]},
+    extras_require={"test": ["pytest>=6.0", "scikit-learn>=1.2.0"]},
     python_requires=">=3.6",
     license_files=("LICENSE",),
 )
