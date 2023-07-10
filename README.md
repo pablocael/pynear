@@ -1,6 +1,24 @@
 # Introduction
 
-pyvptree is a python library, internally built in C++, for efficient KNN search using L2 distance (for points in multidimensional space using VPTreeL2Index), or Hamming distances (for binary features represented by uint8 type, using VPTreeBinaryIndex). 
+Pyvptree is a python library, internally built in C++, for efficient KNN search using metric distance function such as L2 distance (see VPTreeL2Index) or Hamming distances (VPTreeBinaryIndex). 
+
+## Theoretical advantage of Vantage Points Trees compared to Kd-Trees
+
+Intrinsic Dimensionality: VP-trees perform well in data with high intrinsic dimensionality, where the effective dimensionality is high. In contrast, kd-trees are efficient in low-dimensional spaces but their performance degrades quickly as the number of dimensions increases. This is often referred to as the "curse of dimensionality".
+
+No Assumption about Axis-Alignment: Unlike kd-trees, which make a specific assumption about axis-alignment, VP-trees do not make such assumptions. This makes VP-trees potentially more robust to different kinds of data, especially when there is no natural way to align the axes with respect to the data.
+
+Metric Spaces: VP-trees can handle general metric spaces (any space where a distance function is defined that satisfies the triangle inequality), not just Euclidean spaces. This makes them more adaptable to different problem settings where the distance metric might not be the standard Euclidean distance.
+
+Handling Categorical Data: VP-trees, due to their use of arbitrary distance functions, can handle categorical data more naturally than kd-trees. While there are workarounds to use kd-trees with categorical data, they often require substantial tweaking and may not perform optimally.
+
+Balanced Tree Structure: VP-trees inherently try to create a balanced tree structure, which is beneficial for efficient searching. kd-trees can become unbalanced in certain situations, particularly with un-uniform data, leading to inefficient search operations.
+
+Please note that while these points generally favor VP-trees, the performance may vary significantly depending on the specifics of your dataset and task.
+
+Also, practical implementation constants in the time complexity of the algorithm can strongly affect final performance in high dimensions. For instance, [Faiss Library](https://github.com/facebookresearch/faiss) performs very efficiently even for near-linear-exaustive searches due to highly optimized code.
+
+Tipically spatial search structures tend to perform worse with increasing number of dimensions of dataset. This is because points tend to be far apart and also.
 
 # How this library works
 
@@ -14,165 +32,14 @@ This library still provides no feature compresion strategy (yet), and only syppo
 python setup.py install
 ```
 
-Performance can dramatically decrase if this library is compiled without support to Open MP and AVX. This library was not tested under windows.
+Performance can dramatically decrease if this library is compiled without support to Open MP and AVX. This library was not tested under windows.
 
 # Requeriments
 
 This library needs OpenMP support to be built and installed. The whole compilation procces occur automatically by performing the installation step above.
 
-# Benchmarks: comparison to the faiss library
-
-pyvptree shows really good results for dimensions up to about 25 using L2 Index (e.g: euclidean distance function), but shows poor results for higher dimensions. This happens because in higher dimensions all points tend to have similar distances from any reference point. This is due to the nature of the L2 distance (and most distance functions in high dimensions): when number of coordinates increase, the number of terms in the sum within the distance function increases, and each coordinate has less contribution. In result, a point has to be radically different in one or many coordinates to make a big difference in the distance's relative value (this is known as Curse of Dimensionality). Since all points have similar distance from a vantage point, it becomes hard to properly divide the set of points in a meaningful way: all points tend be to located close to the partition boundary (which is very small), thus making necessary to always search into neighbor partitions, resulting in a nearly linear exaustive search in higher dimensions. 
-
-Faiss library algorithms also suffers from same Curse of Dimensionality problem, but, their distance functions are highly optimized, so they show better behavior up to higher dimensions when compared to this implementation of vantage points tree. Faiss has really good optimizations for taking advantage of processor pipeline, caching, to prevent branching and to make good use of parallelism. The implementation of this module in C++ also make use of openmp and processor pipeline optimization, but not as deep as faiss library. In high dimensions, the bottleneck of search algorithm is all within the efficiency of the distance function implementations, because the search is near linear in the number of points. So vantage points tree do really search less nodes and are more efficient when comes to the search strategy, but is better seen in lower dimensions.
-
-One advantage of VP-Trees is when it comes to large values of K. Since the partition of space based on distance function restrices the spaces based on proximity, it much faster to find close by neighbors then it is be dividing coordinates: dividing a coordinate doesn't garantee properly dividing the whole space.
-
-For binary index, faiss is much superior because binary data is quite always high dimensional (e.g: image descriptors are tipically 32 or 64-dimensional) and faiss is also specially optimized for binary data with a highly optimized implementation of the hamming distance function. It is very hard to beat faiss when comes to binary indices.
-
-For conclusion, as the graphs below can show, pyvptree can beat faiss for L2 indices up to about 11-dimensional data.
-
-Its also important to say that faiss has dozens of advanced features such as many compression techniques and different types of indices and development support, which this library does not intent to provide fully for now.
-
-Below there are some comparisons between pyvptree and faiss.
-
-All benchmarks were run in a Intel(R) Core(TM) i7-4870HQ CPU @ 2.50GHz (Haswell - 4th Generation Intel Core) CPU, running macOS 12.0.1.
-Python version used is 3.9.8.
-
-In the below graphs, K is the number of neighbors used in the search.
-
-## Benchmark - pyvptree.VPTreeL2Index vs faiss.IndexFlatL2
-
-For all benchmarks, 5000 query points were used per search.
-
-![](benchmark/results/l2_K3_8D_vs_time.png)
-![](benchmark/results/l2_K3_16D_vs_time.png)
-![](benchmark/results/l2_K32_16D_vs_time.png)
-![](benchmark/results/l2_K3_1000000P_vs_time.png)
+# Benchmarks
 
 
-## Benchmark - pyvptree.VPTreeBinaryIndex vs faiss.IndexBinaryFlat
-
-Work in progress...
-
-# Usage
-
-## Searching L2 Features
-
-```python
-
-import pyvptree
-import numpy as np
-
-np.random.seed(seed=42)
-
-data = np.random.rand(num_features, dimension)
-
-num_points = 400000 # can be arbitrary feature size, as long fits your memory
-dimension = 3 # can be arbitrary dimension size
-data = np.random.rand(num_points, dimension)
-
-num_queries = 2000
-queries = np.random.rand(num_queries, dimension)
-
-K = 4 # search 4 nearest neighbors
-
-vptree = pyvptree.VPTreeL2Index()
-vptree.set(data)
-vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
-
-```
-
-## Searching Binary Features
-
-```python
-
-import pyvptree
-import numpy as np
-
- np.random.seed(seed=42)
-
-dimension = 32 # 32 bytes = 256 bit examples
-num_points = 2021
-data = np.random.normal(scale=255, loc=0, size=(num_points, dimension)).astype(dtype=np.uint8)
-
-num_queries = 8
-queries = np.random.normal(scale=255, loc=0, size=(num_queries, dimension)).astype(dtype=np.uint8)
-
-K = 2  # search 2 nearest neighbors
-
-vptree = pyvptree.VPTreeBinaryIndex()
-vptree.set(data)
-vptree_indices, vptree_distances = vptree.searchKNN(queries, K)
-
-```
-
-# Searching for the nearest neighbor (K=1)
-
-There is an optimized version of KNN for K=1:
-
-```python
-
-vptree = pyvptree.VPTreeBinaryIndex()
-vptree.set(data)
-vptree_indices, vptree_distances = vptree.search1NN(queries)
-
-```
-
-Which is considerably faster than calling the generic searchKNN with K=1. This option is available for both L2 and Binary indices.
-
-
-# Using the C++ library
-You can install vptree C++ library header using cmake. The library is a single header only.
-
-To install, run:
-
-```console
-mkdir build
-cd build
-
-cmake ..
-make
-make install
-```
-
-# Development
-
-The C++ code is a one header file within include/VPTree.hpp.
-
-To use the project with some compiling tools on can use CMake to export the compile commands (optional):
-
-```console
-mkdir build
-cd build
-
-cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=1 ../
-
-make install
-```
-
-To run C++ tests, run the below command, after running cmake:
-
-```console
-make test
-```
-
-For running python tests:
-
-```console
-python3 -m pytest
-```
-
-## Running formater
-
-```
-make fmt
-```
-
-# TODO
-
-- Index serialization / deserialization
-- Index split into multiple machines remotely to search faster
-- Improve binary index using bach calculation and AVX2
-- Create specialized data containers for each feature size (32, 64, etc..) instead of always using bytes, to improve hamming distance calculations.
+We build several datasets and perform time benchmarks for L2 and Hamming distance functions. For each benchmark we use [Faiss Library](https://github.com/facebookresearch/faiss) as baseline of comparison.
 
