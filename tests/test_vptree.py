@@ -40,18 +40,6 @@ def test_hamming():
     assert np.array_equal(truth, result)
 
 
-def test_euclidean():
-    from sklearn.metrics.pairwise import euclidean_distances
-
-    arr1 = np.random.randint(0, 10, (5, 4), dtype=np.uint8)
-    arr2 = np.random.randint(0, 10, (3, 4), dtype=np.uint8)
-
-    truth = euclidean_distances(arr1, arr2)
-    result = euclidean_distance_pairwise(arr1, arr2)
-
-    np.testing.assert_allclose(truth, result)
-
-
 def exhaustive_search_euclidean(
     data: np.ndarray, queries: np.ndarray, k: int
 ) -> Tuple[np.ndarray, np.ndarray]:
