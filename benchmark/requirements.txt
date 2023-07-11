@@ -2,3 +2,4 @@ faiss-cpu
 python-dotenv
 h5py
 pandas
+wget
