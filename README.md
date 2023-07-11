@@ -29,7 +29,7 @@ This library still provides no feature compresion strategy (yet), and only syppo
 # Installation
 
 ```console
-python setup.py install
+pip install .
 ```
 
 Performance can dramatically decrease if this library is compiled without support to Open MP and AVX. This library was not tested under windows.
