@@ -84,7 +84,7 @@ class VPTreeBinaryNumpyAdapter {
     vptree::VPTree<arrayli, distHamming> _tree;
 };
 
-PYBIND11_MODULE(pyvptree, m) {
+PYBIND11_MODULE(_pyvptree, m) {
     py::class_<VPTreeNumpyAdapter>(m, "VPTreeL2Index")
         .def(py::init<>())
         .def("set", &VPTreeNumpyAdapter::set)

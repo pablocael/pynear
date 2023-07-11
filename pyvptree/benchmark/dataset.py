@@ -48,3 +48,11 @@ class BenchmarkDataset:
 
         return self._data.shape[1]
 
+    def size(self):
+        if self._data is None:
+            return 0
+
+        return self._data.shape[0]
+
+    def name(self):
+        return self._name
