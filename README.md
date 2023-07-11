@@ -163,6 +163,11 @@ For running python tests:
 python3 -m pytest
 ```
 
+## Running formater
+
+```
+make fmt
+```
 
 # TODO
 

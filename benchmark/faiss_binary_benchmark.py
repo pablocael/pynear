@@ -2,6 +2,7 @@ import time
 import faiss
 import numpy as np
 
+
 def build_faiss_binary_knn_index(features, features_ids):
 
     # d is the bit dimension of the binary vector (in bits), tipically 256
@@ -19,8 +20,10 @@ def build_faiss_binary_knn_index(features, features_ids):
     index.add_with_ids(data, np.array(features_ids, dtype=np.int64))
     return index
 
+
 def find_faiss_feature_neighbors(index, query_features, k=1):
     return index.search(np.uint8(query_features), k=k)
+
 
 if __name__ == '__main__':
     np.random.seed(seed=42)

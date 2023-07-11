@@ -5,9 +5,8 @@
 
 #pragma once
 
-#include <vector>
-#include <cassert>
 #include <algorithm>
+#include <cassert>
+#include <vector>
 
-namespace vptree::math {
-};
+namespace vptree::math {};

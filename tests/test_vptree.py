@@ -12,9 +12,7 @@ import pyvptree
 
 def hamming_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     r = (1 << np.arange(8))[:, None, None, None]
-    return np.count_nonzero(
-        (np.bitwise_xor(a[:, None, :], b[None, :, :]) & r) != 0, axis=(0, -1)
-    )
+    return np.count_nonzero((np.bitwise_xor(a[:, None, :], b[None, :, :]) & r) != 0, axis=(0, -1))
 
 
 def euclidean_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -23,6 +21,7 @@ def euclidean_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 def test_hamming():
+
     def hamming_distance(a, b) -> np.ndarray:
         r = (1 << np.arange(8))[:, None]
         return np.count_nonzero((np.bitwise_xor(a, b) & r) != 0)
@@ -50,9 +49,7 @@ def exhaustive_search_euclidean(
     return indices, distances
 
 
-def exhaustive_search_hamming(
-    data: np.ndarray, queries: np.ndarray, k: int
-) -> Tuple[np.ndarray, np.ndarray]:
+def exhaustive_search_hamming(data: np.ndarray, queries: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray]:
     distances = hamming_distance_pairwise(queries, data)
     indices = np.argpartition(distances, range(k), axis=-1)[:, :k]
     distances = np.take_along_axis(distances, indices, axis=-1)
@@ -73,14 +70,10 @@ def test_binary():
 
     dimension = 32
     num_points = 2021
-    data = np.random.normal(scale=255, loc=0, size=(num_points, dimension)).astype(
-        dtype=np.uint8
-    )
+    data = np.random.normal(scale=255, loc=0, size=(num_points, dimension)).astype(dtype=np.uint8)
 
     num_queries = 8
-    queries = np.random.normal(scale=255, loc=0, size=(num_queries, dimension)).astype(
-        dtype=np.uint8
-    )
+    queries = np.random.normal(scale=255, loc=0, size=(num_queries, dimension)).astype(dtype=np.uint8)
 
     k = 2
 
@@ -102,14 +95,10 @@ def test_large_binary():
 
     dimension = 32
     num_points = 40021
-    data = np.random.normal(scale=255, loc=0, size=(num_points, dimension)).astype(
-        dtype=np.uint8
-    )
+    data = np.random.normal(scale=255, loc=0, size=(num_points, dimension)).astype(dtype=np.uint8)
 
     num_queries = 8
-    queries = np.random.normal(scale=255, loc=0, size=(num_queries, dimension)).astype(
-        dtype=np.uint8
-    )
+    queries = np.random.normal(scale=255, loc=0, size=(num_queries, dimension)).astype(dtype=np.uint8)
 
     k = 3
 
@@ -124,9 +113,7 @@ def test_large_binary():
 
     assert np.array_equal(exaustive_distances, vptree_distances)
     if _num_dups(exaustive_distances) == 0:
-        assert np.array_equal(
-            exaustive_indices, vptree_indices
-        )  # indices order can vary for same distances
+        assert np.array_equal(exaustive_indices, vptree_indices)  # indices order can vary for same distances
 
 
 def test_k_equals_dataset():
@@ -141,9 +128,7 @@ def test_k_equals_dataset():
 
     k = num_points
 
-    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(
-        data, queries, k
-    )
+    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(data, queries, k)
 
     vptree = pyvptree.VPTreeL2Index()
     vptree.set(data)
@@ -169,9 +154,7 @@ def test_large_dataset():
 
     k = 3
 
-    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(
-        data, queries, k
-    )
+    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(data, queries, k)
 
     vptree = pyvptree.VPTreeL2Index()
     vptree.set(data)
@@ -196,9 +179,7 @@ def test_dataset_split_less_than_k():
     queries = np.array([[-2.55, 0]])
     k = 4
 
-    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(
-        data, queries, k
-    )
+    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(data, queries, k)
 
     vptree = pyvptree.VPTreeL2Index()
     vptree.set(data)
@@ -223,9 +204,7 @@ def test_query_larger_than_dataset():
 
     k = 3
 
-    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(
-        data, queries, k
-    )
+    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(data, queries, k)
 
     vptree = pyvptree.VPTreeL2Index()
     vptree.set(data)
@@ -250,9 +229,7 @@ def test_compare_with_exaustive_knn():
 
     k = 3
 
-    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(
-        data, queries, k
-    )
+    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(data, queries, k)
 
     vptree = pyvptree.VPTreeL2Index()
     vptree.set(data)
@@ -275,9 +252,7 @@ def test_compare_with_exaustive_1nn():
     num_queries = 23
     queries = np.random.rand(num_queries, dimension).astype(dtype=np.float32)
 
-    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(
-        data, queries, 1
-    )
+    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(data, queries, 1)
 
     exaustive_indices = exaustive_indices.reshape(exaustive_indices.shape[:-1])
     exaustive_distances = exaustive_distances.reshape(exaustive_distances.shape[:-1])

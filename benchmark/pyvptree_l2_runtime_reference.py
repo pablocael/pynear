@@ -4,7 +4,7 @@ import pyvptree
 
 np.random.seed(seed=42)
 
-dimension = 64 
+dimension = 64
 num_points = 500000
 data = np.random.rand(int(num_points), dimension)
 
