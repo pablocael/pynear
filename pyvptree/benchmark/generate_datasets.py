@@ -104,6 +104,7 @@ def main():
 
     print("generating coco img2vec dataset dim = 512")
     coco_img2vec_dataset = generate_coco_img2vec_dataset()
+    coco_img2vec_dataset.save(os.path.join("./datasets", coco_img2vec_dataset.name()))
     print(f"done")
 
 if __name__ == "__main__":
