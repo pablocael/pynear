@@ -30,7 +30,7 @@ with open("README.md", "rt", encoding="utf-8") as fr:
 
 setup(
     name="pyvptree",
-    version="0.0.1",
+    version="0.0.2",
     packages=find_packages(),
     author="Pablo Carneiro Elias",
     author_email="pablo.cael@gmail.com",

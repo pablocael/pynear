@@ -101,11 +101,10 @@ class FaissComparatorBenchmark:
 
     def _split_test_train_case(self, dataset: BenchmarkDataset):
 
-        split = 0.05 # 5% for test and 80% for training
+        n_test = 16 # perform 16 queries for test and rest for train
         data: np.ndarray = dataset.data()
         np.random.shuffle(data)
         n = dataset.size()
-        n_test = 16
         n_train = n - n_test
         return data[0:n_train,:], data[n_train:,:] 
         
