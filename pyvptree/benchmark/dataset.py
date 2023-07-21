@@ -5,13 +5,16 @@ import glob
 import numpy as np
 import pyvptree
 import pandas as pd
+from PIL import Image
 from functools import partial
 from img2vec_pytorch import Img2Vec
 from typing import Any, List, Callable, Union, Optional
 from zipfile import ZipFile, BadZipFile
 from tempfile import TemporaryDirectory
 from typing import Union
+from pyvptree.logging import create_and_configure_log
 
+logger = create_and_configure_log(__name__)
 
 class BenchmarkDataset:
     def __init__(
@@ -35,7 +38,8 @@ class BenchmarkDataset:
         self._name: str = name
         self._pyvpindex_type: Union[pyvptree.VPTreeL2Index, pyvptree.VPTreeBinaryIndex] = pyvpindex_type
         self._description: str = description
-        self._data: Optional[Union[np.ndarray, Callable[..., np.ndarray]]] = data
+        self._original_data: Optional[Union[np.ndarray, Callable[..., np.ndarray]]] = data
+        self._loaded_data: Optional[np.ndarray] = None
 
     def save(self, filepath: str):
         with h5py.File(filepath, "w") as outfile:
@@ -45,19 +49,28 @@ class BenchmarkDataset:
             dataset.attrs["description"] = self._description
 
     def data(self) -> np.ndarray:
+        if self._loaded_data is not None:
+            return self._loaded_data
+
         # if self._data is callable, lazy load it
-        if callable(self._data):
-            self._data = self._data()
+        if callable(self._original_data):
+            logger.info(f"lazy loading data for {self._name} ...")
+            self._loaded_data = self._original_data()
+        else:
+            self._loaded_data = self._original_data
 
-        return self._data
+        return self._loaded_data
 
-    def load(self, filepath: str):
+    def load_from_file(self, filepath: str):
         with h5py.File(filepath, "r") as infile:
             dataset = infile["dataset"]
-            self._data = dataset[...]  # Load it into memory. Could also slice a subset.
+            self._loaded_data = dataset[...]  # Load it into memory. Could also slice a subset.
 
             self._name = dataset.attrs["name"]
             self._description = dataset.attrs["description"]
+
+        self._original_data = self._loaded_data
+
 
     def dimension(self):
         d = self.data()
@@ -76,13 +89,17 @@ class BenchmarkDataset:
     def name(self):
         return self._name
     
+    def index_type(self):
+        return self._pyvpindex_type
+
     def unload_data(self):
-        self._data = None
+        logger.info(f"unloading data for {self._name} ...")
+        self._loaded_data = None
 
     @staticmethod
     def available_datasets() -> List["BenchmarkDataset"]:
         datasets = []
-        for dim in [16, 32, 256, 512]:
+        for dim in range(16):
             datasets.append(
                 BenchmarkDataset(
                     name=f"gaussian_euclidean_clusters_dim={dim}",
@@ -105,15 +122,6 @@ class BenchmarkDataset:
                     pyvpindex_type=pyvptree.VPTreeL2Index,
                 )
             )
-
-        datasets.append(
-            BenchmarkDataset(
-                name=f"coco_img2vec_512",
-                description=f"An Image2Vec representation of Coco dataset using resnet, with vectors of 512 dimensions",
-                data=generate_coco_img2vec_dataset,
-                pyvpindex_type=pyvptree.VPTreeL2Index,
-            )
-        )
 
         return datasets
 
@@ -164,7 +172,7 @@ def generate_coco_img2vec_dataset() -> np.ndarray:
 
 
 def generate_euclidean_gaussian_dataset(
-    num_clusters: int, cluster_size: int, dim: int, data_type: Any = np.float64
+    num_clusters: int, cluster_size: int, dim: int, data_type: Any = np.float32
 ) -> np.ndarray:
     """
     Generate a set of gaussian clusters of specific size and dimention

@@ -170,6 +170,33 @@ def test_large_dataset():
     np.testing.assert_allclose(exaustive_distances, vptree_distances, rtol=1e-06)
 
 
+def test_large_dataset_highdim():
+    np.random.seed(seed=42)
+
+    dimension = 16
+    num_points = 401001
+    data = np.random.rand(num_points, dimension).astype(dtype=np.float32)
+
+    num_queries = 8
+    queries = np.random.rand(num_queries, dimension).astype(dtype=np.float32)
+
+    k = 3
+
+    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(data, queries, k)
+
+    vptree = pyvptree.VPTreeL2Index()
+    vptree.set(data)
+    vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
+
+    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]
+
+    vptree_distances2 = np.sort(vptree_distances, axis=-1)
+    assert np.array_equal(vptree_distances, vptree_distances2)  # distances are sorted
+
+    assert np.array_equal(exaustive_indices, vptree_indices)
+    np.testing.assert_allclose(exaustive_distances, vptree_distances, rtol=1e-06)
+
 def test_dataset_split_less_than_k():
     """doc
     Test the case where on of the splits of the dataset eliminates half of points but contains less than k points
