@@ -39,11 +39,8 @@ class VPLevelPartition {
     }
 
     ~VPLevelPartition() {
-        if (_left != nullptr)
-            delete _left;
+        clear();
 
-        if (_right != nullptr)
-            delete _right;
     }
 
     bool isEmpty() { return _indexStart == -1 || _indexStart == -1; }
@@ -62,6 +59,18 @@ class VPLevelPartition {
     VPLevelPartition *right() { return _right; }
 
     private:
+
+    void clear() {
+        if (_left != nullptr)
+            delete _left;
+
+        if (_right != nullptr)
+            delete _right;
+
+        _left = nullptr;
+        _right = nullptr;
+    }
+
     float _radius;
 
     // _indexStart and _indexEnd are index pointers to examples within the examples list, not index of coordinates

@@ -4,3 +4,6 @@ h5py
 pandas
 wget
 img2vec_pytorch
+matplotlib
+seaborn
+scikit-learn

@@ -16,9 +16,10 @@ Balanced Tree Structure: VP-trees inherently try to create a balanced tree struc
 
 Please note that while these points generally favor VP-trees, the performance may vary significantly depending on the specifics of your dataset and task.
 
-Also, practical implementation constants in the time complexity of the algorithm can strongly affect final performance in high dimensions. For instance, [Faiss Library](https://github.com/facebookresearch/faiss) performs very efficiently even for near-linear-exaustive searches due to highly optimized code.
+Also, practical implementation approaches such as using SIMD instructions or using highly optimized distance functions can strongly affect final performance in high dimensions. For instance, [Faiss Library](https://github.com/facebookresearch/faiss) performs very efficientlyin very high dimensions, where searches become near linear and exaustive, due to highly optimized code.
 
-Tipically spatial search structures tend to perform worse with increasing number of dimensions of dataset. This is because points tend to be far apart and also.
+Tipically spatial search structures tend to perform worse with increasing number of dimensions of dataset.
+
 
 # How this library works
 
@@ -40,6 +41,44 @@ This library needs OpenMP support to be built and installed. The whole compilati
 
 # Benchmarks
 
+Several datasets were built and used for time benchmarks using L2 distance functions. Although Pyvptree does support Binary Index (VPTreeBinaryIndex) using hamming distance functions,
+the benchmarks focus on L2 distances since Pyvptree's binary index still need more optimizations to be able to compete with faiss in any way.
 
-We build several datasets and perform time benchmarks for L2 and Hamming distance functions. For each benchmark we use [Faiss Library](https://github.com/facebookresearch/faiss) as baseline of comparison.
+For each benchmark we use [Faiss Library](https://github.com/facebookresearch/faiss) and [Scikit-Learn](https://scikit-learn.org/stable/install.html) as baseline of comparison.
+
+The below benchmarks are for different values of K (1, 2, 4, 8, 16), comparing Faiss, Sklearn and Pyvptree.
+
+Benchmarks are split into dimensionality ranges for better analysis.
+
+
+## 2 to 10 dimensions Range
+
+![k=16, L2 index](docs/img/from_2_to_10/VPTreeL2Index_k_16.png "K=16, L2 index")
+
+## 11 to 16 dimensions Range
+
+![k=16, L2 index](docs/img/from_11_to_16/VPTreeL2Index_k_16.png "K=16, L2 index")
+
+## 17 to 32 dimensions Range
+![k=16, L2 index](docs/img/from_17_to_32/VPTreeL2Index_k_16.png "K=16, L2 index")
+
+## 33 to 48 dimensions Range
+
+![k=16, L2 index](docs/img/from_33_to_48/VPTreeL2Index_k_16.png "K=16, L2 index")
+
+To customize or regenerate the benchmarks as well as to see other benchmark results, see [benchmarks](./pyvptree/benchmark/README.md) session.
+
+# Development
+
+## Running tests
+
+```
+make test
+```
+
+## Formating code
+
+```
+make fmt
+```
 

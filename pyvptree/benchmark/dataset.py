@@ -16,11 +16,13 @@ from pyvptree.logging import create_and_configure_log
 
 logger = create_and_configure_log(__name__)
 
+
 class BenchmarkDataset:
     def __init__(
         self,
         data: Union[np.ndarray, Callable[..., Any]],
         name: str,
+        dim: int,
         pyvpindex_type: Union[pyvptree.VPTreeL2Index, pyvptree.VPTreeBinaryIndex],
         description: str,
     ):
@@ -31,6 +33,7 @@ class BenchmarkDataset:
            data (np.ndarray or callable that will build ndarray):
             a (N, DIM) array where N is number of examples and DIM is the dimension of each example.
            name (str): the name of this dataset.
+           dim (int): the dimensionality of this dataset.
            description (str): a short description of what kind of data is within this dataset.
            pyvpindex_type (pyvptree.VPTreeL2Index or pyvptree.VPTreeBinaryIndex):
            the pyvptree index that will be used with to index this dataset.
@@ -40,6 +43,7 @@ class BenchmarkDataset:
         self._description: str = description
         self._original_data: Optional[Union[np.ndarray, Callable[..., np.ndarray]]] = data
         self._loaded_data: Optional[np.ndarray] = None
+        self._dim = dim
 
     def save(self, filepath: str):
         with h5py.File(filepath, "w") as outfile:
@@ -71,11 +75,8 @@ class BenchmarkDataset:
 
         self._original_data = self._loaded_data
 
-
     def dimension(self):
-        d = self.data()
-        if d is None:
-            return 0
+        return self._dim
 
         return d.shape[1]
 
@@ -88,7 +89,7 @@ class BenchmarkDataset:
 
     def name(self):
         return self._name
-    
+
     def index_type(self):
         return self._pyvpindex_type
 
@@ -97,28 +98,22 @@ class BenchmarkDataset:
         self._loaded_data = None
 
     @staticmethod
-    def available_datasets() -> List["BenchmarkDataset"]:
+    def generate_gaussian_euclidean_cluster_datasets(
+        min_dim: int, max_dim: int, total_size=2500000, num_clusters=50
+    ) -> List["BenchmarkDataset"]:
         datasets = []
-        for dim in range(16):
+        for dim in range(min_dim, max_dim + 1):
             datasets.append(
                 BenchmarkDataset(
                     name=f"gaussian_euclidean_clusters_dim={dim}",
                     description=f"An euclidean gaussian clusters dataset of {dim} dimensions, type is float64",
                     data=partial(
                         generate_euclidean_gaussian_dataset,
-                        num_clusters=50, cluster_size=10000, dim=dim
+                        num_clusters=num_clusters,
+                        cluster_size=(total_size // num_clusters),
+                        dim=dim,
                     ),
-                    pyvpindex_type=pyvptree.VPTreeL2Index,
-                )
-            )
-            datasets.append(
-                BenchmarkDataset(
-                    name=f"gaussian_binary_clusters_dim={dim}",
-                    description=f"A binary gaussian clusters dataset of {dim} dimensions",
-                    data=partial(
-                        generate_euclidean_gaussian_dataset,
-                        num_clusters=50, cluster_size=10000, dim=dim, data_type=np.uint8
-                    ),
+                    dim=dim,
                     pyvpindex_type=pyvptree.VPTreeL2Index,
                 )
             )
@@ -172,7 +167,7 @@ def generate_coco_img2vec_dataset() -> np.ndarray:
 
 
 def generate_euclidean_gaussian_dataset(
-    num_clusters: int, cluster_size: int, dim: int, data_type: Any = np.float32
+    num_clusters: int, cluster_size: int, dim: int, data_type: Any = np.float64
 ) -> np.ndarray:
     """
     Generate a set of gaussian clusters of specific size and dimention
@@ -187,4 +182,4 @@ def generate_euclidean_gaussian_dataset(
         data = np.random.normal(loc=center, scale=scale, size=(cluster_size, dim))
         datas.append(data)
 
-    return np.concatenate(datas, axis=0)
+    return np.concatenate(datas, axis=0).astype(data_type)
