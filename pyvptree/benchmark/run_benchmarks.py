@@ -13,6 +13,7 @@ import seaborn as sns
 
 logger = create_and_configure_log(__name__)
 
+
 def create_performance_plot(result: pd.DataFrame, output_folder: str):
     if not os.path.exists(output_folder):
         os.mkdir(output_folder)
@@ -25,11 +26,11 @@ def create_performance_plot(result: pd.DataFrame, output_folder: str):
         for k, group in groups:
             # create one plot per k
             # resetting index before melting to save the current index in 'index' column...
-            
+
             data_size = group.iloc[0]["size"]
             query_size = group.iloc[0]["query_size"]
             filtered = group.filter(regex="dimension|time*", axis=1)
-            df = filtered.melt("dimension", var_name="cols",  value_name="query time")
+            df = filtered.melt("dimension", var_name="cols", value_name="query time")
             g = sns.catplot(x="dimension", y="query time", hue='cols', data=df, kind='point', errorbar=None, legend=False)
             g.set(title=f"Data Dimensions x Query Time\nindex_type={index_type}\ndata_size={data_size}), k={k}\nquery_size={query_size})")
             plt.legend(loc='upper center')
@@ -39,17 +40,14 @@ def create_performance_plot(result: pd.DataFrame, output_folder: str):
             plt.clf()
 
 
-
 def main():
 
     parser = argparse.ArgumentParser(description="Creates a stress test report for a segemaker endpoint")
-    parser.add_argument(
-        "--min-dimension",
-        default=2,
-        type=int,
-        help="The minimum dimensionality of the data to generate the benchmarks",
-        required=False
-    )
+    parser.add_argument("--min-dimension",
+                        default=2,
+                        type=int,
+                        help="The minimum dimensionality of the data to generate the benchmarks",
+                        required=False)
     parser.add_argument(
         "--max-dimension",
         default=32,
@@ -58,19 +56,17 @@ def main():
         required=False,
     )
 
-
     args = parser.parse_args()
 
     min_dim = args.min_dimension
     max_dim = args.max_dimension
-
 
     print(f"creating cases for dims from {min_dim} to {max_dim}... ")
     datasets = BenchmarkDataset.generate_gaussian_euclidean_cluster_datasets(min_dim=min_dim, max_dim=max_dim)
 
     cases = []
     for ds in datasets:
-        case = ComparatorBenchmarkCase(ks=[2**i for i in range(0,5)], dataset=ds)
+        case = ComparatorBenchmarkCase(ks=[2**i for i in range(0, 5)], dataset=ds)
         print("case created", str(case))
         cases.append(case)
 

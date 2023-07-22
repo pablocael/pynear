@@ -38,10 +38,7 @@ class VPLevelPartition {
         _indexEnd = -1;
     }
 
-    ~VPLevelPartition() {
-        clear();
-
-    }
+    ~VPLevelPartition() { clear(); }
 
     bool isEmpty() { return _indexStart == -1 || _indexStart == -1; }
     unsigned int start() { return _indexStart; }
@@ -59,7 +56,6 @@ class VPLevelPartition {
     VPLevelPartition *right() { return _right; }
 
     private:
-
     void clear() {
         if (_left != nullptr)
             delete _left;

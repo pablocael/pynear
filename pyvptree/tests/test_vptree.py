@@ -39,9 +39,7 @@ def test_hamming():
     assert np.array_equal(truth, result)
 
 
-def exhaustive_search_euclidean(
-    data: np.ndarray, queries: np.ndarray, k: int
-) -> Tuple[np.ndarray, np.ndarray]:
+def exhaustive_search_euclidean(data: np.ndarray, queries: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray]:
     distances = euclidean_distance_pairwise(queries, data)
     indices = np.argpartition(distances, range(k), axis=-1)[:, :k]
     distances = np.take_along_axis(distances, indices, axis=-1)
@@ -196,6 +194,7 @@ def test_large_dataset_highdim():
 
     assert np.array_equal(exaustive_indices, vptree_indices)
     np.testing.assert_allclose(exaustive_distances, vptree_distances, rtol=1e-06)
+
 
 def test_dataset_split_less_than_k():
     """doc

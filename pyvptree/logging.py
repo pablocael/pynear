@@ -1,6 +1,7 @@
 import os
 import logging
 
+
 def create_and_configure_log(name):
 
     logger = logging.getLogger(name)

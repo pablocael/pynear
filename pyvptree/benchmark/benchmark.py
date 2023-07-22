@@ -11,6 +11,7 @@ from pyvptree.logging import create_and_configure_log
 
 logger = create_and_configure_log(__name__)
 
+
 @dataclass
 class ComparatorBenchmarkCase:
     # list of test case K values (how many neighbors to search)
@@ -26,8 +27,8 @@ class ComparatorBenchmarkCase:
     def __str__(self):
         return f"{self.dataset.name()}-k={self.ks}"
 
-class ComparatorBenchmark:
 
+class ComparatorBenchmark:
     """
     A generic benchmark build helper class to automate benchmark generation.
     """
@@ -68,19 +69,18 @@ class ComparatorBenchmark:
             logger.info(f"done, pyvptree index took {time.time()-start:0.3f} seconds... ")
             for k in case.ks:
 
-
                 logger.info("searching into faiss index ... ")
                 start = time.time()
                 self._search_knn_faiss(faiss_index, test, k)
                 end = time.time()
-                faiss_time = end-start
+                faiss_time = end - start
                 logger.info(f"faiss search for k = {k} took {faiss_time:0.3f} seconds... ")
 
                 logger.info("searching into pyvptree index ... ")
                 start = time.time()
                 self._search_knn_pyvptree(pyvptree_index, test, k)
                 end = time.time()
-                pyvptree_time = end-start
+                pyvptree_time = end - start
                 logger.info(f"pyvptree search for k = {k} took {pyvptree_time:0.3f} seconds... ")
 
                 results.append({
@@ -103,12 +103,10 @@ class ComparatorBenchmark:
                     start = time.time()
                     self._search_knn_sklearn(sklearn_index, test)
                     end = time.time()
-                    sklearn_time = end-start
+                    sklearn_time = end - start
                     logger.info(f"sklearn search for k = {k} took {sklearn_time:0.3f} seconds... ")
 
                     results[-1].update({"sklearn_time": sklearn_time})
-
-
 
             # make sure dataset is unloaded to prevent memory overflow
             logger.info(f"case took {time.time()-start_case:0.3f}")
@@ -122,17 +120,17 @@ class ComparatorBenchmark:
 
     def _split_test_train_case(self, dataset: BenchmarkDataset):
 
-        n_test = 8 # perform 8 queries for test and rest for train
+        n_test = 8  # perform 8 queries for test and rest for train
         data: np.ndarray = dataset.data()
         np.random.shuffle(data)
         n = dataset.size()
         n_train = n - n_test
-        return data[0:n_train,:], data[n_train:,:] 
-        
+        return data[0:n_train, :], data[n_train:, :]
+
     def _generate_faiss_index(self, features: np.ndarray, index_type: Any):
 
         d = features.shape[1]
-        faiss_index = faiss.IndexFlatL2(d) 
+        faiss_index = faiss.IndexFlatL2(d)
         if index_type == pyvptree.VPTreeBinaryIndex:
             d = features.shape[1] * 8
             quantizer = faiss.IndexBinaryFlat(d)
@@ -151,14 +149,12 @@ class ComparatorBenchmark:
         # only for L2 distances
         return NearestNeighbors(n_neighbors=k, algorithm='kd_tree').fit(features)
 
-
     def _generate_pyvptree_index(self, features: np.ndarray, index_type: Any):
         vptree_index = pyvptree.VPTreeL2Index()
         if index_type == pyvptree.VPTreeBinaryIndex:
             vptree_index = pyvptree.VPTreeBinaryIndex()
         vptree_index.set(features)
         return vptree_index
-
 
     def _search_knn_faiss(self, index, query_features, k=1):
         return index.search(query_features, k=k)
