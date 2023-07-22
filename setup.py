@@ -28,9 +28,10 @@ ext_modules = [
 with open("README.md", "rt", encoding="utf-8") as fr:
     long_description = fr.read()
 
+exec(open('pyvptree/_version.py').read())
 setup(
     name="pyvptree",
-    version="0.0.2",
+    version=__version__,
     packages=find_packages(),
     author="Pablo Carneiro Elias",
     author_email="pablo.cael@gmail.com",
