@@ -17,8 +17,19 @@ endif
 
 .PHONY: fmt
 fmt: init-repo
-	stylize --exclude_dirs=include/Eigen --yapf_style="{based_on_style: google, column_limit: 150, indent_width: 4}"
+	stylize --exclude_dirs=pyvptree/include/Eigen --yapf_style="{based_on_style: google, column_limit: 150, indent_width: 4}"
 
 .PHONY: check-fmt
 check-fmt:
-	stylize --check --exclude_dirs=include/Eigen --yapf_style="{based_on_style: google, column_limit: 150, indent_width: 4}"
+	stylize --check --exclude_dirs=pyvptree/include/Eigen --yapf_style="{based_on_style: google, column_limit: 150, indent_width: 4}"
+
+.PHONY: test
+test:
+	export PYTHONPATH=$PWD
+	pytest pyvptree/tests
+
+.PHONY: benchmarks
+benchmarks:
+	export PYTHONPATH=$PWD
+	pip install -r pyvptree/benchmark/requirements.txt
+	python pyvptree/benchmark/run_benchmarks.py

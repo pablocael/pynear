@@ -1,0 +1,3 @@
+from pyvptree.benchmark.dataset import BenchmarkDataset
+from pyvptree.benchmark.benchmark import ComparatorBenchmark
+from pyvptree.benchmark.benchmark import ComparatorBenchmarkCase
