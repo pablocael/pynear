@@ -4,7 +4,7 @@ Pyvptree is a python library, internally built in C++, for efficient KNN search 
 
 ## How VP-Trees work
 
-VP-Trees differ from Kd-Trees in the sense that they always partition the whole space using an specific metric function and a selected so called "Vantage Point". For more details on how it works please access the following references:
+VP-Trees are binary trees that successively divides spaces in order to peform different types of tasks, such as Nearest Neighbor Search. It differs from Kd-Trees in the sense that they always partition the whole space, instead of invidiual dimensional axes, using a specific metric function and a selected "Vantage Point" that will be used as reference to allow spliting the dataset. For more details on how it works please access the following references:
 
 - https://en.wikipedia.org/wiki/Vantage-point_tree 
 - https://fribbels.github.io/vptree/writeup 
@@ -43,6 +43,8 @@ This library needs OpenMP support to be built and installed. The whole compilati
 
 Several datasets were built and used for time benchmarks using L2 distance functions. Although Pyvptree does support Binary Index (VPTreeBinaryIndex) using hamming distance functions,
 the benchmarks focus on L2 distances since Pyvptree's binary index still need more optimizations to be able to compete with faiss in any way.
+
+All benchmarks were generated using 12th Gen Intel(R) Core(TM) i7-1270P with 16 cores.
 
 For each benchmark we use [Faiss Library](https://github.com/facebookresearch/faiss) and [Scikit-Learn](https://scikit-learn.org/stable/install.html) as baseline of comparison.
 
