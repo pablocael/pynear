@@ -22,7 +22,7 @@ VP-Trees are binary trees that successively divide spaces in order to peform dif
 
 - Balanced Tree Structure: VP-trees inherently try to create a balanced tree structure, which is beneficial for efficient searching. kd-trees can become unbalanced in certain situations, particularly with non-uniform data, leading to inefficient search operations.
 
-Its important to notice, however, that practical implementation approaches such as using [SIMD](https://en.wikipedia.org/wiki/Single_instruction,_multiple_data) instructions or using highly optimized distance functions can strongly affect final performance in high dimensions. For instance, [Faiss Library](https://github.com/facebookresearch/faiss) performs very efficiently in very high dimensions, where searches become near linear and exaustive, due to highly optimized code.
+It's important to notice, however, that practical implementation approaches such as using [SIMD](https://en.wikipedia.org/wiki/Single_instruction,_multiple_data) instructions or using highly optimized distance functions can strongly affect final performance in high dimensions. For instance, [Faiss Library](https://github.com/facebookresearch/faiss) performs very efficiently in very high dimensions, where searches become near linear and exaustive, due to highly optimized code.
 
 Typically spatial search structures tend to perform worse with increasing number of dimensions of dataset.
 
@@ -35,7 +35,7 @@ pip install .
 
 Performance can dramatically decrease if this library is compiled without support to Open MP and AVX. This library was not tested under windows.
 
-# Requeriments
+# Requirement
 
 This library needs OpenMP support to be built and installed. The whole compilation procces occur automatically by performing the installation step above.
 
