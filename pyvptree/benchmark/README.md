@@ -20,6 +20,8 @@ This will write result images to a local ./results folder.
 
 ## Benchmarks for other values of K
 
+All benchmarks were generated using 12th Gen Intel(R) Core(TM) i7-1270P with 16 cores.
+
 In main session, benchmarks for K=16 are displayed. This session will include K values of 1, 2, 4, 8 and 16:
 
 

@@ -2,30 +2,30 @@
 
 Pyvptree is a python library, internally built in C++, for efficient KNN search using metric distance function such as L2 distance (see VPTreeL2Index) or Hamming distances (VPTreeBinaryIndex). 
 
-## Theoretical advantage of Vantage Points Trees compared to Kd-Trees
+## How VP-Trees work
 
-Intrinsic Dimensionality: VP-trees perform well in data with high intrinsic dimensionality, where the effective dimensionality is high. In contrast, kd-trees are efficient in low-dimensional spaces but their performance degrades quickly as the number of dimensions increases. This is often referred to as the "curse of dimensionality".
+VP-Trees are binary trees that successively divide spaces in order to peform different types of tasks, such as Nearest Neighbor Search. It differs from Kd-Trees in the sense that they always partition the whole space, instead of invidiual dimensional axes, using a specific metric function and a selected "Vantage Point" that will be used as reference to allow spliting the dataset. For more details on how it works please access the following references:
 
-No Assumption about Axis-Alignment: Unlike kd-trees, which make a specific assumption about axis-alignment, VP-trees do not make such assumptions. This makes VP-trees potentially more robust to different kinds of data, especially when there is no natural way to align the axes with respect to the data.
+- https://en.wikipedia.org/wiki/Vantage-point_tree 
+- https://fribbels.github.io/vptree/writeup 
+- [Probabilistic analysis of vantage point trees](https://www.vmsta.org/journal/VMSTA/article/219/file/pdf)
 
-Metric Spaces: VP-trees can handle general metric spaces (any space where a distance function is defined that satisfies the triangle inequality), not just Euclidean spaces. This makes them more adaptable to different problem settings where the distance metric might not be the standard Euclidean distance.
+### Theoretical advantage of Vantage Points Trees compared to Kd-Trees
 
-Handling Categorical Data: VP-trees, due to their use of arbitrary distance functions, can handle categorical data more naturally than kd-trees. While there are workarounds to use kd-trees with categorical data, they often require substantial tweaking and may not perform optimally.
+- Intrinsic Dimensionality: VP-trees perform well in data with high intrinsic dimensionality, where the effective dimensionality is high. In contrast, kd-trees are efficient in low-dimensional spaces but their performance degrades quickly as the number of dimensions increases. This is often referred to as the "curse of dimensionality".
 
-Balanced Tree Structure: VP-trees inherently try to create a balanced tree structure, which is beneficial for efficient searching. kd-trees can become unbalanced in certain situations, particularly with un-uniform data, leading to inefficient search operations.
+- No Assumption about Axis-Alignment: Unlike kd-trees, which make a specific assumption about axis-alignment, VP-trees do not make such assumptions. This makes VP-trees potentially more robust to different kinds of data, especially when there is no natural way to align the axes with respect to the data.
 
-Please note that while these points generally favor VP-trees, the performance may vary significantly depending on the specifics of your dataset and task.
+- Metric Spaces: VP-trees can handle general metric spaces (any space where a distance function is defined that satisfies the triangle inequality), not just Euclidean spaces. This makes them more adaptable to different problem settings where the distance metric might not be the standard Euclidean distance.
 
-Also, practical implementation approaches such as using SIMD instructions or using highly optimized distance functions can strongly affect final performance in high dimensions. For instance, [Faiss Library](https://github.com/facebookresearch/faiss) performs very efficientlyin very high dimensions, where searches become near linear and exaustive, due to highly optimized code.
+- Handling Categorical Data: VP-trees, due to their use of arbitrary distance functions, can handle categorical data more naturally than kd-trees. While there are workarounds to use kd-trees with categorical data, they often require substantial tweaking and may not perform optimally. For categorical data, another reference structure is the [BK-Tree](https://en.wikipedia.org/wiki/BK-tree), which is very efficient when comes to low dimensional data.
 
-Tipically spatial search structures tend to perform worse with increasing number of dimensions of dataset.
+- Balanced Tree Structure: VP-trees inherently try to create a balanced tree structure, which is beneficial for efficient searching. kd-trees can become unbalanced in certain situations, particularly with non-uniform data, leading to inefficient search operations.
 
+It's important to notice, however, that practical implementation approaches such as using [SIMD](https://en.wikipedia.org/wiki/Single_instruction,_multiple_data) instructions or using highly optimized distance functions can strongly affect final performance in high dimensions. For instance, [Faiss Library](https://github.com/facebookresearch/faiss) performs very efficiently in very high dimensions, where searches become near linear and exaustive, due to highly optimized code.
 
-# How this library works
+Typically spatial search structures tend to perform worse with increasing number of dimensions of dataset.
 
-This library implements a [Vantage Point Tree](https://en.wikipedia.org/wiki/Vantage-point_tree) to perform search within multidimensional metric spaces using arbitrary distance functions.
-
-This library still provides no feature compresion strategy (yet), and only sypport raw (uncompressed) feature search.
 
 # Installation
 
@@ -35,7 +35,7 @@ pip install .
 
 Performance can dramatically decrease if this library is compiled without support to Open MP and AVX. This library was not tested under windows.
 
-# Requeriments
+# Requirement
 
 This library needs OpenMP support to be built and installed. The whole compilation procces occur automatically by performing the installation step above.
 
@@ -43,6 +43,8 @@ This library needs OpenMP support to be built and installed. The whole compilati
 
 Several datasets were built and used for time benchmarks using L2 distance functions. Although Pyvptree does support Binary Index (VPTreeBinaryIndex) using hamming distance functions,
 the benchmarks focus on L2 distances since Pyvptree's binary index still need more optimizations to be able to compete with faiss in any way.
+
+All benchmarks were generated using 12th Gen Intel(R) Core(TM) i7-1270P with 16 cores.
 
 For each benchmark we use [Faiss Library](https://github.com/facebookresearch/faiss) and [Scikit-Learn](https://scikit-learn.org/stable/install.html) as baseline of comparison.
 
