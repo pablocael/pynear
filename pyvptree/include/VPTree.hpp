@@ -15,12 +15,14 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include "bas.hpp"
+#include <bits/stdc++.h>
 
 #define ENABLE_OMP_PARALLEL 1
 
 namespace vptree {
 
-class VPLevelPartition {
+class VPLevelPartition : bas::Serializable  {
     public:
     VPLevelPartition(float radius, unsigned int start, unsigned int end) {
         // For each partition, the vantage point is the first point within the partition (pointed by indexStart)
@@ -39,6 +41,62 @@ class VPLevelPartition {
     }
 
     ~VPLevelPartition() { clear(); }
+
+   // this function contains the serialization of pyvptree
+    void makeSerialization(bas::SerializedObject& obj) override
+    {
+        // visit partitions tree in order push all values. If radius is -1, it is a leaf
+        VPLevelPartition *current = this;
+        std::vector<VPLevelPartition*> stack;
+        std::vector<VPLevelPartition*> flatten_tree;
+        do {
+            while(current != nullptr && current->left() != nullptr) {
+                flatten_tree.push_back(current);
+                current = current->left();
+                stack.push_back(current);
+            }
+            flatten_tree.push_back(nullptr);
+            current = stack.back();
+            stack.pop_back();
+            
+            current = current->right();
+        }
+        while(!stack.empty());
+
+        // reverse so we can build the data stack in reverse orther 
+        // and keep the in-order order
+        std::reverse(flatten_tree.begin(), flatten_tree.end());
+        for(const VPLevelPartition* elem: flatten_tree) {
+            if(elem == nullptr) {
+                obj.pushData<int>(-1);
+                continue;
+            }
+            obj.pushData(elem->_indexEnd);
+            obj.pushData(elem->_indexStart);
+            obj.pushData(elem->_radius);
+        }
+    }
+
+    // this function contains the unserialization process of your class
+    void makeUnserialization(bas::SerializedObject& obj) override
+    {
+        *this = *rebuild_from_State(obj);
+    }
+
+    VPLevelPartition* rebuild_from_State(bas::SerializedObject& obj) {
+        // first is object root
+        float radius = obj.popData<float>();
+        if(radius == -1) {
+            return nullptr;
+        }
+        int indexStart = obj.popData<int>();
+        int indexEnd = obj.popData<int>();
+        VPLevelPartition *root = new VPLevelPartition(radius, indexStart, indexEnd);
+        VPLevelPartition* left = rebuild_from_State(obj);
+        VPLevelPartition* right = rebuild_from_State(obj);
+        root->setChild(left, right);
+        return root;
+    }
 
     bool isEmpty() { return _indexStart == -1 || _indexStart == -1; }
     unsigned int start() { return _indexStart; }
