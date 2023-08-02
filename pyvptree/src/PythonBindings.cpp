@@ -10,6 +10,7 @@
 #include <pybind11/stl.h>
 
 #include <omp.h>
+#include "bas.hpp"
 
 namespace py = pybind11;
 
@@ -45,6 +46,14 @@ class VPTreeNumpyAdapter {
         return std::make_tuple(std::move(indices), std::move(distances));
     }
 
+    const std::vector<char>& serialize() {
+        return _tree.serialize().vector();
+    }
+
+    void deserialize(const std::vector<char>& data) {
+        return _tree.unserialize(bas::SerializedObject(&data[0]));
+    }
+
     private:
     vptree::VPTree<arrayf, dist_optimized_float> _tree;
 };
@@ -71,6 +80,14 @@ class VPTreeBinaryNumpyAdapter {
         return std::make_tuple(indexes, distances);
     }
 
+    const std::vector<char>& serialize() {
+        return _tree.serialize().vector();
+    }
+
+    void deserialize(const std::vector<char>& data) {
+        return _tree.unserialize(bas::SerializedObject(&data[0]));
+    }
+
     std::tuple<std::vector<unsigned int>, std::vector<float>> search1NN(const ndarrayli &queries) {
 
         std::vector<unsigned int> indices;
@@ -89,11 +106,42 @@ PYBIND11_MODULE(_pyvptree, m) {
         .def(py::init<>())
         .def("set", &VPTreeNumpyAdapter::set)
         .def("searchKNN", &VPTreeNumpyAdapter::searchKNN)
-        .def("search1NN", &VPTreeNumpyAdapter::search1NN);
+        .def("search1NN", &VPTreeNumpyAdapter::search1NN)
+        .def(py::pickle(
+        [](const VPTreeNumpyAdapter &p) { // __getstate__
+            /* Return a tuple that fully encodes the state of the object */
+            return py::make_tuple(const_cast<VPTreeNumpyAdapter&>(p).serialize(), nullptr);
+        },
+        [](py::tuple t) { // __setstate__
+            if (t.size() != 2)
+                throw std::runtime_error("Invalid state!");
+
+            /* Create a new C++ instance */
+            VPTreeNumpyAdapter p;
+            p.deserialize(t[0].cast<std::vector<char>>());
+
+            return p;
+        }
+    ));
 
     py::class_<VPTreeBinaryNumpyAdapter>(m, "VPTreeBinaryIndex")
         .def(py::init<>())
         .def("set", &VPTreeBinaryNumpyAdapter::set)
         .def("searchKNN", &VPTreeBinaryNumpyAdapter::searchKNN)
-        .def("search1NN", &VPTreeBinaryNumpyAdapter::search1NN);
+        .def("search1NN", &VPTreeBinaryNumpyAdapter::search1NN)
+        .def(py::pickle(
+        [](const VPTreeBinaryNumpyAdapter &p) { // __getstate__
+            /* Return a tuple that fully encodes the state of the object */
+            return py::make_tuple(const_cast<VPTreeBinaryNumpyAdapter&>(p).serialize(), nullptr);
+        },
+        [](py::tuple t) { // __setstate__
+            if (t.size() != 2)
+                throw std::runtime_error("Invalid state!");
+
+            /* Create a new C++ instance */
+            VPTreeBinaryNumpyAdapter p;
+            p.deserialize(t[0].cast<std::vector<char>>());
+
+            return p;
+        }));
 }

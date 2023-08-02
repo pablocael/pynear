@@ -15,8 +15,8 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#include "bas.hpp"
 #include <bits/stdc++.h>
+#include "bas.hpp"
 
 #define ENABLE_OMP_PARALLEL 1
 
@@ -45,25 +45,12 @@ class VPLevelPartition : bas::Serializable  {
    // this function contains the serialization of pyvptree
     void makeSerialization(bas::SerializedObject& obj) override
     {
-        // visit partitions tree in order push all values. If radius is -1, it is a leaf
-        std::vector<VPLevelPartition*> stack;
-        std::vector<VPLevelPartition*> flatten_tree;
-        stack.push_back(this)
-        while(!stack.empty()) {
-            VPLevelPartition* current = stack.back();
-            stack.pop_back();
+        std::vector<VPLevelPartition*> flatten_tree_state;
+        flatten_tree(this, flatten_tree_state);
 
-            flatten_tree.push_back(current);
-            if(current != nullptr) {
-                stack.push_back(current->right())
-                stack.push_back(current->left())
-            }
-        }
-
-        // reverse so we can build the data stack in reverse orther 
-        // and keep the in-order order
-        std::reverse(flatten_tree.begin(), flatten_tree.end());
-        for(const VPLevelPartition* elem: flatten_tree) {
+        // reverse the tree state since we will push it in a stack for serializing
+        std::reverse(flatten_tree_state.begin(), flatten_tree_state.end());
+        for(const VPLevelPartition* elem: flatten_tree_state) {
             if(elem == nullptr) {
                 obj.pushData<int>(-1);
                 continue;
@@ -77,10 +64,28 @@ class VPLevelPartition : bas::Serializable  {
     // this function contains the unserialization process of your class
     void makeUnserialization(bas::SerializedObject& obj) override
     {
-        *this = *rebuild_from_State(obj);
+        VPLevelPartition* recovered = rebuild_from_state(obj);
+        if(recovered == nullptr) {
+            return;
+        }
+
+        _left = recovered->_left;
+        _right = recovered->_right;
+        _radius = recovered->_radius;
+        _indexStart = recovered->_indexStart;
+        _indexEnd = recovered->_indexEnd;
     }
 
-    VPLevelPartition* rebuild_from_State(bas::SerializedObject& obj) {
+    void flatten_tree(VPLevelPartition* root, std::vector<VPLevelPartition*>& flatten_tree_state) {
+        // visit partitions tree in preorder push all values.
+        flatten_tree_state.push_back(root);
+        if(root != nullptr) {
+            flatten_tree(root->right(), flatten_tree_state);
+            flatten_tree(root->left(), flatten_tree_state);
+        }
+    }
+
+    VPLevelPartition* rebuild_from_state(bas::SerializedObject& obj) {
         // first is object root
         float radius = obj.popData<float>();
         if(radius == -1) {
@@ -89,8 +94,8 @@ class VPLevelPartition : bas::Serializable  {
         int indexStart = obj.popData<int>();
         int indexEnd = obj.popData<int>();
         VPLevelPartition *root = new VPLevelPartition(radius, indexStart, indexEnd);
-        VPLevelPartition* left = rebuild_from_State(obj);
-        VPLevelPartition* right = rebuild_from_State(obj);
+        VPLevelPartition* left = rebuild_from_state(obj);
+        VPLevelPartition* right = rebuild_from_state(obj);
         root->setChild(left, right);
         return root;
     }
@@ -135,7 +140,7 @@ class VPLevelPartition : bas::Serializable  {
     VPLevelPartition *_right = nullptr;
 };
 
-template <typename T, float (*distance)(const T &, const T &)> class VPTree {
+template <typename T, float (*distance)(const T &, const T &)> class VPTree : public bas::Serializable {
     public:
     struct VPTreeElement {
 
@@ -467,6 +472,43 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree {
             element.indexes.push_back(top.index);
             knnQueue.pop();
         }
+    }
+
+   // this function contains the serialization of pyvptree
+    void makeSerialization(bas::SerializedObject& obj) override
+    {
+        if(_rootPartition == nullptr) {
+            return;
+        }
+
+        _rootPartition->makeSerialization(obj);
+
+        obj.pushData<unsigned int>(_examples.size());
+        for(const VPTreeElement& elem : _examples) {
+            obj.pushData<unsigned int>(elem.originalIndex);
+            obj.pushData<T>(elem.val);
+        }
+    }
+
+    // this function contains the unserialization process of your class
+    void makeUnserialization(bas::SerializedObject& obj) override
+    {
+        unsigned int num_examples = obj.popData<unsigned int>();
+        _examples.clear();
+        _examples.reserve(num_examples);
+        _examples.resize(num_examples);
+        for(unsigned int i = 0; i < num_examples; ++i) {
+            T val = obj.popData<T>();
+            unsigned int index = obj.popData<unsigned int>();
+            _examples[i].val = val;
+            _examples[i].originalIndex = index;
+        }
+
+        if(_rootPartition != nullptr) {
+            delete _rootPartition;
+        }
+        _rootPartition = new VPLevelPartition();
+        _rootPartition->makeUnserialization(obj);
     }
 
     /*
