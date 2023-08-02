@@ -46,22 +46,19 @@ class VPLevelPartition : bas::Serializable  {
     void makeSerialization(bas::SerializedObject& obj) override
     {
         // visit partitions tree in order push all values. If radius is -1, it is a leaf
-        VPLevelPartition *current = this;
         std::vector<VPLevelPartition*> stack;
         std::vector<VPLevelPartition*> flatten_tree;
-        do {
-            while(current != nullptr && current->left() != nullptr) {
-                flatten_tree.push_back(current);
-                current = current->left();
-                stack.push_back(current);
-            }
-            flatten_tree.push_back(nullptr);
-            current = stack.back();
+        stack.push_back(this)
+        while(!stack.empty()) {
+            VPLevelPartition* current = stack.back();
             stack.pop_back();
-            
-            current = current->right();
+
+            flatten_tree.push_back(current);
+            if(current != nullptr) {
+                stack.push_back(current->right())
+                stack.push_back(current->left())
+            }
         }
-        while(!stack.empty());
 
         // reverse so we can build the data stack in reverse orther 
         // and keep the in-order order
