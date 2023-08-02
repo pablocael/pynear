@@ -19,8 +19,6 @@ using ndarrayd = std::vector<arrayd>;
 using ndarrayf = std::vector<arrayf>;
 using ndarrayli = std::vector<arrayli>;
 
-typedef float hamdis_t;
-
 #if defined(_MSC_VER)
 #define ALIGN_16 __declspec(align(16))
 #elif defined(__GNUC__)
@@ -28,21 +26,21 @@ typedef float hamdis_t;
 #endif
 
 /* Hamming distances for multiples of 64 bits */
-template <size_t nbits> hamdis_t hamming(const uint64_t *bs1, const uint64_t *bs2) {
+template <size_t nbits> int64_t hamming(const uint64_t *bs1, const uint64_t *bs2) {
     const size_t nwords = nbits / 64;
     size_t i;
-    hamdis_t h = 0;
+    int64_t h = 0;
     for (i = 0; i < nwords; i++)
         h += _mm_popcnt_u64(bs1[i] ^ bs2[i]);
     return h;
 }
 
 /* specialized (optimized) functions */
-template <> hamdis_t hamming<64>(const uint64_t *pa, const uint64_t *pb) { return _mm_popcnt_u64(pa[0] ^ pb[0]); }
+template <> int64_t hamming<64>(const uint64_t *pa, const uint64_t *pb) { return _mm_popcnt_u64(pa[0] ^ pb[0]); }
 
-template <> hamdis_t hamming<128>(const uint64_t *pa, const uint64_t *pb) { return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]); }
+template <> int64_t hamming<128>(const uint64_t *pa, const uint64_t *pb) { return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]); }
 
-template <> hamdis_t hamming<256>(const uint64_t *pa, const uint64_t *pb) {
+template <> int64_t hamming<256>(const uint64_t *pa, const uint64_t *pb) {
     return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]) + _mm_popcnt_u64(pa[2] ^ pb[2]) + _mm_popcnt_u64(pa[3] ^ pb[3]);
 }
 
@@ -182,7 +180,7 @@ float distL2f(const arrayf &p1, const arrayf &p2) {
     return std::sqrt(result);
 }
 
-hamdis_t distHamming(const arrayli &p1, const arrayli &p2) {
+int64_t distHamming(const arrayli &p1, const arrayli &p2) {
 
     return hamming<256>(reinterpret_cast<const uint64_t *>(&p1[0]), reinterpret_cast<const uint64_t *>(&p2[0]));
 }

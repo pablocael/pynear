@@ -81,7 +81,7 @@ def test_binary():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.int64)[:, ::-1]
 
     assert np.array_equal(exaustive_distances, vptree_distances)
@@ -106,7 +106,7 @@ def test_large_binary():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.int64)[:, ::-1]
 
     assert np.array_equal(exaustive_distances, vptree_distances)
@@ -132,7 +132,7 @@ def test_k_equals_dataset():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]
 
     np.testing.assert_allclose(exaustive_distances, vptree_distances, rtol=1e-06)
@@ -158,7 +158,7 @@ def test_large_dataset():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]
 
     vptree_distances2 = np.sort(vptree_distances, axis=-1)
@@ -186,7 +186,7 @@ def test_large_dataset_highdim():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]
 
     vptree_distances2 = np.sort(vptree_distances, axis=-1)
@@ -211,7 +211,7 @@ def test_dataset_split_less_than_k():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]
 
     assert np.array_equal(exaustive_indices, vptree_indices)
@@ -236,7 +236,7 @@ def test_query_larger_than_dataset():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]
 
     assert np.array_equal(exaustive_indices, vptree_indices)
@@ -261,7 +261,7 @@ def test_compare_with_exaustive_knn():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]
 
     assert np.array_equal(exaustive_indices, vptree_indices)
@@ -287,7 +287,7 @@ def test_compare_with_exaustive_1nn():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.search1NN(queries)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)
     vptree_distances = np.array(vptree_distances, dtype=np.float32)
 
     assert np.array_equal(exaustive_indices, vptree_indices)
