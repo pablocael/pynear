@@ -55,9 +55,9 @@ class VPLevelPartition : bas::Serializable  {
                 obj.pushData<int>(-1);
                 continue;
             }
-            obj.pushData(elem->_indexEnd);
-            obj.pushData(elem->_indexStart);
-            obj.pushData(elem->_radius);
+            obj.pushData<unsigned int>(elem->_indexEnd);
+            obj.pushData<unsigned int>(elem->_indexStart);
+            obj.pushData<float>(elem->_radius);
         }
     }
 
@@ -91,8 +91,8 @@ class VPLevelPartition : bas::Serializable  {
         if(radius == -1) {
             return nullptr;
         }
-        int indexStart = obj.popData<int>();
-        int indexEnd = obj.popData<int>();
+        unsigned int indexStart = obj.popData<unsigned int>();
+        unsigned int indexEnd = obj.popData<unsigned int>();
         VPLevelPartition *root = new VPLevelPartition(radius, indexStart, indexEnd);
         VPLevelPartition* left = rebuild_from_state(obj);
         VPLevelPartition* right = rebuild_from_state(obj);

@@ -46,12 +46,12 @@ class VPTreeNumpyAdapter {
         return std::make_tuple(std::move(indices), std::move(distances));
     }
 
-    const std::vector<char>& serialize() {
+    std::vector<char> serialize() {
         return _tree.serialize().vector();
     }
 
-    void deserialize(const std::vector<char>& data) {
-        return _tree.unserialize(bas::SerializedObject(&data[0]));
+    void deserialize(std::vector<char> data) {
+        _tree.unserialize(bas::SerializedObject(&data[0]));
     }
 
     private:
@@ -80,12 +80,12 @@ class VPTreeBinaryNumpyAdapter {
         return std::make_tuple(indexes, distances);
     }
 
-    const std::vector<char>& serialize() {
+    std::vector<char> serialize() {
         return _tree.serialize().vector();
     }
 
-    void deserialize(const std::vector<char>& data) {
-        return _tree.unserialize(bas::SerializedObject(&data[0]));
+    void deserialize(std::vector<char> data) {
+        _tree.unserialize(bas::SerializedObject(&data[0]));
     }
 
     std::tuple<std::vector<unsigned int>, std::vector<float>> search1NN(const ndarrayli &queries) {
@@ -110,7 +110,7 @@ PYBIND11_MODULE(_pyvptree, m) {
         .def(py::pickle(
         [](const VPTreeNumpyAdapter &p) { // __getstate__
             /* Return a tuple that fully encodes the state of the object */
-            return py::make_tuple(const_cast<VPTreeNumpyAdapter&>(p).serialize(), nullptr);
+            return py::make_tuple(const_cast<VPTreeNumpyAdapter&>(p).serialize(), 0);
         },
         [](py::tuple t) { // __setstate__
             if (t.size() != 2)
@@ -118,7 +118,8 @@ PYBIND11_MODULE(_pyvptree, m) {
 
             /* Create a new C++ instance */
             VPTreeNumpyAdapter p;
-            p.deserialize(t[0].cast<std::vector<char>>());
+            std::vector<char> data = t[0].cast<std::vector<char>>();
+            p.deserialize(std::vector<char>(data.begin(), data.end()));
 
             return p;
         }
@@ -132,7 +133,7 @@ PYBIND11_MODULE(_pyvptree, m) {
         .def(py::pickle(
         [](const VPTreeBinaryNumpyAdapter &p) { // __getstate__
             /* Return a tuple that fully encodes the state of the object */
-            return py::make_tuple(const_cast<VPTreeBinaryNumpyAdapter&>(p).serialize(), nullptr);
+            return py::make_tuple(const_cast<VPTreeBinaryNumpyAdapter&>(p).serialize(), 0);
         },
         [](py::tuple t) { // __setstate__
             if (t.size() != 2)
@@ -140,7 +141,8 @@ PYBIND11_MODULE(_pyvptree, m) {
 
             /* Create a new C++ instance */
             VPTreeBinaryNumpyAdapter p;
-            p.deserialize(t[0].cast<std::vector<char>>());
+            std::vector<char> data = t[0].cast<std::vector<char>>();
+            p.deserialize(std::vector<char>(data.begin(), data.end()));
 
             return p;
         }));
