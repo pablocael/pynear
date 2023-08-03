@@ -105,14 +105,14 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 
         _examples.reserve(array.size());
         _examples.resize(array.size());
-        for (unsigned int i = 0; i < array.size(); ++i) {
+        for (size_t i = 0; i < array.size(); ++i) {
             _examples[i] = VPTreeElement(i, array[i]);
         }
 
         build(_examples);
     }
 
-    void searchKNN(const std::vector<T> &queries, unsigned int k, std::vector<VPTree::VPTreeSearchResultElement> &results) {
+    void searchKNN(const std::vector<T> &queries, unsigned int k, std::vector<VPTreeSearchResultElement> &results) {
 
         if (_rootPartition == nullptr) {
             return;
@@ -124,6 +124,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 #if (ENABLE_OMP_PARALLEL)
 #pragma omp parallel for schedule(static, 1) num_threads(8)
 #endif
+        // i should be size_t, however msvc requires signed integral loop variables (except with -openmp:llvm)
         for (int i = 0; i < queries.size(); ++i) {
             const T &query = queries[i];
             std::priority_queue<VPTreeSearchElement> knnQueue;
@@ -150,6 +151,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 #if (ENABLE_OMP_PARALLEL)
 #pragma omp parallel for schedule(static, 1) num_threads(8)
 #endif
+        // i should be size_t, see above
         for (int i = 0; i < queries.size(); ++i) {
             const T &query = queries[i];
             distance_type dist = 0;

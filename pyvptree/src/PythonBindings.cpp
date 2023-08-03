@@ -23,7 +23,7 @@ template <distance_func_f distance> class VPTreeNumpyAdapter {
 
     std::tuple<std::vector<std::vector<unsigned int>>, std::vector<std::vector<float>>> searchKNN(const ndarrayf &queries, unsigned int k) {
 
-        std::vector<vptree::VPTree<arrayf, float, distance>::VPTreeSearchResultElement> results;
+        std::vector<typename vptree::VPTree<arrayf, float, distance>::VPTreeSearchResultElement> results;
         _tree.searchKNN(queries, k, results);
 
         std::vector<std::vector<unsigned int>> indexes;
