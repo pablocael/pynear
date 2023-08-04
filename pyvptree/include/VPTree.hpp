@@ -242,9 +242,6 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
 
     // this function contains the unserialization process of your class
     void deserialize(const std::vector<char> &data) override {
-        size_t num_examples;
-        ss >> num_examples;
-        std::cout << "** DESER: num examples is " << num_examples << std::endl << std::flush;
         /* _examples.clear(); */
         /* _examples.reserve(num_examples); */
         /* _examples.resize(num_examples); */
