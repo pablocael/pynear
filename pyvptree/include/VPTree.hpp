@@ -16,13 +16,19 @@
 #include <utility>
 #include <vector>
 #include <bits/stdc++.h>
-#include "bas.hpp"
+#include <sstream>
 
 #define ENABLE_OMP_PARALLEL 1
 
 namespace vptree {
 
-class VPLevelPartition : bas::Serializable  {
+class Serializable {
+    public:
+        virtual std::vector<char> serialize() = 0;
+        virtual void deserialize(const std::vector<char>& data) = 0;
+};
+
+class VPLevelPartition : public Serializable  {
     public:
     VPLevelPartition(float radius, unsigned int start, unsigned int end) {
         // For each partition, the vantage point is the first point within the partition (pointed by indexStart)
@@ -40,31 +46,46 @@ class VPLevelPartition : bas::Serializable  {
         _indexEnd = -1;
     }
 
-    ~VPLevelPartition() { clear(); }
+    virtual ~VPLevelPartition() { clear(); }
 
    // this function contains the serialization of pyvptree
-    void makeSerialization(bas::SerializedObject& obj) override
+    std::vector<char> serialize() override
     {
         std::vector<VPLevelPartition*> flatten_tree_state;
         flatten_tree(this, flatten_tree_state);
+
+        size_t total_size = flatten_tree_state.size() * ( 2 * sizeof(int64_t) + sizeof(float));
+        char* buffer = new char[total_size];
+        char* p_buffer = buffer;
 
         // reverse the tree state since we will push it in a stack for serializing
         std::reverse(flatten_tree_state.begin(), flatten_tree_state.end());
         for(const VPLevelPartition* elem: flatten_tree_state) {
             if(elem == nullptr) {
-                obj.pushData<int>(-1);
+                (*(int64_t*)(p_buffer)) = (int64_t)(-1);
+                p_buffer += sizeof(int64_t);
+                (*(int64_t*)(p_buffer)) = (int64_t)(-1);
+                p_buffer += sizeof(int64_t);
+                (*(float*)(p_buffer)) = (float)(-1);
+                p_buffer += sizeof(float);
                 continue;
             }
-            obj.pushData<unsigned int>(elem->_indexEnd);
-            obj.pushData<unsigned int>(elem->_indexStart);
-            obj.pushData<float>(elem->_radius);
+            (*(int64_t*)(p_buffer)) = (int64_t)(elem->_indexEnd);
+            p_buffer += sizeof(int64_t);
+            (*(int64_t*)(p_buffer)) = (int64_t)(elem->_indexStart);
+            p_buffer += sizeof(int64_t);
+            (*(float*)(p_buffer)) = (float)(elem->_radius);
+            p_buffer += sizeof(float);
         }
+
+        std::vector<char> result;
+        return result;
     }
 
     // this function contains the unserialization process of your class
-    void makeUnserialization(bas::SerializedObject& obj) override
+    void deserialize(const std::vector<char>& data) override
     {
-        VPLevelPartition* recovered = rebuild_from_state(obj);
+        VPLevelPartition* recovered = rebuild_from_state(&const_cast<std::vector<char>&>(data)[0]);
         if(recovered == nullptr) {
             return;
         }
@@ -85,17 +106,19 @@ class VPLevelPartition : bas::Serializable  {
         }
     }
 
-    VPLevelPartition* rebuild_from_state(bas::SerializedObject& obj) {
-        // first is object root
-        float radius = obj.popData<float>();
+    VPLevelPartition* rebuild_from_state(char *p_buffer) {
+        float radius = (*(float*)(p_buffer));
+        p_buffer += sizeof(float);
         if(radius == -1) {
             return nullptr;
         }
-        unsigned int indexStart = obj.popData<unsigned int>();
-        unsigned int indexEnd = obj.popData<unsigned int>();
-        VPLevelPartition *root = new VPLevelPartition(radius, indexStart, indexEnd);
-        VPLevelPartition* left = rebuild_from_state(obj);
-        VPLevelPartition* right = rebuild_from_state(obj);
+        int64_t indexStart = (*(int64_t*)(p_buffer));
+        p_buffer += sizeof(int64_t);
+        int64_t indexEnd = (*(int64_t*)(p_buffer));
+        p_buffer += sizeof(int64_t);
+        VPLevelPartition *root = new VPLevelPartition(radius, (unsigned int)indexStart, (unsigned int)indexEnd);
+        VPLevelPartition* left = rebuild_from_state(p_buffer);
+        VPLevelPartition* right = rebuild_from_state(p_buffer);
         root->setChild(left, right);
         return root;
     }
@@ -140,7 +163,7 @@ class VPLevelPartition : bas::Serializable  {
     VPLevelPartition *_right = nullptr;
 };
 
-template <typename T, float (*distance)(const T &, const T &)> class VPTree : public bas::Serializable {
+template <typename T, float (*distance)(const T &, const T &)> class VPTree : public Serializable {
     public:
     struct VPTreeElement {
 
@@ -171,6 +194,90 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
 
         build(_examples);
     }
+
+   // this function contains the serialization of pyvptree
+    std::vector<char> serialize() override
+    {
+        if(_rootPartition == nullptr) {
+            return std::vector<char>();
+        }
+
+        std::vector<char> data =_rootPartition->serialize();
+
+        size_t element_size = 0;
+        size_t total_size = data.size() + 2 * sizeof(size_t);
+
+        if(_examples.size() > 0) {
+
+            // total size is the _examples total size + the examples array size plus element size
+            // _examples[0] is an array of some type (variable)
+            element_size = _examples[0].val.size() * sizeof(_examples[0].val[0]);
+            total_size += _examples.size() * (sizeof(unsigned int) + element_size);
+        }
+
+        char* buffer = new char[total_size];
+        char* p_buffer = buffer;
+
+        for(const VPTreeElement& elem : _examples) {
+            *((unsigned int*)p_buffer) = elem.originalIndex;
+            p_buffer += sizeof(unsigned int);
+
+            for(auto v: elem.val) {
+                // since we dont know the sub element type of T (T is an array of something)
+                // we need to copy using memcopy and memory size
+                std::memcpy(p_buffer, &v, sizeof(v));
+                p_buffer += sizeof(v);
+            }
+        }
+
+
+        // finally set the total size of array and size of an element
+        *((size_t*)p_buffer) = element_size;
+        p_buffer += sizeof(size_t);
+
+        *((size_t*)p_buffer) = _examples.size();
+        p_buffer += sizeof(size_t);
+
+        std::vector<char>new_data;
+        new_data.assign(buffer, buffer + total_size);
+        data.insert(data.begin(), new_data.begin(), new_data.end());
+        return data;
+    }
+
+    // this function contains the unserialization process of your class
+    void deserialize(const std::vector<char>& data) override
+    {
+        size_t num_examples;
+        ss >> num_examples;
+        std::cout << "** DESER: num examples is " << num_examples << std::endl << std::flush;
+        /* _examples.clear(); */
+        /* _examples.reserve(num_examples); */
+        /* _examples.resize(num_examples); */
+        /* for(size_t i = 0; i < num_examples; ++i) { */
+
+        /*     size_t val_size; */
+        /*     ss >> val_size; */
+        /*     T val; */
+        /*     val.resize(val_size); */
+        /*     val.reserve(val_size); */
+        /*     for(size_t i = 0; i < val_size; ++i) { */
+        /*         ss >> val[i]; */
+        /*     } */
+
+        /*     unsigned int index;; */
+        /*     ss >> index; */
+        /*     _examples[i].val = val; */
+        /*     _examples[i].originalIndex = index; */
+        /* } */
+
+        /* if(_rootPartition != nullptr) { */
+        /*     delete _rootPartition; */
+        /* } */
+        /* _rootPartition = new VPLevelPartition(); */
+        /* std::string str = ss.str(); */
+        /* _rootPartition->deserialize(std::vector<char>(str.begin(), str.end())); */
+    }
+
 
     void searchKNN(const std::vector<T> &queries, unsigned int k, std::vector<VPTree::VPTreeSearchResultElement> &results) {
 
@@ -473,44 +580,6 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
             knnQueue.pop();
         }
     }
-
-   // this function contains the serialization of pyvptree
-    void makeSerialization(bas::SerializedObject& obj) override
-    {
-        if(_rootPartition == nullptr) {
-            return;
-        }
-
-        _rootPartition->makeSerialization(obj);
-
-        obj.pushData<unsigned int>(_examples.size());
-        for(const VPTreeElement& elem : _examples) {
-            obj.pushData<unsigned int>(elem.originalIndex);
-            obj.pushData<T>(elem.val);
-        }
-    }
-
-    // this function contains the unserialization process of your class
-    void makeUnserialization(bas::SerializedObject& obj) override
-    {
-        unsigned int num_examples = obj.popData<unsigned int>();
-        _examples.clear();
-        _examples.reserve(num_examples);
-        _examples.resize(num_examples);
-        for(unsigned int i = 0; i < num_examples; ++i) {
-            T val = obj.popData<T>();
-            unsigned int index = obj.popData<unsigned int>();
-            _examples[i].val = val;
-            _examples[i].originalIndex = index;
-        }
-
-        if(_rootPartition != nullptr) {
-            delete _rootPartition;
-        }
-        _rootPartition = new VPLevelPartition();
-        _rootPartition->makeUnserialization(obj);
-    }
-
     /*
      * A vantage point distance comparator. Will check which from two points are closer to the reference vantage point.
      * This is used to find the median distance from vantage point in order to split the VPLevelPartition into two sets.

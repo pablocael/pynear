@@ -8,9 +8,10 @@
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <iostream>
 
 #include <omp.h>
-#include "bas.hpp"
+#include <cassert>
 
 namespace py = pybind11;
 
@@ -47,11 +48,11 @@ class VPTreeNumpyAdapter {
     }
 
     std::vector<char> serialize() {
-        return _tree.serialize().vector();
+        return _tree.serialize();
     }
 
-    void deserialize(std::vector<char> data) {
-        _tree.unserialize(bas::SerializedObject(&data[0]));
+    void deserialize(const std::vector<char>& data) {
+        _tree.deserialize(data);
     }
 
     private:
@@ -81,11 +82,11 @@ class VPTreeBinaryNumpyAdapter {
     }
 
     std::vector<char> serialize() {
-        return _tree.serialize().vector();
+        return _tree.serialize();
     }
 
-    void deserialize(std::vector<char> data) {
-        _tree.unserialize(bas::SerializedObject(&data[0]));
+    void deserialize(const std::vector<char>& data) {
+        _tree.deserialize(data);
     }
 
     std::tuple<std::vector<unsigned int>, std::vector<float>> search1NN(const ndarrayli &queries) {
@@ -110,16 +111,20 @@ PYBIND11_MODULE(_pyvptree, m) {
         .def(py::pickle(
         [](const VPTreeNumpyAdapter &p) { // __getstate__
             /* Return a tuple that fully encodes the state of the object */
-            return py::make_tuple(const_cast<VPTreeNumpyAdapter&>(p).serialize(), 0);
+            std::vector<char> state = const_cast<VPTreeNumpyAdapter&>(p).serialize();
+            std::cout << ">>>>>>>> CHECK first " << state.size() << std::flush;
+            py::tuple t = py::make_tuple(state);
+
+            return t;
         },
         [](py::tuple t) { // __setstate__
-            if (t.size() != 2)
-                throw std::runtime_error("Invalid state!");
 
             /* Create a new C++ instance */
             VPTreeNumpyAdapter p;
-            std::vector<char> data = t[0].cast<std::vector<char>>();
-            p.deserialize(std::vector<char>(data.begin(), data.end()));
+            auto vec = t[0].cast<std::vector<char>>();
+
+            std::cout << ">>>>>>>> CHECK " << vec.size() <<  std::flush;
+            p.deserialize(vec);
 
             return p;
         }
@@ -133,16 +138,12 @@ PYBIND11_MODULE(_pyvptree, m) {
         .def(py::pickle(
         [](const VPTreeBinaryNumpyAdapter &p) { // __getstate__
             /* Return a tuple that fully encodes the state of the object */
-            return py::make_tuple(const_cast<VPTreeBinaryNumpyAdapter&>(p).serialize(), 0);
+            return py::make_tuple();
         },
         [](py::tuple t) { // __setstate__
-            if (t.size() != 2)
-                throw std::runtime_error("Invalid state!");
 
             /* Create a new C++ instance */
             VPTreeBinaryNumpyAdapter p;
-            std::vector<char> data = t[0].cast<std::vector<char>>();
-            p.deserialize(std::vector<char>(data.begin(), data.end()));
 
             return p;
         }));
