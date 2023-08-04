@@ -6,17 +6,17 @@
 #pragma once
 
 #include <algorithm>
+#include <bits/stdc++.h>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <limits>
 #include <omp.h>
 #include <queue>
+#include <sstream>
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#include <bits/stdc++.h>
-#include <sstream>
 
 #define ENABLE_OMP_PARALLEL 1
 
@@ -24,11 +24,11 @@ namespace vptree {
 
 class Serializable {
     public:
-        virtual std::vector<char> serialize() = 0;
-        virtual void deserialize(const std::vector<char>& data) = 0;
+    virtual std::vector<char> serialize() = 0;
+    virtual void deserialize(const std::vector<char> &data) = 0;
 };
 
-class VPLevelPartition : public Serializable  {
+class VPLevelPartition : public Serializable {
     public:
     VPLevelPartition(float radius, unsigned int start, unsigned int end) {
         // For each partition, the vantage point is the first point within the partition (pointed by indexStart)
@@ -48,33 +48,32 @@ class VPLevelPartition : public Serializable  {
 
     virtual ~VPLevelPartition() { clear(); }
 
-   // this function contains the serialization of pyvptree
-    std::vector<char> serialize() override
-    {
-        std::vector<VPLevelPartition*> flatten_tree_state;
+    // this function contains the serialization of pyvptree
+    std::vector<char> serialize() override {
+        std::vector<VPLevelPartition *> flatten_tree_state;
         flatten_tree(this, flatten_tree_state);
 
-        size_t total_size = flatten_tree_state.size() * ( 2 * sizeof(int64_t) + sizeof(float));
-        char* buffer = new char[total_size];
-        char* p_buffer = buffer;
+        size_t total_size = flatten_tree_state.size() * (2 * sizeof(int64_t) + sizeof(float));
+        char *buffer = new char[total_size];
+        char *p_buffer = buffer;
 
         // reverse the tree state since we will push it in a stack for serializing
         std::reverse(flatten_tree_state.begin(), flatten_tree_state.end());
-        for(const VPLevelPartition* elem: flatten_tree_state) {
-            if(elem == nullptr) {
-                (*(int64_t*)(p_buffer)) = (int64_t)(-1);
+        for (const VPLevelPartition *elem : flatten_tree_state) {
+            if (elem == nullptr) {
+                (*(int64_t *)(p_buffer)) = (int64_t)(-1);
                 p_buffer += sizeof(int64_t);
-                (*(int64_t*)(p_buffer)) = (int64_t)(-1);
+                (*(int64_t *)(p_buffer)) = (int64_t)(-1);
                 p_buffer += sizeof(int64_t);
-                (*(float*)(p_buffer)) = (float)(-1);
+                (*(float *)(p_buffer)) = (float)(-1);
                 p_buffer += sizeof(float);
                 continue;
             }
-            (*(int64_t*)(p_buffer)) = (int64_t)(elem->_indexEnd);
+            (*(int64_t *)(p_buffer)) = (int64_t)(elem->_indexEnd);
             p_buffer += sizeof(int64_t);
-            (*(int64_t*)(p_buffer)) = (int64_t)(elem->_indexStart);
+            (*(int64_t *)(p_buffer)) = (int64_t)(elem->_indexStart);
             p_buffer += sizeof(int64_t);
-            (*(float*)(p_buffer)) = (float)(elem->_radius);
+            (*(float *)(p_buffer)) = (float)(elem->_radius);
             p_buffer += sizeof(float);
         }
 
@@ -83,10 +82,9 @@ class VPLevelPartition : public Serializable  {
     }
 
     // this function contains the unserialization process of your class
-    void deserialize(const std::vector<char>& data) override
-    {
-        VPLevelPartition* recovered = rebuild_from_state(&const_cast<std::vector<char>&>(data)[0]);
-        if(recovered == nullptr) {
+    void deserialize(const std::vector<char> &data) override {
+        VPLevelPartition *recovered = rebuild_from_state(&const_cast<std::vector<char> &>(data)[0]);
+        if (recovered == nullptr) {
             return;
         }
 
@@ -97,28 +95,28 @@ class VPLevelPartition : public Serializable  {
         _indexEnd = recovered->_indexEnd;
     }
 
-    void flatten_tree(VPLevelPartition* root, std::vector<VPLevelPartition*>& flatten_tree_state) {
+    void flatten_tree(VPLevelPartition *root, std::vector<VPLevelPartition *> &flatten_tree_state) {
         // visit partitions tree in preorder push all values.
         flatten_tree_state.push_back(root);
-        if(root != nullptr) {
+        if (root != nullptr) {
             flatten_tree(root->right(), flatten_tree_state);
             flatten_tree(root->left(), flatten_tree_state);
         }
     }
 
-    VPLevelPartition* rebuild_from_state(char *p_buffer) {
-        float radius = (*(float*)(p_buffer));
+    VPLevelPartition *rebuild_from_state(char *p_buffer) {
+        float radius = (*(float *)(p_buffer));
         p_buffer += sizeof(float);
-        if(radius == -1) {
+        if (radius == -1) {
             return nullptr;
         }
-        int64_t indexStart = (*(int64_t*)(p_buffer));
+        int64_t indexStart = (*(int64_t *)(p_buffer));
         p_buffer += sizeof(int64_t);
-        int64_t indexEnd = (*(int64_t*)(p_buffer));
+        int64_t indexEnd = (*(int64_t *)(p_buffer));
         p_buffer += sizeof(int64_t);
         VPLevelPartition *root = new VPLevelPartition(radius, (unsigned int)indexStart, (unsigned int)indexEnd);
-        VPLevelPartition* left = rebuild_from_state(p_buffer);
-        VPLevelPartition* right = rebuild_from_state(p_buffer);
+        VPLevelPartition *left = rebuild_from_state(p_buffer);
+        VPLevelPartition *right = rebuild_from_state(p_buffer);
         root->setChild(left, right);
         return root;
     }
@@ -195,19 +193,18 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
         build(_examples);
     }
 
-   // this function contains the serialization of pyvptree
-    std::vector<char> serialize() override
-    {
-        if(_rootPartition == nullptr) {
+    // this function contains the serialization of pyvptree
+    std::vector<char> serialize() override {
+        if (_rootPartition == nullptr) {
             return std::vector<char>();
         }
 
-        std::vector<char> data =_rootPartition->serialize();
+        std::vector<char> data = _rootPartition->serialize();
 
         size_t element_size = 0;
         size_t total_size = data.size() + 2 * sizeof(size_t);
 
-        if(_examples.size() > 0) {
+        if (_examples.size() > 0) {
 
             // total size is the _examples total size + the examples array size plus element size
             // _examples[0] is an array of some type (variable)
@@ -215,14 +212,14 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
             total_size += _examples.size() * (sizeof(unsigned int) + element_size);
         }
 
-        char* buffer = new char[total_size];
-        char* p_buffer = buffer;
+        char *buffer = new char[total_size];
+        char *p_buffer = buffer;
 
-        for(const VPTreeElement& elem : _examples) {
-            *((unsigned int*)p_buffer) = elem.originalIndex;
+        for (const VPTreeElement &elem : _examples) {
+            *((unsigned int *)p_buffer) = elem.originalIndex;
             p_buffer += sizeof(unsigned int);
 
-            for(auto v: elem.val) {
+            for (auto v : elem.val) {
                 // since we dont know the sub element type of T (T is an array of something)
                 // we need to copy using memcopy and memory size
                 std::memcpy(p_buffer, &v, sizeof(v));
@@ -230,23 +227,21 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
             }
         }
 
-
         // finally set the total size of array and size of an element
-        *((size_t*)p_buffer) = element_size;
+        *((size_t *)p_buffer) = element_size;
         p_buffer += sizeof(size_t);
 
-        *((size_t*)p_buffer) = _examples.size();
+        *((size_t *)p_buffer) = _examples.size();
         p_buffer += sizeof(size_t);
 
-        std::vector<char>new_data;
+        std::vector<char> new_data;
         new_data.assign(buffer, buffer + total_size);
         data.insert(data.begin(), new_data.begin(), new_data.end());
         return data;
     }
 
     // this function contains the unserialization process of your class
-    void deserialize(const std::vector<char>& data) override
-    {
+    void deserialize(const std::vector<char> &data) override {
         size_t num_examples;
         ss >> num_examples;
         std::cout << "** DESER: num examples is " << num_examples << std::endl << std::flush;
@@ -277,7 +272,6 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
         /* std::string str = ss.str(); */
         /* _rootPartition->deserialize(std::vector<char>(str.begin(), str.end())); */
     }
-
 
     void searchKNN(const std::vector<T> &queries, unsigned int k, std::vector<VPTree::VPTreeSearchResultElement> &results) {
 

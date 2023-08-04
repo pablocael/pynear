@@ -5,13 +5,13 @@
 
 #include <DistanceFunctions.hpp>
 #include <VPTree.hpp>
+#include <iostream>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include <iostream>
 
-#include <omp.h>
 #include <cassert>
+#include <omp.h>
 
 namespace py = pybind11;
 
@@ -47,13 +47,9 @@ class VPTreeNumpyAdapter {
         return std::make_tuple(std::move(indices), std::move(distances));
     }
 
-    std::vector<char> serialize() {
-        return _tree.serialize();
-    }
+    std::vector<char> serialize() { return _tree.serialize(); }
 
-    void deserialize(const std::vector<char>& data) {
-        _tree.deserialize(data);
-    }
+    void deserialize(const std::vector<char> &data) { _tree.deserialize(data); }
 
     private:
     vptree::VPTree<arrayf, dist_optimized_float> _tree;
@@ -81,13 +77,9 @@ class VPTreeBinaryNumpyAdapter {
         return std::make_tuple(indexes, distances);
     }
 
-    std::vector<char> serialize() {
-        return _tree.serialize();
-    }
+    std::vector<char> serialize() { return _tree.serialize(); }
 
-    void deserialize(const std::vector<char>& data) {
-        _tree.deserialize(data);
-    }
+    void deserialize(const std::vector<char> &data) { _tree.deserialize(data); }
 
     std::tuple<std::vector<unsigned int>, std::vector<float>> search1NN(const ndarrayli &queries) {
 
@@ -109,26 +101,24 @@ PYBIND11_MODULE(_pyvptree, m) {
         .def("searchKNN", &VPTreeNumpyAdapter::searchKNN)
         .def("search1NN", &VPTreeNumpyAdapter::search1NN)
         .def(py::pickle(
-        [](const VPTreeNumpyAdapter &p) { // __getstate__
-            /* Return a tuple that fully encodes the state of the object */
-            std::vector<char> state = const_cast<VPTreeNumpyAdapter&>(p).serialize();
-            std::cout << ">>>>>>>> CHECK first " << state.size() << std::flush;
-            py::tuple t = py::make_tuple(state);
+            [](const VPTreeNumpyAdapter &p) { // __getstate__
+                /* Return a tuple that fully encodes the state of the object */
+                std::vector<char> state = const_cast<VPTreeNumpyAdapter &>(p).serialize();
+                std::cout << ">>>>>>>> CHECK first " << state.size() << std::flush;
+                py::tuple t = py::make_tuple(state);
 
-            return t;
-        },
-        [](py::tuple t) { // __setstate__
+                return t;
+            },
+            [](py::tuple t) { // __setstate__
+                /* Create a new C++ instance */
+                VPTreeNumpyAdapter p;
+                auto vec = t[0].cast<std::vector<char>>();
 
-            /* Create a new C++ instance */
-            VPTreeNumpyAdapter p;
-            auto vec = t[0].cast<std::vector<char>>();
+                std::cout << ">>>>>>>> CHECK " << vec.size() << std::flush;
+                p.deserialize(vec);
 
-            std::cout << ">>>>>>>> CHECK " << vec.size() <<  std::flush;
-            p.deserialize(vec);
-
-            return p;
-        }
-    ));
+                return p;
+            }));
 
     py::class_<VPTreeBinaryNumpyAdapter>(m, "VPTreeBinaryIndex")
         .def(py::init<>())
@@ -136,15 +126,14 @@ PYBIND11_MODULE(_pyvptree, m) {
         .def("searchKNN", &VPTreeBinaryNumpyAdapter::searchKNN)
         .def("search1NN", &VPTreeBinaryNumpyAdapter::search1NN)
         .def(py::pickle(
-        [](const VPTreeBinaryNumpyAdapter &p) { // __getstate__
-            /* Return a tuple that fully encodes the state of the object */
-            return py::make_tuple();
-        },
-        [](py::tuple t) { // __setstate__
+            [](const VPTreeBinaryNumpyAdapter &p) { // __getstate__
+                /* Return a tuple that fully encodes the state of the object */
+                return py::make_tuple();
+            },
+            [](py::tuple t) { // __setstate__
+                /* Create a new C++ instance */
+                VPTreeBinaryNumpyAdapter p;
 
-            /* Create a new C++ instance */
-            VPTreeBinaryNumpyAdapter p;
-
-            return p;
-        }));
+                return p;
+            }));
 }
