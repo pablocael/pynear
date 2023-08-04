@@ -104,7 +104,6 @@ PYBIND11_MODULE(_pyvptree, m) {
             [](const VPTreeNumpyAdapter &p) { // __getstate__
                 /* Return a tuple that fully encodes the state of the object */
                 std::vector<char> state = const_cast<VPTreeNumpyAdapter &>(p).serialize();
-                std::cout << ">>>>>>>> CHECK first " << state.size() << std::flush;
                 py::tuple t = py::make_tuple(state);
 
                 return t;
@@ -112,9 +111,7 @@ PYBIND11_MODULE(_pyvptree, m) {
             [](py::tuple t) { // __setstate__
                 /* Create a new C++ instance */
                 VPTreeNumpyAdapter p;
-                auto vec = t[0].cast<std::vector<char>>();
-
-                std::cout << ">>>>>>>> CHECK " << vec.size() << std::flush;
+                std::vector<char> vec = t[0].cast<std::vector<char>>();
                 p.deserialize(vec);
 
                 return p;

@@ -17,6 +17,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <exception>
 
 #define ENABLE_OMP_PARALLEL 1
 
@@ -58,7 +59,6 @@ class VPLevelPartition : public Serializable {
         char *p_buffer = buffer;
 
         // reverse the tree state since we will push it in a stack for serializing
-        std::reverse(flatten_tree_state.begin(), flatten_tree_state.end());
         for (const VPLevelPartition *elem : flatten_tree_state) {
             if (elem == nullptr) {
                 (*(int64_t *)(p_buffer)) = (int64_t)(-1);
@@ -77,7 +77,12 @@ class VPLevelPartition : public Serializable {
             p_buffer += sizeof(float);
         }
 
+        if(p_buffer-buffer != total_size) {
+            throw new std::out_of_range("invalid serialization state, offsets dont match!");
+        }
+
         std::vector<char> result;
+        result.assign(buffer, buffer + total_size);
         return result;
     }
 
@@ -99,21 +104,23 @@ class VPLevelPartition : public Serializable {
         // visit partitions tree in preorder push all values.
         flatten_tree_state.push_back(root);
         if (root != nullptr) {
-            flatten_tree(root->right(), flatten_tree_state);
             flatten_tree(root->left(), flatten_tree_state);
+            flatten_tree(root->right(), flatten_tree_state);
         }
     }
 
     VPLevelPartition *rebuild_from_state(char *p_buffer) {
-        float radius = (*(float *)(p_buffer));
-        p_buffer += sizeof(float);
-        if (radius == -1) {
-            return nullptr;
-        }
-        int64_t indexStart = (*(int64_t *)(p_buffer));
-        p_buffer += sizeof(int64_t);
         int64_t indexEnd = (*(int64_t *)(p_buffer));
         p_buffer += sizeof(int64_t);
+        int64_t indexStart = (*(int64_t *)(p_buffer));
+        p_buffer += sizeof(int64_t);
+        float radius = (*(float *)(p_buffer));
+        p_buffer += sizeof(float);
+
+        if(indexEnd == -1) {
+            return nullptr;
+        }
+
         VPLevelPartition *root = new VPLevelPartition(radius, (unsigned int)indexStart, (unsigned int)indexEnd);
         VPLevelPartition *left = rebuild_from_state(p_buffer);
         VPLevelPartition *right = rebuild_from_state(p_buffer);
@@ -199,21 +206,32 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
             return std::vector<char>();
         }
 
-        std::vector<char> data = _rootPartition->serialize();
 
         size_t element_size = 0;
-        size_t total_size = data.size() + 2 * sizeof(size_t);
+        size_t num_elements_per_example = 0;
+        size_t total_size = (size_t)(3 * sizeof(size_t));
 
         if (_examples.size() > 0) {
 
             // total size is the _examples total size + the examples array size plus element size
             // _examples[0] is an array of some type (variable)
-            element_size = _examples[0].val.size() * sizeof(_examples[0].val[0]);
-            total_size += _examples.size() * (sizeof(unsigned int) + element_size);
+            num_elements_per_example = _examples[0].val.size();
+            element_size =  sizeof(_examples[0].val[0]);
+            size_t total_elements_size = num_elements_per_example * element_size;
+            total_size += _examples.size() * (sizeof(unsigned int) + total_elements_size);
         }
 
         char *buffer = new char[total_size];
         char *p_buffer = buffer;
+
+        *((size_t *)p_buffer) = element_size;
+        p_buffer += sizeof(size_t);
+
+        *((size_t *)p_buffer) = num_elements_per_example;
+        p_buffer += sizeof(size_t);
+
+        *((size_t *)p_buffer) = (size_t)_examples.size();
+        p_buffer += sizeof(size_t);
 
         for (const VPTreeElement &elem : _examples) {
             *((unsigned int *)p_buffer) = elem.originalIndex;
@@ -227,14 +245,12 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
             }
         }
 
-        // finally set the total size of array and size of an element
-        *((size_t *)p_buffer) = element_size;
-        p_buffer += sizeof(size_t);
-
-        *((size_t *)p_buffer) = _examples.size();
-        p_buffer += sizeof(size_t);
+        if(p_buffer-buffer != total_size) {
+            throw new std::out_of_range("invalid serialization state, offsets dont match!");
+        }
 
         std::vector<char> new_data;
+        std::vector<char> data = _rootPartition->serialize();
         new_data.assign(buffer, buffer + total_size);
         data.insert(data.begin(), new_data.begin(), new_data.end());
         return data;
@@ -242,32 +258,44 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
 
     // this function contains the unserialization process of your class
     void deserialize(const std::vector<char> &data) override {
-        /* _examples.clear(); */
-        /* _examples.reserve(num_examples); */
-        /* _examples.resize(num_examples); */
-        /* for(size_t i = 0; i < num_examples; ++i) { */
 
-        /*     size_t val_size; */
-        /*     ss >> val_size; */
-        /*     T val; */
-        /*     val.resize(val_size); */
-        /*     val.reserve(val_size); */
-        /*     for(size_t i = 0; i < val_size; ++i) { */
-        /*         ss >> val[i]; */
-        /*     } */
+        if(_rootPartition != nullptr) {
+            delete _rootPartition;
+            _rootPartition = nullptr;
+        }
+        if(data.empty()) {
+            return;
+        }
 
-        /*     unsigned int index;; */
-        /*     ss >> index; */
-        /*     _examples[i].val = val; */
-        /*     _examples[i].originalIndex = index; */
-        /* } */
+        char* p_buffer = &const_cast<std::vector<char>&>(data)[0];
+        size_t elem_size = *((size_t*)p_buffer) ;
+        p_buffer += sizeof(size_t);
 
-        /* if(_rootPartition != nullptr) { */
-        /*     delete _rootPartition; */
-        /* } */
-        /* _rootPartition = new VPLevelPartition(); */
-        /* std::string str = ss.str(); */
-        /* _rootPartition->deserialize(std::vector<char>(str.begin(), str.end())); */
+        size_t num_elements_per_example = *((size_t*)p_buffer) ;
+        p_buffer += sizeof(size_t);
+
+        size_t num_examples = *((size_t*)p_buffer);
+        p_buffer += sizeof(size_t);
+
+        _examples.clear();
+        _examples.resize(num_examples);
+        for(size_t i = 0; i < num_examples; ++i) {
+            _examples[i].originalIndex = *((unsigned int*)(p_buffer));
+            p_buffer += sizeof(unsigned int);
+
+            auto example = _examples[i];
+            example.val.resize(num_elements_per_example);
+
+            for(size_t i = 0; i < num_elements_per_example; ++i) {
+                std::memcpy(&example.val[i], p_buffer, elem_size);
+                p_buffer += elem_size;
+            }
+        }
+
+        _rootPartition = new VPLevelPartition();
+        std::vector<char> remaining_data;
+        remaining_data.assign(p_buffer, (char*)&data.back());
+        _rootPartition->deserialize(remaining_data);
     }
 
     void searchKNN(const std::vector<T> &queries, unsigned int k, std::vector<VPTree::VPTreeSearchResultElement> &results) {
