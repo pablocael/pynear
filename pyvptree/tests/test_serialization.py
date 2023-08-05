@@ -1,0 +1,26 @@
+import numpy as np
+import pickle
+import pyvptree
+
+np.random.seed(seed=42)
+
+num_points = 20000
+dimension = 8
+num_queries = 2
+data = np.random.rand(num_points, dimension).astype(dtype=np.float32)
+
+queries = np.random.rand(num_queries, dimension).astype(dtype=np.float32)
+
+vptree = pyvptree.VPTreeL2Index()
+vptree.set(data)
+
+vptree_indices, vptree_distances = vptree.search1NN(queries)
+
+data = pickle.dumps(vptree)
+recovered = pickle.loads(data)
+recovered_data = pickle.dumps(recovered)
+
+assert data == recovered_data
+
+vptree_indices_rec, vptree_distances_rec = recovered.search1NN(queries)
+assert vptree_indices_rec == vptree_indices and vptree_distances_rec == vptree_distances

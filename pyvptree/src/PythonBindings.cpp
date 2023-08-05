@@ -47,7 +47,7 @@ class VPTreeNumpyAdapter {
         return std::make_tuple(std::move(indices), std::move(distances));
     }
 
-    std::vector<char> serialize() { return _tree.serialize(); }
+    void serialize(std::vector<char> &data) { return _tree.serialize(data); }
 
     void deserialize(const std::vector<char> &data) { _tree.deserialize(data); }
 
@@ -77,7 +77,7 @@ class VPTreeBinaryNumpyAdapter {
         return std::make_tuple(indexes, distances);
     }
 
-    std::vector<char> serialize() { return _tree.serialize(); }
+    void serialize(std::vector<char> &data) { return _tree.serialize(data); }
 
     void deserialize(const std::vector<char> &data) { _tree.deserialize(data); }
 
@@ -103,7 +103,8 @@ PYBIND11_MODULE(_pyvptree, m) {
         .def(py::pickle(
             [](const VPTreeNumpyAdapter &p) { // __getstate__
                 /* Return a tuple that fully encodes the state of the object */
-                std::vector<char> state = const_cast<VPTreeNumpyAdapter &>(p).serialize();
+                std::vector<char> state;
+                const_cast<VPTreeNumpyAdapter &>(p).serialize(state);
                 py::tuple t = py::make_tuple(state);
 
                 return t;

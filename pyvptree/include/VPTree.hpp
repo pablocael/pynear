@@ -25,7 +25,7 @@ namespace vptree {
 
 class Serializable {
     public:
-    virtual std::vector<char> serialize() = 0;
+    virtual void serialize(std::vector<char> &data) = 0;
     virtual void deserialize(const std::vector<char> &data) = 0;
 };
 
@@ -50,7 +50,7 @@ class VPLevelPartition : public Serializable {
     virtual ~VPLevelPartition() { clear(); }
 
     // this function contains the serialization of pyvptree
-    std::vector<char> serialize() override {
+    void serialize(std::vector<char> &data) override {
 
         std::vector<VPLevelPartition *> flatten_tree_state;
 
@@ -83,9 +83,8 @@ class VPLevelPartition : public Serializable {
             throw new std::out_of_range("invalid serialization state, offsets dont match!");
         }
 
-        std::vector<char> result;
-        result.assign(buffer, buffer + total_size);
-        return result;
+        data.resize(total_size);
+        std::memcpy(&data[0], buffer, total_size);
     }
 
     // this function contains the unserialization process of your class
@@ -207,9 +206,9 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
     }
 
     // this function contains the serialization of pyvptree
-    std::vector<char> serialize() override {
+    void serialize(std::vector<char> &data) override {
         if (_rootPartition == nullptr) {
-            return std::vector<char>();
+            return;
         }
 
         size_t element_size = 0;
@@ -255,11 +254,12 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
             throw new std::out_of_range("invalid serialization state, offsets dont match!");
         }
 
-        std::vector<char> new_data;
-        std::vector<char> data = _rootPartition->serialize();
-        new_data.assign(buffer, buffer + total_size);
-        data.insert(data.begin(), new_data.begin(), new_data.end());
-        return data;
+        std::vector<char> partition_data;
+        _rootPartition->serialize(partition_data);
+
+        data.resize(total_size);
+        std::memcpy(&data[0], buffer, total_size);
+        data.insert(data.end(), partition_data.begin(), partition_data.end());
     }
 
     // this function contains the unserialization process of your class
