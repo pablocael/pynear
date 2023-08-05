@@ -290,15 +290,15 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
             unsigned int originalIndex = *((unsigned int *)(p_buffer));
             p_buffer += sizeof(unsigned int);
 
-            T val;
+            auto &example = _examples[i];
+            example.originalIndex = originalIndex;
+            auto &val = example.val;
             val.resize(num_elements_per_example);
 
             for (size_t j = 0; j < num_elements_per_example; ++j) {
                 std::memcpy(&val[j], p_buffer, elem_size);
                 p_buffer += elem_size;
             }
-
-            _examples[i] = VPTreeElement((unsigned int)i, val);
         }
 
         _rootPartition = new VPLevelPartition();
