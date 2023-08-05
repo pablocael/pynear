@@ -107,13 +107,11 @@ TEST(VPTests, TestCreation) {
         point[2] = distribution(generator);
     }
 
-    std::cout << "Building tree with " << numPoints << " points " << std::endl;
     auto start = std::chrono::steady_clock::now();
 
     VPTree<Eigen::Vector3d, distance> tree(points);
     auto end = std::chrono::steady_clock::now();
     std::chrono::duration<float> diff = end - start;
-    std::cout << "Process took" << diff.count() << " seconds " << std::endl;
 }
 
 TEST(VPTests, TestSearch) {
