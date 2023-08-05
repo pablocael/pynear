@@ -6,7 +6,7 @@
 #pragma once
 
 #include <algorithm>
-#include <bits/stdc++.h>
+#include <cstring>
 #include <cstdlib>
 #include <exception>
 #include <functional>
