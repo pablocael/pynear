@@ -25,9 +25,9 @@
 
 namespace vptree {
 
-class VPLevelPartition {
-public:
-    VPLevelPartition(float radius, unsigned int start, unsigned int end) {
+template <typename distance_type> class VPLevelPartition {
+    public:
+    VPLevelPartition(distance_type radius, unsigned int start, unsigned int end) {
         // For each partition, the vantage point is the first point within the partition (pointed by indexStart)
 
         _radius = radius;
@@ -104,10 +104,10 @@ public:
     unsigned int start() { return _indexStart; }
     unsigned int end() { return _indexEnd; }
     unsigned int size() { return _indexEnd - _indexStart + 1; }
-    void setRadius(float radius) { _radius = radius; }
-    float radius() { return _radius; }
+    void setRadius(distance_type radius) { _radius = radius; }
+    distance_type radius() { return _radius; }
 
-    void setChild(VPLevelPartition *left, VPLevelPartition *right) {
+    void setChild(VPLevelPartition<distance_type> *left, VPLevelPartition<distance_type> *right) {
         _left = left;
         _right = right;
     }
@@ -156,7 +156,7 @@ private:
     }
 
 
-    float _radius;
+    distance_type _radius;
 
     // _indexStart and _indexEnd are index pointers to examples within the examples list, not index of coordinates
     // within the coordinate buffer.For instance, _indexEnd pointing to last element of a coordinate buffer of 9 entries
@@ -165,11 +165,11 @@ private:
     unsigned int _indexStart; // points to the first of the example in which this level starts
     unsigned int _indexEnd;
 
-    VPLevelPartition *_left = nullptr;
-    VPLevelPartition *_right = nullptr;
+    VPLevelPartition<distance_type> *_left = nullptr;
+    VPLevelPartition<distance_type> *_right = nullptr;
 };
 
-template <typename T, float (*distance)(const T &, const T &)> class VPTree : public ISerializable {
+template <typename T, typename distance_type, distance_type (*distance)(const T &, const T &)> class VPTree : public ISerializable {
     public:
     struct VPTreeElement {
 
@@ -185,7 +185,7 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
 
     struct VPTreeSearchResultElement {
         std::vector<unsigned int> indexes;
-        std::vector<float> distances;
+        std::vector<distance_type> distances;
     };
 
     VPTree() = default;
@@ -194,7 +194,7 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
 
         _examples.reserve(array.size());
         _examples.resize(array.size());
-        for (unsigned int i = 0; i < array.size(); ++i) {
+        for (size_t i = 0; i < array.size(); ++i) {
             _examples[i] = VPTreeElement(i, array[i]);
         }
 
@@ -296,12 +296,12 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
             }
         }
 
-        _rootPartition = new VPLevelPartition();
+        _rootPartition = new VPLevelPartition<distance_type>();
         uint32_t offset = p_buffer - &state.data[0];
         _rootPartition->deserialize(state, offset);
     }
 
-    void searchKNN(const std::vector<T> &queries, unsigned int k, std::vector<VPTree::VPTreeSearchResultElement> &results) {
+    void searchKNN(const std::vector<T> &queries, unsigned int k, std::vector<VPTreeSearchResultElement> &results) {
 
         if (_rootPartition == nullptr) {
             return;
@@ -313,6 +313,7 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
 #if (ENABLE_OMP_PARALLEL)
 #pragma omp parallel for schedule(static, 1) num_threads(8)
 #endif
+        // i should be size_t, however msvc requires signed integral loop variables (except with -openmp:llvm)
         for (int i = 0; i < queries.size(); ++i) {
             const T &query = queries[i];
             std::priority_queue<VPTreeSearchElement> knnQueue;
@@ -326,7 +327,7 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
     }
 
     // An optimized version for 1 NN search
-    void search1NN(const std::vector<T> &queries, std::vector<unsigned int> &indices, std::vector<float> &distances) {
+    void search1NN(const std::vector<T> &queries, std::vector<unsigned int> &indices, std::vector<distance_type> &distances) {
 
         if (_rootPartition == nullptr) {
             return;
@@ -339,9 +340,10 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
 #if (ENABLE_OMP_PARALLEL)
 #pragma omp parallel for schedule(static, 1) num_threads(8)
 #endif
+        // i should be size_t, see above
         for (int i = 0; i < queries.size(); ++i) {
             const T &query = queries[i];
-            float dist = 0;
+            distance_type dist = 0;
             unsigned int index = -1;
             search1NN(_rootPartition, query, index, dist);
             distances[i] = dist;
@@ -357,15 +359,15 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
     void build(const std::vector<VPTreeElement> &array) {
 
         // Select vantage point
-        std::vector<VPLevelPartition *> _toSplit;
+        std::vector<VPLevelPartition<distance_type> *> _toSplit;
 
-        auto *root = new VPLevelPartition(0, 0, _examples.size() - 1);
+        auto *root = new VPLevelPartition<distance_type>(0, 0, _examples.size() - 1);
         _toSplit.push_back(root);
         _rootPartition = root;
 
         while (!_toSplit.empty()) {
 
-            VPLevelPartition *current = _toSplit.back();
+            VPLevelPartition<distance_type> *current = _toSplit.back();
             _toSplit.pop_back();
 
             unsigned int start = current->start();
@@ -388,20 +390,20 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
                              VPDistanceComparator(_examples[start]));
 
             /* // distance from vantage point (which is at start index) and the median element */
-            float medianDistance = distance(_examples[start].val, _examples[median].val);
+            auto medianDistance = distance(_examples[start].val, _examples[median].val);
             current->setRadius(medianDistance);
 
             // Schedule to build next levels
             // Left is every one within the median distance radius
-            VPLevelPartition *left = nullptr;
+            VPLevelPartition<distance_type> *left = nullptr;
             if (start + 1 <= median) {
-                left = new VPLevelPartition(-1, start + 1, median);
+                left = new VPLevelPartition<distance_type>(-1, start + 1, median);
                 _toSplit.push_back(left);
             }
 
-            VPLevelPartition *right = nullptr;
+            VPLevelPartition<distance_type> *right = nullptr;
             if (median + 1 <= end) {
-                right = new VPLevelPartition(-1, median + 1, end);
+                right = new VPLevelPartition<distance_type>(-1, median + 1, end);
                 _toSplit.push_back(right);
             }
 
@@ -411,17 +413,16 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
 
     // Internal temporary struct to organize K closest elements in a priorty queue
     struct VPTreeSearchElement {
-        VPTreeSearchElement(int index, float dist) : index(index), dist(dist) {}
+        VPTreeSearchElement(int index, distance_type dist) : index(index), dist(dist) {}
         int index;
-        float dist;
+        distance_type dist;
         bool operator<(const VPTreeSearchElement &v) const { return dist < v.dist; }
     };
 
-    void exaustivePartitionSearch(VPLevelPartition *partition, const T &val, unsigned int k, std::priority_queue<VPTreeSearchElement> &knnQueue,
-                                  float tau) {
+    void exaustivePartitionSearch(VPLevelPartition<distance_type> *partition, const T &val, unsigned int k, std::priority_queue<VPTreeSearchElement> &knnQueue, distance_type tau) {
         for (int i = partition->start(); i <= partition->end(); ++i) {
 
-            float dist = distance(val, _examples[i].val);
+            auto dist = distance(val, _examples[i].val);
             if (dist < tau || knnQueue.size() < k) {
 
                 if (knnQueue.size() == k) {
@@ -435,20 +436,20 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
         }
     }
 
-    void searchKNN(VPLevelPartition *partition, const T &val, unsigned int k, std::priority_queue<VPTreeSearchElement> &knnQueue) {
+    void searchKNN(VPLevelPartition<distance_type> *partition, const T &val, unsigned int k, std::priority_queue<VPTreeSearchElement> &knnQueue) {
 
-        float tau = std::numeric_limits<float>::max();
+        auto tau = std::numeric_limits<distance_type>::max();
 
         // stores the distance to the partition border at the time of the storage. Since tau value will change
         // whiling performing the DFS search from on level, the storage distance will be checked again when about
         // to dive into that partition. It might not be necessary to dig into the partition anymore if tau decreased.
-        std::vector<std::tuple<float, VPLevelPartition *>> toSearch = {{-1, partition}};
+        std::vector<std::tuple<distance_type, VPLevelPartition<distance_type> *>> toSearch = {{-1, partition}};
 
         while (!toSearch.empty()) {
             auto [distToBorder, current] = toSearch.back();
             toSearch.pop_back();
 
-            float dist = distance(val, _examples[current->start()].val);
+            auto dist = distance(val, _examples[current->start()].val);
             if (dist < tau || knnQueue.size() < k) {
 
                 if (knnQueue.size() == k) {
@@ -487,7 +488,7 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
 
                     unsigned int rightPartitionSize = (current->right() != nullptr) ? current->right()->size() : 0;
                     bool notEnoughPointsOutside = rightPartitionSize < (k - neighborsSoFar);
-                    float toBorder = dist - current->radius();
+                    auto toBorder = dist - current->radius();
 
                     // we might not have enough point outside to reject the inside partition, so we might need to search
                     // for both
@@ -510,7 +511,7 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
 
                     unsigned int leftPartitionSize = (current->left() != nullptr) ? current->left()->size() : 0;
                     bool notEnoughPointsInside = leftPartitionSize < (k - neighborsSoFar);
-                    float toBorder = current->radius() - dist;
+                    auto toBorder = current->radius() - dist;
 
                     if (notEnoughPointsInside) {
                         toSearch.push_back({-1, current->right()});
@@ -527,19 +528,19 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
         }
     }
 
-    void search1NN(VPLevelPartition *partition, const T &val, unsigned int &resultIndex, float &resultDist) {
+    void search1NN(VPLevelPartition<distance_type> *partition, const T &val, unsigned int &resultIndex, distance_type &resultDist) {
 
-        resultDist = std::numeric_limits<float>::max();
+        resultDist = std::numeric_limits<distance_type>::max();
         resultIndex = -1;
 
-        std::vector<std::tuple<float, VPLevelPartition *>> toSearch = {{-1, partition}};
+        std::vector<std::tuple<distance_type, VPLevelPartition<distance_type> *>> toSearch = {{-1, partition}};
 
         while (!toSearch.empty()) {
 
             auto [distToBorder, current] = toSearch.back();
             toSearch.pop_back();
 
-            float dist = distance(val, _examples[current->start()].val);
+            auto dist = distance(val, _examples[current->start()].val);
             if (dist < resultDist) {
                 resultDist = dist;
                 resultIndex = _examples[current->start()].originalIndex;
@@ -553,7 +554,7 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
 
             if (dist > current->radius()) {
                 // may need to search inside as well
-                float toBorder = dist - current->radius();
+                auto toBorder = dist - current->radius();
                 if (toBorder < resultDist && current->left() != nullptr) {
                     toSearch.push_back({toBorder, current->left()});
                 }
@@ -563,7 +564,7 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
                     toSearch.push_back({-1, current->right()});
                 }
             } else {
-                float toBorder = current->radius() - dist;
+                auto toBorder = current->radius() - dist;
                 // may need to search outside as well
                 if (toBorder < resultDist && current->right() != nullptr) {
                     toSearch.push_back({toBorder, current->right()});
@@ -615,7 +616,7 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
 
     protected:
     std::vector<VPTreeElement> _examples;
-    VPLevelPartition *_rootPartition = nullptr;
+    VPLevelPartition<distance_type> *_rootPartition = nullptr;
 };
 
 } // namespace vptree

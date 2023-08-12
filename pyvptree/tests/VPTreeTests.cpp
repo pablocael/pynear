@@ -109,7 +109,7 @@ TEST(VPTests, TestCreation) {
 
     auto start = std::chrono::steady_clock::now();
 
-    VPTree<Eigen::Vector3d, distance> tree(points);
+    VPTree<Eigen::Vector3d, float, distance> tree(points);
     auto end = std::chrono::steady_clock::now();
     std::chrono::duration<float> diff = end - start;
 }
@@ -132,7 +132,7 @@ TEST(VPTests, TestSearch) {
     std::cout << "Building tree with " << numPoints << " points " << std::endl;
     auto start = std::chrono::steady_clock::now();
 
-    VPTree<Eigen::Vector3d, distance> tree(points);
+    VPTree<Eigen::Vector3d, float, distance> tree(points);
     auto end = std::chrono::steady_clock::now();
     std::chrono::duration<float> diff = end - start;
     std::cout << "Process took " << diff.count() << " seconds " << std::endl;
@@ -146,7 +146,7 @@ TEST(VPTests, TestSearch) {
         point[1] = distribution(generator);
         point[2] = distribution(generator);
     }
-    /* std::vector<VPTree<Eigen::Vector3d,distance>::VPTreeSearchResultElement> results; */
+    /* std::vector<VPTree<Eigen::Vector3d, float, distance>::VPTreeSearchResultElement> results; */
     std::vector<unsigned int> indices;
     std::vector<float> distances;
     start = std::chrono::steady_clock::now();

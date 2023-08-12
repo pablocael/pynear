@@ -11,6 +11,7 @@
 #include <immintrin.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <algorithm>
 
 using arrayd = std::vector<double>;
 using arrayf = std::vector<float>;
@@ -19,30 +20,28 @@ using ndarrayd = std::vector<arrayd>;
 using ndarrayf = std::vector<arrayf>;
 using ndarrayli = std::vector<arrayli>;
 
-typedef float hamdis_t;
-
 #if defined(_MSC_VER)
-#define ALIGN_16 __declspec(align(16))
+#define ALIGN_AS(bits) __declspec(align(bits))
 #elif defined(__GNUC__)
-#define ALIGN_16 __attribute__((__aligned__(16)))
+#define ALIGN_AS(bits) __attribute__((__aligned__(bits)))
 #endif
 
 /* Hamming distances for multiples of 64 bits */
-template <size_t nbits> hamdis_t hamming(const uint64_t *bs1, const uint64_t *bs2) {
+template <size_t nbits> int64_t hamming(const uint64_t *bs1, const uint64_t *bs2) {
     const size_t nwords = nbits / 64;
     size_t i;
-    hamdis_t h = 0;
+    int64_t h = 0;
     for (i = 0; i < nwords; i++)
         h += _mm_popcnt_u64(bs1[i] ^ bs2[i]);
     return h;
 }
 
 /* specialized (optimized) functions */
-template <> hamdis_t hamming<64>(const uint64_t *pa, const uint64_t *pb) { return _mm_popcnt_u64(pa[0] ^ pb[0]); }
+template <> int64_t hamming<64>(const uint64_t *pa, const uint64_t *pb) { return _mm_popcnt_u64(pa[0] ^ pb[0]); }
 
-template <> hamdis_t hamming<128>(const uint64_t *pa, const uint64_t *pb) { return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]); }
+template <> int64_t hamming<128>(const uint64_t *pa, const uint64_t *pb) { return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]); }
 
-template <> hamdis_t hamming<256>(const uint64_t *pa, const uint64_t *pb) {
+template <> int64_t hamming<256>(const uint64_t *pa, const uint64_t *pb) {
     return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]) + _mm_popcnt_u64(pa[2] ^ pb[2]) + _mm_popcnt_u64(pa[3] ^ pb[3]);
 }
 
@@ -77,7 +76,7 @@ inline double sum4(__m256d v) {
     return _mm_cvtsd_f64(_mm_add_sd(vlow, high64)); // reduce to scalar
 }
 
-double dist_optimized_double(const arrayd &p1, const arrayd &p2) {
+double dist_l2_d_avx2(const arrayd &p1, const arrayd &p2) {
 
     unsigned int i = p1.size() / 4;
     __m256d result = _mm256_set_pd(0, 0, 0, 0);
@@ -102,7 +101,7 @@ double dist_optimized_double(const arrayd &p1, const arrayd &p2) {
 // reads 0 <= d < 4 floats as __m128
 static inline __m128 masked_read(int d, const float *x) {
     assert(0 <= d && d < 4);
-    ALIGN_16 float buf[4] = {0, 0, 0, 0};
+    ALIGN_AS(16) float buf[4] = {0, 0, 0, 0};
     switch (d) {
     case 3:
         buf[2] = x[2];
@@ -115,7 +114,7 @@ static inline __m128 masked_read(int d, const float *x) {
     // cannot use AVX2 _mm_mask_set1_epi32
 }
 
-float dist_optimized_float(const arrayf &p1, const arrayf &p2) {
+float dist_l2_f_avx2(const arrayf &p1, const arrayf &p2) {
     unsigned int d = p1.size();
     __m256 msum1 = _mm256_setzero_ps();
 
@@ -158,7 +157,7 @@ float dist_optimized_float(const arrayf &p1, const arrayf &p2) {
     return std::sqrt(result);
 }
 
-double distL2d(const arrayd &p1, const arrayd &p2) {
+double dist_l2_d(const arrayd &p1, const arrayd &p2) {
 
     double result = 0;
     auto i = p1.size();
@@ -170,9 +169,9 @@ double distL2d(const arrayd &p1, const arrayd &p2) {
     return std::sqrt(result);
 }
 
-float distL2f(const arrayf &p1, const arrayf &p2) {
+float dist_l2_f(const arrayf &p1, const arrayf &p2) {
 
-    float result = 0;
+    float result = 0.;
     auto i = p1.size();
     while (i--) {
         float d = (p1[i] - p2[i]);
@@ -182,7 +181,107 @@ float distL2f(const arrayf &p1, const arrayf &p2) {
     return std::sqrt(result);
 }
 
-hamdis_t distHamming(const arrayli &p1, const arrayli &p2) {
+float dist_l1_f(const arrayf &p1, const arrayf &p2) {
+    /* L1 metric, also called Manhattan or taxicab metric */
+
+    float result = 0.;
+    auto i = p1.size();
+    while (i--) {
+        result += std::fabs(p1[i] - p2[i]);
+    }
+
+    return result;
+}
+
+float dist_l1_f_avx2(const arrayf &p1, const arrayf &p2) {
+    /* SIMD L1 metric, also called Manhattan or taxicab metric */
+
+    const float *vec1 = &(p1[0]);
+    const float *vec2 = &(p2[0]);
+    auto size = p1.size();
+
+    const size_t blocksize = 8;
+    size_t i = 0;
+
+    __m256 sum = _mm256_setzero_ps();
+
+    for (; i + blocksize <= size; i += blocksize) {
+        __m256 v1 = _mm256_loadu_ps(&vec1[i]);
+        __m256 v2 = _mm256_loadu_ps(&vec2[i]);
+
+        __m256 diff = _mm256_sub_ps(v1, v2);
+        sum = _mm256_add_ps(sum, _mm256_and_ps(diff, _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF))));
+    }
+
+    ALIGN_AS(32) float result[8];
+    _mm256_store_ps(result, sum);
+
+    float total_sum = 0.;
+    for (int j = 0; j < 8; ++j) {
+        total_sum += result[j];
+    }
+
+    // Calculate the remaining elements
+    for (; i < size; ++i) {
+        total_sum += std::fabs(vec1[i] - vec2[i]);
+    }
+
+    return total_sum;
+}
+
+float dist_chebyshev_f(const arrayf &p1, const arrayf &p2) {
+    /* Chebyshev distance metric, also called maximum metric or L_inf metric */
+
+    float result = 0.;
+    auto i = p1.size();
+    while (i--) {
+        float distance = std::fabs(p1[i] - p2[i]);
+        if (distance > result) {
+            result = distance;
+        }
+    }
+
+    return result;
+}
+
+float dist_chebyshev_f_avx2(const arrayf &p1, const arrayf &p2) {
+    /* SIMD Chebyshev distance metric, also called maximum metric or L_inf metric */
+
+    const float *vec1 = &(p1[0]);
+    const float *vec2 = &(p2[0]);
+    auto size = p1.size();
+
+    const size_t blocksize = 8;
+    size_t i = 0;
+
+    __m256 max_diff = _mm256_setzero_ps();
+
+    for (; i + blocksize <= size; i += blocksize) {
+        __m256 v1 = _mm256_loadu_ps(&vec1[i]);
+        __m256 v2 = _mm256_loadu_ps(&vec2[i]);
+        __m256 diff = _mm256_sub_ps(v1, v2);
+        diff = _mm256_and_ps(diff, _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF))); // Absolute value
+        max_diff = _mm256_max_ps(max_diff, diff);
+    }
+
+    ALIGN_AS(32) float result[8];
+    _mm256_store_ps(result, max_diff);
+
+    float max_distance = result[0];
+    for (int i = 1; i < 8; ++i) {
+        max_distance = std::max(max_distance, result[i]);
+    }
+
+    // Calculate the remaining elements
+    for (; i < size; ++i) {
+        float diff = std::fabs(vec1[i] - vec2[i]);
+        max_distance = std::max(max_distance, diff);
+    }
+
+    return max_distance;
+}
+
+int64_t dist_hamming(const arrayli &p1, const arrayli &p2) {
 
     return hamming<256>(reinterpret_cast<const uint64_t *>(&p1[0]), reinterpret_cast<const uint64_t *>(&p2[0]));
 }

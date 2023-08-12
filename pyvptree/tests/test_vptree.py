@@ -4,9 +4,12 @@
 #
 
 from collections import Counter
-from typing import Tuple
+from functools import partial
+from typing import Callable, Tuple
 
 import numpy as np
+import pytest
+
 import pyvptree
 
 
@@ -20,8 +23,17 @@ def euclidean_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.sqrt(np.sum(diff * diff, axis=-1))
 
 
-def test_hamming():
+def manhattan_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    diff = b[None, :, :] - a[:, None, :]
+    return np.sum(np.abs(diff), axis=-1)
 
+
+def chebyshev_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    diff = b[None, :, :] - a[:, None, :]
+    return np.max(np.abs(diff), axis=-1)
+
+
+def test_hamming():
     def hamming_distance(a, b) -> np.ndarray:
         r = (1 << np.arange(8))[:, None]
         return np.count_nonzero((np.bitwise_xor(a, b) & r) != 0)
@@ -39,20 +51,23 @@ def test_hamming():
     assert np.array_equal(truth, result)
 
 
-def exhaustive_search_euclidean(data: np.ndarray, queries: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray]:
-    distances = euclidean_distance_pairwise(queries, data)
+def exhaustive_search(
+    metric_func: Callable[[np.ndarray, np.ndarray], np.ndarray],
+    data: np.ndarray,
+    queries: np.ndarray,
+    k: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    distances = metric_func(queries, data)
     indices = np.argpartition(distances, range(k), axis=-1)[:, :k]
     distances = np.take_along_axis(distances, indices, axis=-1)
 
     return indices, distances
 
 
-def exhaustive_search_hamming(data: np.ndarray, queries: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray]:
-    distances = hamming_distance_pairwise(queries, data)
-    indices = np.argpartition(distances, range(k), axis=-1)[:, :k]
-    distances = np.take_along_axis(distances, indices, axis=-1)
-
-    return indices, distances
+exhaustive_search_hamming = partial(exhaustive_search, hamming_distance_pairwise)
+exhaustive_search_euclidean = partial(exhaustive_search, euclidean_distance_pairwise)
+exhaustive_search_manhattan = partial(exhaustive_search, manhattan_distance_pairwise)
+exhaustive_search_chebyshev = partial(exhaustive_search, chebyshev_distance_pairwise)
 
 
 def _num_dups(distances):
@@ -61,6 +76,13 @@ def _num_dups(distances):
         c = Counter(distances[i].tolist())
         dups += sum(1 for k, c in c.most_common() if c > 1)
     return dups
+
+
+CLASSES = [
+    (pyvptree.VPTreeL2Index, exhaustive_search_euclidean),
+    (pyvptree.VPTreeL1Index, exhaustive_search_manhattan),
+    (pyvptree.VPTreeChebyshevIndex, exhaustive_search_chebyshev),
+]
 
 
 def test_binary():
@@ -81,7 +103,7 @@ def test_binary():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.int64)[:, ::-1]
 
     assert np.array_equal(exaustive_distances, vptree_distances)
@@ -106,7 +128,7 @@ def test_large_binary():
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.int64)[:, ::-1]
 
     assert np.array_equal(exaustive_distances, vptree_distances)
@@ -114,7 +136,8 @@ def test_large_binary():
         assert np.array_equal(exaustive_indices, vptree_indices)  # indices order can vary for same distances
 
 
-def test_k_equals_dataset():
+@pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
+def test_k_equals_dataset(vptree_cls, exaustive_metric):
     np.random.seed(seed=42)
 
     dimension = 8
@@ -126,13 +149,13 @@ def test_k_equals_dataset():
 
     k = num_points
 
-    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(data, queries, k)
+    exaustive_indices, exaustive_distances = exaustive_metric(data, queries, k)
 
-    vptree = pyvptree.VPTreeL2Index()
+    vptree = vptree_cls()
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]
 
     np.testing.assert_allclose(exaustive_distances, vptree_distances, rtol=1e-06)
@@ -140,7 +163,8 @@ def test_k_equals_dataset():
         assert np.array_equal(exaustive_indices, vptree_indices)
 
 
-def test_large_dataset():
+@pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
+def test_large_dataset(vptree_cls, exaustive_metric):
     np.random.seed(seed=42)
 
     dimension = 8
@@ -152,13 +176,13 @@ def test_large_dataset():
 
     k = 3
 
-    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(data, queries, k)
+    exaustive_indices, exaustive_distances = exaustive_metric(data, queries, k)
 
-    vptree = pyvptree.VPTreeL2Index()
+    vptree = vptree_cls()
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]
 
     vptree_distances2 = np.sort(vptree_distances, axis=-1)
@@ -168,7 +192,8 @@ def test_large_dataset():
     np.testing.assert_allclose(exaustive_distances, vptree_distances, rtol=1e-06)
 
 
-def test_large_dataset_highdim():
+@pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
+def test_large_dataset_highdim(vptree_cls, exaustive_metric):
     np.random.seed(seed=42)
 
     dimension = 16
@@ -180,13 +205,13 @@ def test_large_dataset_highdim():
 
     k = 3
 
-    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(data, queries, k)
+    exaustive_indices, exaustive_distances = exaustive_metric(data, queries, k)
 
-    vptree = pyvptree.VPTreeL2Index()
+    vptree = vptree_cls()
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]
 
     vptree_distances2 = np.sort(vptree_distances, axis=-1)
@@ -196,7 +221,8 @@ def test_large_dataset_highdim():
     np.testing.assert_allclose(exaustive_distances, vptree_distances, rtol=1e-06)
 
 
-def test_dataset_split_less_than_k():
+@pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
+def test_dataset_split_less_than_k(vptree_cls, exaustive_metric):
     """doc
     Test the case where on of the splits of the dataset eliminates half of points but contains less than k points
     """
@@ -205,20 +231,21 @@ def test_dataset_split_less_than_k():
     queries = np.array([[-2.55, 0]])
     k = 4
 
-    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(data, queries, k)
+    exaustive_indices, exaustive_distances = exaustive_metric(data, queries, k)
 
-    vptree = pyvptree.VPTreeL2Index()
+    vptree = vptree_cls()
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]
 
     assert np.array_equal(exaustive_indices, vptree_indices)
     np.testing.assert_allclose(exaustive_distances, vptree_distances, rtol=1e-06)
 
 
-def test_query_larger_than_dataset():
+@pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
+def test_query_larger_than_dataset(vptree_cls, exaustive_metric):
     np.random.seed(seed=42)
 
     num_points = 5
@@ -230,20 +257,21 @@ def test_query_larger_than_dataset():
 
     k = 3
 
-    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(data, queries, k)
+    exaustive_indices, exaustive_distances = exaustive_metric(data, queries, k)
 
-    vptree = pyvptree.VPTreeL2Index()
+    vptree = vptree_cls()
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]
 
     assert np.array_equal(exaustive_indices, vptree_indices)
     np.testing.assert_allclose(exaustive_distances, vptree_distances, rtol=1e-06)
 
 
-def test_compare_with_exaustive_knn():
+@pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
+def test_compare_with_exaustive_knn(vptree_cls, exaustive_metric):
     np.random.seed(seed=42)
 
     num_points = 21231
@@ -255,20 +283,21 @@ def test_compare_with_exaustive_knn():
 
     k = 3
 
-    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(data, queries, k)
+    exaustive_indices, exaustive_distances = exaustive_metric(data, queries, k)
 
-    vptree = pyvptree.VPTreeL2Index()
+    vptree = vptree_cls()
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)[:, ::-1]
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]
 
     assert np.array_equal(exaustive_indices, vptree_indices)
     np.testing.assert_allclose(exaustive_distances, vptree_distances, rtol=1e-06)
 
 
-def test_compare_with_exaustive_1nn():
+@pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
+def test_compare_with_exaustive_1nn(vptree_cls, exaustive_metric):
     np.random.seed(seed=42)
 
     num_points = 21231
@@ -278,16 +307,16 @@ def test_compare_with_exaustive_1nn():
     num_queries = 23
     queries = np.random.rand(num_queries, dimension).astype(dtype=np.float32)
 
-    exaustive_indices, exaustive_distances = exhaustive_search_euclidean(data, queries, 1)
+    exaustive_indices, exaustive_distances = exaustive_metric(data, queries, 1)
 
     exaustive_indices = exaustive_indices.reshape(exaustive_indices.shape[:-1])
     exaustive_distances = exaustive_distances.reshape(exaustive_distances.shape[:-1])
 
-    vptree = pyvptree.VPTreeL2Index()
+    vptree = vptree_cls()
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.search1NN(queries)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.int64)
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)
     vptree_distances = np.array(vptree_distances, dtype=np.float32)
 
     assert np.array_equal(exaustive_indices, vptree_indices)
