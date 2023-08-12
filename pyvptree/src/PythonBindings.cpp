@@ -13,18 +13,20 @@
 #include <cassert>
 #include <omp.h>
 
+#include <ISerializable.hpp>
+
 namespace py = pybind11;
 
 class VPTreeNumpyAdapter {
-    public:
+public:
     VPTreeNumpyAdapter() = default;
 
-    void set(const ndarrayf &array) { _tree = vptree::VPTree<arrayf, dist_optimized_float>(array); }
+    void set(const ndarrayf &array) { tree = vptree::VPTree<arrayf, dist_optimized_float>(array); }
 
     std::tuple<std::vector<std::vector<unsigned int>>, std::vector<std::vector<float>>> searchKNN(const ndarrayf &queries, unsigned int k) {
 
         std::vector<vptree::VPTree<arrayf, dist_optimized_float>::VPTreeSearchResultElement> results;
-        _tree.searchKNN(queries, k, results);
+        tree.searchKNN(queries, k, results);
 
         std::vector<std::vector<unsigned int>> indexes;
         std::vector<std::vector<float>> distances;
@@ -42,29 +44,24 @@ class VPTreeNumpyAdapter {
 
         std::vector<unsigned int> indices;
         std::vector<float> distances;
-        _tree.search1NN(queries, indices, distances);
+        tree.search1NN(queries, indices, distances);
 
         return std::make_tuple(std::move(indices), std::move(distances));
     }
 
-    void serialize(std::vector<char> &data) { return _tree.serialize(data); }
-
-    void deserialize(const std::vector<char> &data) { _tree.deserialize(data); }
-
-    private:
-    vptree::VPTree<arrayf, dist_optimized_float> _tree;
+    vptree::VPTree<arrayf, dist_optimized_float> tree;
 };
 
 class VPTreeBinaryNumpyAdapter {
-    public:
+public:
     VPTreeBinaryNumpyAdapter() = default;
 
-    void set(const ndarrayli &array) { _tree = vptree::VPTree<arrayli, distHamming>(array); }
+    void set(const ndarrayli &array) { tree = vptree::VPTree<arrayli, distHamming>(array); }
 
     std::tuple<std::vector<std::vector<unsigned int>>, std::vector<std::vector<float>>> searchKNN(const ndarrayli &queries, unsigned int k) {
 
         std::vector<vptree::VPTree<arrayli, distHamming>::VPTreeSearchResultElement> results;
-        _tree.searchKNN(queries, k, results);
+        tree.searchKNN(queries, k, results);
 
         std::vector<std::vector<unsigned int>> indexes;
         std::vector<std::vector<float>> distances;
@@ -77,21 +74,16 @@ class VPTreeBinaryNumpyAdapter {
         return std::make_tuple(indexes, distances);
     }
 
-    void serialize(std::vector<char> &data) { return _tree.serialize(data); }
-
-    void deserialize(const std::vector<char> &data) { _tree.deserialize(data); }
-
     std::tuple<std::vector<unsigned int>, std::vector<float>> search1NN(const ndarrayli &queries) {
 
         std::vector<unsigned int> indices;
         std::vector<float> distances;
-        _tree.search1NN(queries, indices, distances);
+        tree.search1NN(queries, indices, distances);
 
         return std::make_tuple(std::move(indices), std::move(distances));
     }
 
-    private:
-    vptree::VPTree<arrayli, distHamming> _tree;
+    vptree::VPTree<arrayli, distHamming> tree;
 };
 
 PYBIND11_MODULE(_pyvptree, m) {
@@ -103,17 +95,17 @@ PYBIND11_MODULE(_pyvptree, m) {
         .def(py::pickle(
             [](const VPTreeNumpyAdapter &p) { // __getstate__
                 /* Return a tuple that fully encodes the state of the object */
-                std::vector<char> state;
-                const_cast<VPTreeNumpyAdapter &>(p).serialize(state);
-                py::tuple t = py::make_tuple(state);
+                vptree::SerializedState state = p.tree.serialize();
+                py::tuple t = py::make_tuple(state.data, state.checksum);
 
                 return t;
             },
             [](py::tuple t) { // __setstate__
                 /* Create a new C++ instance */
                 VPTreeNumpyAdapter p;
-                std::vector<char> vec = t[0].cast<std::vector<char>>();
-                p.deserialize(vec);
+                std::vector<uint8_t> data = t[0].cast<std::vector<uint8_t>>();
+                uint8_t checksum = t[1].cast<uint8_t>();
+                p.tree.deserialize(vptree::SerializedState(data, checksum));
 
                 return p;
             }));
@@ -126,12 +118,18 @@ PYBIND11_MODULE(_pyvptree, m) {
         .def(py::pickle(
             [](const VPTreeBinaryNumpyAdapter &p) { // __getstate__
                 /* Return a tuple that fully encodes the state of the object */
-                return py::make_tuple();
+                vptree::SerializedState state = p.tree.serialize();
+                py::tuple t = py::make_tuple(state.data, state.checksum);
+
+                return t;
             },
             [](py::tuple t) { // __setstate__
                 /* Create a new C++ instance */
                 VPTreeBinaryNumpyAdapter p;
+                std::vector<uint8_t> data = t[0].cast<std::vector<uint8_t>>();
+                uint8_t checksum = t[1].cast<uint8_t>();
+                p.tree.deserialize(vptree::SerializedState(data, checksum));
 
                 return p;
             }));
-}
+    };

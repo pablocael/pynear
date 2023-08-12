@@ -19,18 +19,14 @@
 #include <utility>
 #include <vector>
 
+#include "ISerializable.hpp"
+
 #define ENABLE_OMP_PARALLEL 1
 
 namespace vptree {
 
-class Serializable {
-    public:
-    virtual void serialize(std::vector<char> &data) = 0;
-    virtual void deserialize(const std::vector<char> &data) = 0;
-};
-
-class VPLevelPartition : public Serializable {
-    public:
+class VPLevelPartition {
+public:
     VPLevelPartition(float radius, unsigned int start, unsigned int end) {
         // For each partition, the vantage point is the first point within the partition (pointed by indexStart)
 
@@ -49,16 +45,18 @@ class VPLevelPartition : public Serializable {
 
     virtual ~VPLevelPartition() { clear(); }
 
-    // this function contains the serialization of pyvptree
-    void serialize(std::vector<char> &data) override {
+    SerializedState serialize() const {
 
-        std::vector<VPLevelPartition *> flatten_tree_state;
+        SerializedState state;
+        std::vector<const VPLevelPartition *> flatten_tree_state;
 
         flatten_tree(this, flatten_tree_state);
 
         size_t total_size = flatten_tree_state.size() * (2 * sizeof(int64_t) + sizeof(float));
-        char *buffer = new char[total_size];
-        char *p_buffer = buffer;
+        state.data.resize(total_size);
+
+        uint8_t *buffer = &state.data[0];
+        uint8_t *p_buffer = buffer;
 
         // reverse the tree state since we will push it in a stack for serializing
         for (const VPLevelPartition *elem : flatten_tree_state) {
@@ -79,20 +77,17 @@ class VPLevelPartition : public Serializable {
             p_buffer += sizeof(float);
         }
 
-        if (p_buffer - buffer != total_size) {
+        if ((size_t)(p_buffer - buffer) != total_size) {
             throw new std::out_of_range("invalid serialization state, offsets dont match!");
         }
 
-        data.resize(total_size);
-        std::memcpy(&data[0], buffer, total_size);
+        return state;
     }
 
-    // this function contains the unserialization process of your class
-    void deserialize(const std::vector<char> &data) override {
-
+    void deserialize(const SerializedState& state, uint32_t offset) {
         clear();
 
-        char *p_buffer = (&const_cast<std::vector<char> &>(data)[0]);
+        uint8_t *p_buffer = (&const_cast<std::vector<uint8_t> &>(state.data)[0]) + offset;
         VPLevelPartition *recovered = rebuild_from_state(&p_buffer);
         if (recovered == nullptr) {
             return;
@@ -105,7 +100,34 @@ class VPLevelPartition : public Serializable {
         _indexEnd = recovered->_indexEnd;
     }
 
-    void flatten_tree(VPLevelPartition *root, std::vector<VPLevelPartition *> &flatten_tree_state) {
+    bool isEmpty() { return _indexStart == -1 || _indexStart == -1; }
+    unsigned int start() { return _indexStart; }
+    unsigned int end() { return _indexEnd; }
+    unsigned int size() { return _indexEnd - _indexStart + 1; }
+    void setRadius(float radius) { _radius = radius; }
+    float radius() { return _radius; }
+
+    void setChild(VPLevelPartition *left, VPLevelPartition *right) {
+        _left = left;
+        _right = right;
+    }
+
+    VPLevelPartition *left() const { return _left; }
+    VPLevelPartition *right() const { return _right; }
+
+private:
+    void clear() {
+        if (_left != nullptr)
+            delete _left;
+
+        if (_right != nullptr)
+            delete _right;
+
+        _left = nullptr;
+        _right = nullptr;
+    }
+
+    void flatten_tree(const VPLevelPartition *root, std::vector<const VPLevelPartition *> &flatten_tree_state) const {
         // visit partitions tree in preorder push all values.
         flatten_tree_state.push_back(root);
         if (root != nullptr) {
@@ -114,7 +136,7 @@ class VPLevelPartition : public Serializable {
         }
     }
 
-    VPLevelPartition *rebuild_from_state(char **p_buffer) {
+    VPLevelPartition *rebuild_from_state(uint8_t **p_buffer) {
         int64_t indexEnd = (*(int64_t *)(*p_buffer));
         *p_buffer += sizeof(int64_t);
         int64_t indexStart = (*(int64_t *)(*p_buffer));
@@ -133,32 +155,6 @@ class VPLevelPartition : public Serializable {
         return root;
     }
 
-    bool isEmpty() { return _indexStart == -1 || _indexStart == -1; }
-    unsigned int start() { return _indexStart; }
-    unsigned int end() { return _indexEnd; }
-    unsigned int size() { return _indexEnd - _indexStart + 1; }
-    void setRadius(float radius) { _radius = radius; }
-    float radius() { return _radius; }
-
-    void setChild(VPLevelPartition *left, VPLevelPartition *right) {
-        _left = left;
-        _right = right;
-    }
-
-    VPLevelPartition *left() { return _left; }
-    VPLevelPartition *right() { return _right; }
-
-    private:
-    void clear() {
-        if (_left != nullptr)
-            delete _left;
-
-        if (_right != nullptr)
-            delete _right;
-
-        _left = nullptr;
-        _right = nullptr;
-    }
 
     float _radius;
 
@@ -173,7 +169,7 @@ class VPLevelPartition : public Serializable {
     VPLevelPartition *_right = nullptr;
 };
 
-template <typename T, float (*distance)(const T &, const T &)> class VPTree : public Serializable {
+template <typename T, float (*distance)(const T &, const T &)> class VPTree : public ISerializable {
     public:
     struct VPTreeElement {
 
@@ -205,10 +201,9 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
         build(_examples);
     }
 
-    // this function contains the serialization of pyvptree
-    void serialize(std::vector<char> &data) override {
+    SerializedState serialize() const override {
         if (_rootPartition == nullptr) {
-            return;
+            return SerializedState();
         }
 
         size_t element_size = 0;
@@ -225,8 +220,9 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
             total_size += _examples.size() * (sizeof(unsigned int) + total_elements_size);
         }
 
-        char *buffer = new char[total_size];
-        char *p_buffer = buffer;
+        SerializedState state;
+        state.data.resize(total_size);
+        uint8_t *p_buffer = &state.data[0];
 
         *((size_t *)p_buffer) = element_size;
         p_buffer += sizeof(size_t);
@@ -250,30 +246,29 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
             }
         }
 
-        if (p_buffer - buffer != total_size) {
+        if ((size_t)(p_buffer - (uint8_t*)&state.data[0]) != total_size) {
             throw new std::out_of_range("invalid serialization state, offsets dont match!");
         }
 
-        std::vector<char> partition_data;
-        _rootPartition->serialize(partition_data);
-
-        data.resize(total_size);
-        std::memcpy(&data[0], buffer, total_size);
-        data.insert(data.end(), partition_data.begin(), partition_data.end());
+        SerializedState partition_state = _rootPartition->serialize();
+        state += partition_state;
+        return state;
     }
 
-    // this function contains the unserialization process of your class
-    void deserialize(const std::vector<char> &data) override {
-
+    void deserialize(const SerializedState& state) override {
         if (_rootPartition != nullptr) {
             delete _rootPartition;
             _rootPartition = nullptr;
         }
-        if (data.empty()) {
+        if (state.data.empty()) {
             return;
         }
 
-        char *p_buffer = &const_cast<std::vector<char> &>(data)[0];
+        if(!state.isValid()) {
+            throw new std::invalid_argument("invalid state - checksum mismatch");
+        }
+
+        uint8_t *p_buffer = &const_cast<std::vector<uint8_t> &>(state.data)[0];
         size_t elem_size = *((size_t *)p_buffer);
         p_buffer += sizeof(size_t);
 
@@ -302,9 +297,8 @@ template <typename T, float (*distance)(const T &, const T &)> class VPTree : pu
         }
 
         _rootPartition = new VPLevelPartition();
-        std::vector<char> remaining_data;
-        remaining_data.assign(p_buffer, (char *)&data.back());
-        _rootPartition->deserialize(remaining_data);
+        uint32_t offset = p_buffer - &state.data[0];
+        _rootPartition->deserialize(state, offset);
     }
 
     void searchKNN(const std::vector<T> &queries, unsigned int k, std::vector<VPTree::VPTreeSearchResultElement> &results) {
