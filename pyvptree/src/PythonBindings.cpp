@@ -55,7 +55,7 @@ template <distance_func_f distance> class VPTreeNumpyAdapter {
 };
 
 class VPTreeBinaryNumpyAdapter {
-public:
+    public:
     VPTreeBinaryNumpyAdapter() = default;
 
     void set(const ndarrayli &array) { tree = vptree::VPTree<arrayli, int64_t, dist_hamming>(array); }
@@ -180,4 +180,4 @@ PYBIND11_MODULE(_pyvptree, m) {
 
                 return p;
             }));
-    };
+};

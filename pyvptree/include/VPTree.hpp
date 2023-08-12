@@ -6,8 +6,8 @@
 #pragma once
 
 #include <algorithm>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <functional>
 #include <iostream>
@@ -84,7 +84,7 @@ template <typename distance_type> class VPLevelPartition {
         return state;
     }
 
-    void deserialize(const SerializedState& state, uint32_t offset) {
+    void deserialize(const SerializedState &state, uint32_t offset) {
         clear();
 
         uint8_t *p_buffer = (&const_cast<std::vector<uint8_t> &>(state.data)[0]) + offset;
@@ -115,7 +115,7 @@ template <typename distance_type> class VPLevelPartition {
     VPLevelPartition *left() const { return _left; }
     VPLevelPartition *right() const { return _right; }
 
-private:
+    private:
     void clear() {
         if (_left != nullptr)
             delete _left;
@@ -154,7 +154,6 @@ private:
         root->setChild(left, right);
         return root;
     }
-
 
     distance_type _radius;
 
@@ -246,7 +245,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             }
         }
 
-        if ((size_t)(p_buffer - (uint8_t*)&state.data[0]) != total_size) {
+        if ((size_t)(p_buffer - (uint8_t *)&state.data[0]) != total_size) {
             throw new std::out_of_range("invalid serialization state, offsets dont match!");
         }
 
@@ -255,7 +254,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         return state;
     }
 
-    void deserialize(const SerializedState& state) override {
+    void deserialize(const SerializedState &state) override {
         if (_rootPartition != nullptr) {
             delete _rootPartition;
             _rootPartition = nullptr;
@@ -264,7 +263,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             return;
         }
 
-        if(!state.isValid()) {
+        if (!state.isValid()) {
             throw new std::invalid_argument("invalid state - checksum mismatch");
         }
 
@@ -419,7 +418,8 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         bool operator<(const VPTreeSearchElement &v) const { return dist < v.dist; }
     };
 
-    void exaustivePartitionSearch(VPLevelPartition<distance_type> *partition, const T &val, unsigned int k, std::priority_queue<VPTreeSearchElement> &knnQueue, distance_type tau) {
+    void exaustivePartitionSearch(VPLevelPartition<distance_type> *partition, const T &val, unsigned int k,
+                                  std::priority_queue<VPTreeSearchElement> &knnQueue, distance_type tau) {
         for (int i = partition->start(); i <= partition->end(); ++i) {
 
             auto dist = distance(val, _examples[i].val);

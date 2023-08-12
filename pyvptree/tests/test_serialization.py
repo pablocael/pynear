@@ -2,6 +2,7 @@ import numpy as np
 import pickle
 import pyvptree
 
+
 def test_basic_serialization():
     np.random.seed(seed=42)
 
@@ -26,6 +27,7 @@ def test_basic_serialization():
     vptree_indices_rec, vptree_distances_rec = recovered.search1NN(queries)
     assert vptree_indices_rec == vptree_indices and vptree_distances_rec == vptree_distances
 
+
 def test_binary_serialization():
     np.random.seed(seed=42)
 
@@ -49,4 +51,3 @@ def test_binary_serialization():
 
     vptree_indices_rec, vptree_distances_rec = recovered.search1NN(queries)
     assert vptree_distances_rec == vptree_distances
-
