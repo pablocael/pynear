@@ -30,7 +30,7 @@ def test_binary_serialization():
     np.random.seed(seed=42)
 
     num_points = 20000
-    dimension = 8
+    dimension = 32
     num_queries = 2
     data = np.random.rand(num_points, dimension).astype(dtype=np.uint8)
 
