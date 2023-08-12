@@ -125,7 +125,8 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 #pragma omp parallel for schedule(static, 1) num_threads(8)
 #endif
         // i should be size_t, however msvc requires signed integral loop variables (except with -openmp:llvm)
-        for (size_t i = 0; i < queries.size(); ++i) {
+        // Note: casting here to int since windows failes if i variable is unsigned for openmp
+        for (int i = 0; i < (int)queries.size(); ++i) {
             const T &query = queries[i];
             std::priority_queue<VPTreeSearchElement> knnQueue;
             searchKNN(_rootPartition, query, k, knnQueue);
@@ -152,7 +153,8 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 #pragma omp parallel for schedule(static, 1) num_threads(8)
 #endif
         // i should be size_t, see above
-        for (size_t i = 0; i < queries.size(); ++i) {
+        // Note: casting here to int since windows failes if i variable is unsigned for openmp
+        for (int i = 0; i < (int)queries.size(); ++i) {
             const T &query = queries[i];
             distance_type dist = 0;
             unsigned int index = 0;
