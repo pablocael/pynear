@@ -81,23 +81,17 @@ make test
 ## Debugging and Running C++ Code
 
 For debugging and running C++ code independently from python module, CMake config files are provided in pyvptree/CMakeLists.txt.
-For generating C++ makefiles and building tests run:
+For building and running C++ tests run:
 
 ```
-mkdir build
-cmake -G "Unix Makefiles" ../pyvptree
-make
-```
-
-For running C++ tests:
-```
-./tests/vptree-tests
-```
-
-Since tests are built in Debug mode (defualt CMakeLists build mode), one can debug tests with gdb:
+make cpp-test
 
 ```
-gdb ./tests/vptree-tests
+
+Since tests are built in Debug mode (default CMakeLists build mode), one can debug tests with gdb using built test binary:
+
+```
+gdb ./build/tests/vptree-tests
 ```
 
 ## Formating code
