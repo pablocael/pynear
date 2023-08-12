@@ -94,6 +94,23 @@ Since tests are built in Debug mode (default CMakeLists build mode), one can deb
 gdb ./build/tests/vptree-tests
 ```
 
+## Debugging and Running C++ Code on Windows
+
+Install CMake (for example `py -m pip install cmake`) and pybind11 (`py -m pip install pybind11`).
+
+```batch
+mkdir build
+cd build
+cmake ..\pyvptree
+```
+
+You may have to specify some arguments like the correct generator `-G "Visual Studio 15 2017 Win64"`
+or paths for Python `-DPYTHON_EXECUTABLE="C:\Program Files\Python38\python.exe"`
+and pybind11 `-Dpybind11_DIR="C:\Program Files\Python38\Lib\site-packages\pybind11\share\cmake\pybind11"`
+for CMake to work correctly.
+
+Build generated files using Visual Studio (or whichever generator you chose) and run `vptree-tests.exe`.
+
 ## Formating code
 
 ```
