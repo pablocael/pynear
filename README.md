@@ -78,7 +78,7 @@ To customize or regenerate the benchmarks as well as to see other benchmark resu
 make test
 ```
 
-## Debugging and Running C++ Code
+## Debugging and Running C++ Code on Unix
 
 For debugging and running C++ code independently from python module, CMake config files are provided in pyvptree/CMakeLists.txt.
 For building and running C++ tests run:
