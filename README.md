@@ -39,6 +39,29 @@ Performance can dramatically decrease if this library is compiled without suppor
 
 This library needs OpenMP support to be built and installed. The whole compilation procces occur automatically by performing the installation step above.
 
+# Pickle serialization
+
+Pyvptree is pickle serializable:
+```python
+import numpy as np
+import pyvptree
+
+np.random.seed(seed=42)
+
+num_points = 20000
+dimension = 32
+num_queries = 2
+data = np.random.rand(num_points, dimension).astype(dtype=np.uint8)
+
+queries = np.random.rand(num_queries, dimension).astype(dtype=np.uint8)
+
+vptree = pyvptree.VPTreeBinaryIndex()
+vptree.set(data)
+
+data = pickle.dumps(vptree)
+recovered = pickle.loads(data)
+```
+
 # Benchmarks
 
 Several datasets were built and used for time benchmarks using L2 distance functions. Although Pyvptree does support Binary Index (VPTreeBinaryIndex) using hamming distance functions,
@@ -52,23 +75,7 @@ The below benchmarks are for different values of K (1, 2, 4, 8, 16), comparing F
 
 Benchmarks are split into dimensionality ranges for better analysis.
 
-
-## 2 to 10 dimensions Range
-
-![k=16, L2 index](docs/img/from_2_to_10/VPTreeL2Index_k_16.png "K=16, L2 index")
-
-## 11 to 16 dimensions Range
-
-![k=16, L2 index](docs/img/from_11_to_16/VPTreeL2Index_k_16.png "K=16, L2 index")
-
-## 17 to 32 dimensions Range
-![k=16, L2 index](docs/img/from_17_to_32/VPTreeL2Index_k_16.png "K=16, L2 index")
-
-## 33 to 48 dimensions Range
-
-![k=16, L2 index](docs/img/from_33_to_48/VPTreeL2Index_k_16.png "K=16, L2 index")
-
-To customize or regenerate the benchmarks as well as to see other benchmark results, see [benchmarks](./pyvptree/benchmark/README.md) session.
+To customize or regenerate the benchmarks as well as to see benchmark results, see [benchmarks](./pyvptree/benchmark/README.md) session.
 
 # Development
 
