@@ -36,7 +36,7 @@ float distHamming(const std::vector<unsigned char> &p1, const std::vector<unsign
     float result = 0;
     const uint64_t *a = (reinterpret_cast<const uint64_t *>(&p1[0]));
     const uint64_t *b = (reinterpret_cast<const uint64_t *>(&p2[0]));
-    for (int i = 0; i < p1.size() / sizeof(uint64_t); i++) {
+    for (size_t i = 0; i < p1.size() / sizeof(uint64_t); i++) {
         result += pop_count(a[i], b[i]);
     }
     return result;
@@ -110,7 +110,7 @@ TEST(VPTests, TestCreation) {
     std::cout << "Building tree with " << numPoints << " points " << std::endl;
     auto start = std::chrono::steady_clock::now();
 
-    VPTree<Eigen::Vector3d, distance> tree(points);
+    VPTree<Eigen::Vector3d, float, distance> tree(points);
     auto end = std::chrono::steady_clock::now();
     std::chrono::duration<float> diff = end - start;
     std::cout << "Process took" << diff.count() << " seconds " << std::endl;
@@ -134,7 +134,7 @@ TEST(VPTests, TestSearch) {
     std::cout << "Building tree with " << numPoints << " points " << std::endl;
     auto start = std::chrono::steady_clock::now();
 
-    VPTree<Eigen::Vector3d, distance> tree(points);
+    VPTree<Eigen::Vector3d, float, distance> tree(points);
     auto end = std::chrono::steady_clock::now();
     std::chrono::duration<float> diff = end - start;
     std::cout << "Process took " << diff.count() << " seconds " << std::endl;
@@ -148,7 +148,7 @@ TEST(VPTests, TestSearch) {
         point[1] = distribution(generator);
         point[2] = distribution(generator);
     }
-    /* std::vector<VPTree<Eigen::Vector3d,distance>::VPTreeSearchResultElement> results; */
+    /* std::vector<VPTree<Eigen::Vector3d, float, distance>::VPTreeSearchResultElement> results; */
     std::vector<unsigned int> indices;
     std::vector<float> distances;
     start = std::chrono::steady_clock::now();

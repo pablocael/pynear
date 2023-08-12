@@ -34,13 +34,13 @@ template <typename distance_type> class VPLevelPartition {
         // Constructs an empty level
 
         _radius = 0;
-        _indexStart = -1;
-        _indexEnd = -1;
+        _indexStart = 0;
+        _indexEnd = 0;
     }
 
     ~VPLevelPartition() { clear(); }
 
-    bool isEmpty() { return _indexStart == -1 || _indexStart == -1; }
+    bool isEmpty() { return _radius == 0; }
     unsigned int start() { return _indexStart; }
     unsigned int end() { return _indexEnd; }
     unsigned int size() { return _indexEnd - _indexStart + 1; }
@@ -125,7 +125,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 #pragma omp parallel for schedule(static, 1) num_threads(8)
 #endif
         // i should be size_t, however msvc requires signed integral loop variables (except with -openmp:llvm)
-        for (int i = 0; i < queries.size(); ++i) {
+        for (size_t i = 0; i < queries.size(); ++i) {
             const T &query = queries[i];
             std::priority_queue<VPTreeSearchElement> knnQueue;
             searchKNN(_rootPartition, query, k, knnQueue);
@@ -152,10 +152,10 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 #pragma omp parallel for schedule(static, 1) num_threads(8)
 #endif
         // i should be size_t, see above
-        for (int i = 0; i < queries.size(); ++i) {
+        for (size_t i = 0; i < queries.size(); ++i) {
             const T &query = queries[i];
             distance_type dist = 0;
-            unsigned int index = -1;
+            unsigned int index = 0;
             search1NN(_rootPartition, query, index, dist);
             distances[i] = dist;
             indices[i] = index;
@@ -208,13 +208,13 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             // Left is every one within the median distance radius
             VPLevelPartition<distance_type> *left = nullptr;
             if (start + 1 <= median) {
-                left = new VPLevelPartition<distance_type>(-1, start + 1, median);
+                left = new VPLevelPartition<distance_type>(0, start + 1, median);
                 _toSplit.push_back(left);
             }
 
             VPLevelPartition<distance_type> *right = nullptr;
             if (median + 1 <= end) {
-                right = new VPLevelPartition<distance_type>(-1, median + 1, end);
+                right = new VPLevelPartition<distance_type>(0, median + 1, end);
                 _toSplit.push_back(right);
             }
 
@@ -231,7 +231,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
     };
 
     void exaustivePartitionSearch(VPLevelPartition<distance_type> *partition, const T &val, unsigned int k, std::priority_queue<VPTreeSearchElement> &knnQueue, distance_type tau) {
-        for (int i = partition->start(); i <= partition->end(); ++i) {
+        for (unsigned int i = partition->start(); i <= partition->end(); ++i) {
 
             auto dist = distance(val, _examples[i].val);
             if (dist < tau || knnQueue.size() < k) {
@@ -342,7 +342,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
     void search1NN(VPLevelPartition<distance_type> *partition, const T &val, unsigned int &resultIndex, distance_type &resultDist) {
 
         resultDist = std::numeric_limits<distance_type>::max();
-        resultIndex = -1;
+        resultIndex = 0;
 
         std::vector<std::tuple<distance_type, VPLevelPartition<distance_type> *>> toSearch = {{-1, partition}};
 
