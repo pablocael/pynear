@@ -32,9 +32,9 @@ def test_binary_serialization():
     num_points = 20000
     dimension = 8
     num_queries = 2
-    data = np.random.rand(num_points, dimension).astype(dtype=np.uint64)
+    data = np.random.rand(num_points, dimension).astype(dtype=np.uint8)
 
-    queries = np.random.rand(num_queries, dimension).astype(dtype=np.uint64)
+    queries = np.random.rand(num_queries, dimension).astype(dtype=np.uint8)
 
     vptree = pyvptree.VPTreeBinaryIndex()
     vptree.set(data)
@@ -48,4 +48,5 @@ def test_binary_serialization():
     assert data == recovered_data
 
     vptree_indices_rec, vptree_distances_rec = recovered.search1NN(queries)
+    assert vptree_distances_rec == vptree_distances
 
