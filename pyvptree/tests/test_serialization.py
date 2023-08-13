@@ -16,6 +16,7 @@ def test_empty_index_serialization():
     data_rec = pickle.dumps(recovered)
     assert data_rec == data
 
+
 def test_basic_serialization():
     np.random.seed(seed=42)
 
