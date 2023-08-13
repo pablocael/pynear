@@ -13,27 +13,50 @@ logger = create_and_configure_log(__name__)
 
 
 @dataclass
-class ComparatorBenchmarkCase:
+class BenchmarkCase:
+    """
+    - name: "Pyvptree Indexes Comparison"
+      k: [2, 4, 8]
+      num_queries: [16, 32, 128]
+      dataset:
+      - total_size: 2500000
+      - num_clusters: 50
+      index_types:
+      - VPTreeL2Index
+      - VPTreeBinaryIndex
+      - VPTreeChebyshevIndex
+      - VPTreeL1Index # (manhattan distance)
+    """
+
+    name: str
+
     # list of test case K values (how many neighbors to search)
     # each case will result in multiple tests, one for each k value
     ks: List[int]
+    num_queries: List[int]
+    index_types: List[str]
 
-    # the data to use in the test case
-    dataset: BenchmarkDataset
+    dataset_total_size: int
+    num_clusters: int
 
     # the random seed for reproducibility
     seed: int = 12246
 
+    def id(self):
+        # return name in a dns compatible format
+        return self.name.replace(" ", "-").lower()
+
     def __str__(self):
-        return f"{self.dataset.name()}-k={self.ks}"
+        return f"{self.id()}: ks={self.ks}, num_queries={self.num_queries}, index_types={self.index_types}, dataset_total_size={self.dataset_total_size}, num_clusters={self.num_clusters}, seed={self.seed}"
 
 
-class ComparatorBenchmark:
+
+class Benchmark:
     """
     A generic benchmark build helper class to automate benchmark generation.
     """
 
-    def __init__(self, benchmark_cases: List[ComparatorBenchmarkCase]):
+    def __init__(self, benchmark_yaml_file: str):
         """
         Build a benchmark comparator between pyvptree and faiss.
 
@@ -43,14 +66,26 @@ class ComparatorBenchmark:
         self._benchmark_cases = benchmark_cases
         self._results = pd.DataFrame()
 
-    def run(self):
 
+    def read_cases_from_yaml(self, yaml_file: str):
+        """
+        Read benchmark cases from a yaml file.
+
+        Args:
+            yaml_file (str): the yaml file to read from.
+        """
+        with open(yaml_file, "r") as stream:
+            try:
+                benchmark_configs = yaml.safe_load(stream)
+            except yaml.YAMLError as exc:
+                print(exc)
+                sys.exit(1)
+    def run(self):
         num_cases = len(self._benchmark_cases)
         logger.info(f"start running benchmark for {num_cases} cases ...")
 
         results = []
         for case in self._benchmark_cases:
-
             logger.info("***** begin case *****\n")
             start_case = time.time()
             logger.info(f"starting case {str(case)} ...")
@@ -68,7 +103,6 @@ class ComparatorBenchmark:
             pyvptree_index = self._generate_pyvptree_index(train, case.dataset._pyvpindex_type)
             logger.info(f"done, pyvptree index took {time.time()-start:0.3f} seconds... ")
             for k in case.ks:
-
                 logger.info("searching into faiss index ... ")
                 start = time.time()
                 self._search_knn_faiss(faiss_index, test, k)
@@ -83,15 +117,17 @@ class ComparatorBenchmark:
                 pyvptree_time = end - start
                 logger.info(f"pyvptree search for k = {k} took {pyvptree_time:0.3f} seconds... ")
 
-                results.append({
-                    "k": k,
-                    "dimension": case.dataset.dimension(),
-                    "size": case.dataset.size(),
-                    "index_type": case.dataset.index_type().__name__,
-                    "query_size": test.shape[0],
-                    "faiss_time": faiss_time,
-                    "pyvptree_time": pyvptree_time
-                })
+                results.append(
+                    {
+                        "k": k,
+                        "dimension": case.dataset.dimension(),
+                        "size": case.dataset.size(),
+                        "index_type": case.dataset.index_type().__name__,
+                        "query_size": test.shape[0],
+                        "faiss_time": faiss_time,
+                        "pyvptree_time": pyvptree_time,
+                    }
+                )
 
                 if case.dataset.index_type() == pyvptree.VPTreeL2Index:
                     start = time.time()
@@ -118,49 +154,10 @@ class ComparatorBenchmark:
     def result(self) -> pd.DataFrame:
         return self._results
 
-    def _split_test_train_case(self, dataset: BenchmarkDataset):
-
-        n_test = 8  # perform 8 queries for test and rest for train
+    def _split_test_train_case(self, dataset: BenchmarkDataset, num_queries: int = 8) -> Tuple[np.ndarray, np.ndarray]:
+        n_test = num_queries  # perform 8 queries for test and rest for train
         data: np.ndarray = dataset.data()
         np.random.shuffle(data)
         n = dataset.size()
         n_train = n - n_test
         return data[0:n_train, :], data[n_train:, :]
-
-    def _generate_faiss_index(self, features: np.ndarray, index_type: Any):
-
-        d = features.shape[1]
-        faiss_index = faiss.IndexFlatL2(d)
-        if index_type == pyvptree.VPTreeBinaryIndex:
-            d = features.shape[1] * 8
-            quantizer = faiss.IndexBinaryFlat(d)
-
-            # Number of clusters.
-            nlist = int(np.sqrt(features.shape[0]))
-
-            faiss_index = faiss.IndexBinaryIVF(quantizer, d, nlist)
-            faiss_index.nprobe = d  # Number of nearest clusters to be searched per query.
-            faiss_index.train(features)
-
-        faiss_index.add(features)
-        return faiss_index
-
-    def _generate_sklearn_index(self, features: np.ndarray, k):
-        # only for L2 distances
-        return NearestNeighbors(n_neighbors=k, algorithm='kd_tree').fit(features)
-
-    def _generate_pyvptree_index(self, features: np.ndarray, index_type: Any):
-        vptree_index = pyvptree.VPTreeL2Index()
-        if index_type == pyvptree.VPTreeBinaryIndex:
-            vptree_index = pyvptree.VPTreeBinaryIndex()
-        vptree_index.set(features)
-        return vptree_index
-
-    def _search_knn_faiss(self, index, query_features, k=1):
-        return index.search(query_features, k=k)
-
-    def _search_knn_pyvptree(self, index, query_features, k=1):
-        return index.searchKNN(query_features, k)
-
-    def _search_knn_sklearn(self, index, query_features):
-        return index.kneighbors(query_features)

@@ -1,4 +1,5 @@
 import os
+import sys
 import argparse
 from pyvptree.logging import create_and_configure_log
 
@@ -10,6 +11,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
 import pandas as pd
 import seaborn as sns
+import yaml
 
 logger = create_and_configure_log(__name__)
 
@@ -55,8 +57,24 @@ def main():
         help="The maximum dimensionality of the data to generate the benchmarks",
         required=False,
     )
+    parser.add_argument(
+        "--config-file",
+        default="benchmark_config.yaml",
+        type=str,
+        help="The maximum dimensionality of the data to generate the benchmarks",
+        required=False,
+    )
 
     args = parser.parse_args()
+
+    benchmark_configs = None
+    with open(args.config_file, "r") as stream:
+        try:
+            benchmark_configs = yaml.safe_load(stream)
+        except yaml.YAMLError as exc:
+            print(exc)
+            sys.exit(1)
+
 
     min_dim = args.min_dimension
     max_dim = args.max_dimension
