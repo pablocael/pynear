@@ -10,7 +10,19 @@ find_package(PythonLibs REQUIRED)
 find_package(pybind11 REQUIRED)
 find_package(OpenMP)
 
-set(DEFAULT_BUILD_TYPE "Release")
+set(DEFAULT_BUILD_TYPE "Debug")
+
+if(WIN32)
+    SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} /Wall /arch:AVX /openmp")
+    SET(CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} /LTCG")
+else()
+    SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -flto -Wall -march=native -mavx -fopenmp")
+    if(APPLE)
+        SET(CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} -fopenmp -lomp")
+    else()
+        SET(CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} -fopenmp -lgomp")
+    endif()
+endif(WIN32)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   message(STATUS "Setting build type to '${DEFAULT_BUILD_TYPE}' as none was specified.")
@@ -32,7 +44,7 @@ target_include_directories(${PROJECT_NAME} INTERFACE
 set_target_properties(${PROJECT_NAME} PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION 1)
-set_target_properties(${PROJECT_NAME} PROPERTIES PUBLIC_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/include/VPTree.hpp", "${CMAKE_CURRENT_SOURCE_DIR}/include/DistanceFunctions.hpp")
+set_target_properties(${PROJECT_NAME} PROPERTIES PUBLIC_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/include/VPTree.hpp ${CMAKE_CURRENT_SOURCE_DIR}/include/DistanceFunctions.hpp")
 
 set(CONFIG_NAME ${PROJECT_NAME}Config)
 

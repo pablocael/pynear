@@ -9,8 +9,13 @@
 #include <random>
 #include <vector>
 
-#include <nmmintrin.h>
 #include <stdint.h>
+
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
+#include <nmmintrin.h>
+#endif
 
 using namespace testing;
 
@@ -27,17 +32,15 @@ float distance(const Eigen::Vector3d &v1, const Eigen::Vector3d &v2) { return (v
 /*     return  cnt; */
 /* } */
 
-inline int pop_count(uint64_t x, uint64_t y) { return __builtin_popcountll(x ^ y); }
-
-float distHamming(const std::vector<unsigned char> &p1, const std::vector<unsigned char> &p2) {
+int64_t dist_hamming(const std::vector<unsigned char> &p1, const std::vector<unsigned char> &p2) {
 
     // assume v1 and v2 sizes are multiple of 8
     // assume 32 bytes for now
-    float result = 0;
+    int64_t result = 0;
     const uint64_t *a = (reinterpret_cast<const uint64_t *>(&p1[0]));
     const uint64_t *b = (reinterpret_cast<const uint64_t *>(&p2[0]));
-    for (size_t i = 0; i < p1.size() / sizeof(uint64_t); i++) {
-        result += pop_count(a[i], b[i]);
+    for (int i = 0; i < p1.size() / sizeof(uint64_t); i++) {
+        result += _mm_popcnt_u64(a[i] ^ b[i]);
     }
     return result;
 }
@@ -48,7 +51,7 @@ TEST(VPTests, TestHamming) {
     std::vector<unsigned char> b1 = {255, 255, 255, 255, 255, 255, 255, 255};
     std::vector<unsigned char> b2 = {255, 255, 255, 255, 255, 255, 255, 255};
 
-    EXPECT_TRUE(distHamming(b1, b2) == 0.0);
+    EXPECT_EQ(dist_hamming(b1, b2), 0);
 
     std::vector<unsigned char> b12 = {1,   255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
                                       255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255};
@@ -56,7 +59,7 @@ TEST(VPTests, TestHamming) {
     std::vector<unsigned char> b22 = {2,   255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
                                       255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255};
 
-    EXPECT_TRUE(distHamming(b12, b22) == 2.0);
+    EXPECT_EQ(dist_hamming(b12, b22), 2);
 
     std::vector<unsigned char> b13 = {255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
                                       255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255};
@@ -64,32 +67,32 @@ TEST(VPTests, TestHamming) {
     std::vector<unsigned char> b23 = {0,   255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
                                       255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255};
 
-    EXPECT_TRUE(distHamming(b13, b23) == 8);
+    EXPECT_EQ(dist_hamming(b13, b23), 8);
 
     std::vector<unsigned char> b14 = {255, 255, 255, 255, 255, 253, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
                                       255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255};
 
     std::vector<unsigned char> b24 = {0,   255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
                                       255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255};
-    EXPECT_TRUE(distHamming(b14, b24) == 9.0);
+    EXPECT_EQ(dist_hamming(b14, b24), 9);
 
     std::vector<unsigned char> b15 = {255, 255, 255, 255, 255, 253, 255, 9,   255, 255, 255, 255, 255, 255, 255, 255,
                                       255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255};
     std::vector<unsigned char> b25 = {0,   255, 255, 255, 255, 255, 255, 0,   255, 255, 255, 255, 255, 255, 255, 255,
                                       255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255};
-    EXPECT_TRUE(distHamming(b15, b25) == 11.0);
+    EXPECT_EQ(dist_hamming(b15, b25), 11);
 
     std::vector<unsigned char> b16 = {255, 255, 255, 255, 255, 253, 255, 9,   255, 255, 255, 255, 255, 255, 255, 255,
                                       255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255};
     std::vector<unsigned char> b26 = {0,   255, 255, 255, 255, 255, 255, 0,   255, 255, 255, 255, 255, 255, 255, 255,
                                       255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255};
-    EXPECT_TRUE(distHamming(b16, b26) == distHamming(b26, b16));
+    EXPECT_EQ(dist_hamming(b16, b26), dist_hamming(b26, b16));
 
     std::vector<unsigned char> b17 = {255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
                                       255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255};
 
     std::vector<unsigned char> b27 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    EXPECT_TRUE(distHamming(b17, b27) == 256);
+    EXPECT_EQ(dist_hamming(b17, b27), 256);
 }
 
 TEST(VPTests, TestCreation) {

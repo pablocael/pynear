@@ -72,11 +72,44 @@ To customize or regenerate the benchmarks as well as to see other benchmark resu
 
 # Development
 
-## Running tests
+## Running Python Tests
 
 ```
 make test
 ```
+
+## Debugging and Running C++ Code on Unix
+
+For debugging and running C++ code independently from python module, CMake config files are provided in pyvptree/CMakeLists.txt.
+For building and running C++ tests run:
+
+```
+make cpp-test
+
+```
+
+Since tests are built in Debug mode (default CMakeLists build mode), one can debug tests with gdb using built test binary:
+
+```
+gdb ./build/tests/vptree-tests
+```
+
+## Debugging and Running C++ Code on Windows
+
+Install CMake (for example `py -m pip install cmake`) and pybind11 (`py -m pip install pybind11`).
+
+```batch
+mkdir build
+cd build
+cmake ..\pyvptree
+```
+
+You may have to specify some arguments like the correct generator `-G "Visual Studio 15 2017 Win64"`
+or paths for Python `-DPYTHON_EXECUTABLE="C:\Program Files\Python38\python.exe"`
+and pybind11 `-Dpybind11_DIR="C:\Program Files\Python38\Lib\site-packages\pybind11\share\cmake\pybind11"`
+for CMake to work correctly.
+
+Build generated files using Visual Studio (or whichever generator you chose) and run `vptree-tests.exe`.
 
 ## Formating code
 
