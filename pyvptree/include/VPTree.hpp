@@ -232,7 +232,8 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         bool operator<(const VPTreeSearchElement &v) const { return dist < v.dist; }
     };
 
-    void exaustivePartitionSearch(VPLevelPartition<distance_type> *partition, const T &val, unsigned int k, std::priority_queue<VPTreeSearchElement> &knnQueue, distance_type tau) {
+    void exaustivePartitionSearch(VPLevelPartition<distance_type> *partition, const T &val, unsigned int k,
+                                  std::priority_queue<VPTreeSearchElement> &knnQueue, distance_type tau) {
         for (unsigned int i = partition->start(); i <= partition->end(); ++i) {
 
             auto dist = distance(val, _examples[i].val);
