@@ -3,6 +3,20 @@ import pickle
 import pyvptree
 
 
+def test_empty_index_serialization():
+    vptree = pyvptree.VPTreeL2Index()
+    data = pickle.dumps(vptree)
+    recovered = pickle.loads(data)
+    data_rec = pickle.dumps(recovered)
+    assert data_rec == data
+
+    vptree = pyvptree.VPTreeBinaryIndex()
+    data = pickle.dumps(vptree)
+    recovered = pickle.loads(data)
+    data_rec = pickle.dumps(recovered)
+    assert data_rec == data
+
+
 def test_basic_serialization():
     np.random.seed(seed=42)
 
