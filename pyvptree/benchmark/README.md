@@ -26,18 +26,18 @@ Benchmarks for K=16 are displayed below:
 
 ## 2 to 10 dimensions Range
 
-![k=16, L2 index](docs/img/from_2_to_10/VPTreeL2Index_k_16.png "K=16, L2 index")
+![k=16, L2 index](../../docs/img/from_2_to_10/VPTreeL2Index_k_16.png "K=16, L2 index")
 
 ## 11 to 16 dimensions Range
 
-![k=16, L2 index](docs/img/from_11_to_16/VPTreeL2Index_k_16.png "K=16, L2 index")
+![k=16, L2 index](../../docs/img/from_11_to_16/VPTreeL2Index_k_16.png "K=16, L2 index")
 
 ## 17 to 32 dimensions Range
-![k=16, L2 index](docs/img/from_17_to_32/VPTreeL2Index_k_16.png "K=16, L2 index")
+![k=16, L2 index](../../docs/img/from_17_to_32/VPTreeL2Index_k_16.png "K=16, L2 index")
 
 ## 33 to 48 dimensions Range
 
-![k=16, L2 index](docs/img/from_33_to_48/VPTreeL2Index_k_16.png "K=16, L2 index")
+![k=16, L2 index](../../docs/img/from_33_to_48/VPTreeL2Index_k_16.png "K=16, L2 index")
 
 The graphs below include K values of 1, 2, 4, 8 and 16:
 
