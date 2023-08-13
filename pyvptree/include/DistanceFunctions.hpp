@@ -81,8 +81,8 @@ template <> int64_t hamming_u64<256>(const uint64_t *pa, const uint64_t *pb) {
 }
 
 template <> int64_t hamming_u64<512>(const uint64_t *pa, const uint64_t *pb) {
-    return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]) + _mm_popcnt_u64(pa[2] ^ pb[2]) + _mm_popcnt_u64(pa[3] ^ pb[3]) + 
-        _mm_popcnt_u64(pa[4] ^ pb[4]) + _mm_popcnt_u64(pa[5] ^ pb[5]) + _mm_popcnt_u64(pa[6] ^ pb[6]) + _mm_popcnt_u64(pa[7] ^ pb[7]);
+    return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]) + _mm_popcnt_u64(pa[2] ^ pb[2]) + _mm_popcnt_u64(pa[3] ^ pb[3]) +
+           _mm_popcnt_u64(pa[4] ^ pb[4]) + _mm_popcnt_u64(pa[5] ^ pb[5]) + _mm_popcnt_u64(pa[6] ^ pb[6]) + _mm_popcnt_u64(pa[7] ^ pb[7]);
 }
 
 inline float sum8(__m256 x) {
