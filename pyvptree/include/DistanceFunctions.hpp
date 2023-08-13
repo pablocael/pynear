@@ -6,12 +6,12 @@
 #include <nmmintrin.h>
 #endif
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <immintrin.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <algorithm>
 
 using arrayd = std::vector<double>;
 using arrayf = std::vector<float>;
