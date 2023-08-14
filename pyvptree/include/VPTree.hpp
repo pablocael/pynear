@@ -200,6 +200,11 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
     }
 
     VPTree(const std::vector<T> &array) {
+        set(array);
+    
+    }
+
+    void set(const std::vector<T> &array) {
         clear();
 
         _examples.reserve(array.size());
@@ -271,6 +276,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             delete _rootPartition;
             _rootPartition = nullptr;
         }
+        clear();
         if (state.data.empty()) {
             return;
         }
