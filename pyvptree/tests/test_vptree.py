@@ -33,6 +33,26 @@ def chebyshev_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.max(np.abs(diff), axis=-1)
 
 
+def test_empty_index():
+    try:
+        vptree = pyvptree.VPTreeBinaryIndex()
+        i, d = vptree.search1NN(np.random.rand(1, 8).astype(dtype=np.uint8))
+        # expect exception and should now reach this line
+        # since index is empty, we should not be able to search
+        assert False
+    except Exception:
+        pass
+
+    try:
+        vptree = pyvptree.VPTreeL2Index()
+        i, d = vptree.search1NN(np.random.rand(1, 8).astype(dtype=np.uint8))
+        # expect exception and should now reach this line
+        # since index is empty, we should not be able to search
+        assert False
+    except Exception:
+        pass
+
+
 def test_hamming():
 
     def hamming_distance(a, b) -> np.ndarray:
