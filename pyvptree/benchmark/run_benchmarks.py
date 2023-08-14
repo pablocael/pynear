@@ -15,9 +15,8 @@ import yaml
 logger = create_and_configure_log(__name__)
 
 
-def create_performance_plot(result: pd.DataFrame, output_folder: str):
+def create_performance_plot(result: pd.DataFrame, case_name: str, output_folder: str):
 
-    plt.clf()
     groups = result.groupby("k")
 
     for k, group in groups:
@@ -28,12 +27,13 @@ def create_performance_plot(result: pd.DataFrame, output_folder: str):
             # resetting index before melting to save the current index in 'index' column...
             plt.plot([str(v) for v in df["dimension"]], df["time"], label=index_type, marker='o')
             data_size = df.iloc[0]["dataset_total_size"]
-            query_size = df.iloc[0]["num_queries"] 
-            plt.title(f"Data Dimensions x Query Time\ndata_size={data_size}), k={k}\nquery_size={query_size})")
+            query_size = df.iloc[0]["num_queries"]
+            plt.title(f"{case_name}\nData Dimensions x Query Time\ndata_size={data_size}), k={k}\nquery_size={query_size})")
             plt.legend(loc='upper center')
 
         plt.tight_layout()
-        plt.savefig(os.path.join(output_folder, f"result_{k}.png"))
+        plt.savefig(os.path.join(output_folder, f"result_k={k}.png"))
+        plt.clf()
 
 
 def main():
@@ -54,11 +54,12 @@ def main():
     print("start running benchmarks... ")
 
     for result in runner.run():
-        case = result["benchmark_case"]
+        case_id = result["benchmark_case_id"]
+        case_name = result["benchmark_case_name"]
         case_results = result["results"]
-        dir_name = f"./results/{case.id()}"
+        dir_name = f"./results/{case_id}"
         os.makedirs(dir_name, exist_ok=True)
-        create_performance_plot(pd.DataFrame(case_results), dir_name)
+        create_performance_plot(pd.DataFrame(case_results), case_name, dir_name)
 
     print("benchmarks done.")
     print("result images written to ./results folder")

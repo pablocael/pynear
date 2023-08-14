@@ -13,6 +13,7 @@ from pyvptree.benchmark.index_adapters import create_index_adapter
 
 logger = create_and_configure_log(__name__)
 
+
 @dataclass
 class BenchmarkCase:
     """
@@ -49,27 +50,27 @@ class BenchmarkCase:
                     logger.info(f"buiding index ...")
                     index.build_index(data)
                     logger.info(f"buiding index done")
-                    logger.info(f"start performing queries")
+                    logger.info("start performing queries")
                     for num_queries in self.num_queries:
+                        logger.info(f"start performing queries (num_queries = {num_queries})")
                         query = generate_gaussian_dataset(
                             num_queries,
-                            1, 
+                            1,
                             dimension,
                             data_type=np.dtype(self.dataset_type),
                         )
-                        results.append(
-                            {
-                                "time": index.clock_search(query, k_value),
-                                "k": k_value,
-                                "num_queries": num_queries,
-                                "index_type": index_type,
-                                "dimension": dimension,
-                                "dataset_total_size": self.dataset_total_size,
-                                "dataset_num_clusters": self.dataset_num_clusters,
-                            }
-                        )
+                        results.append({
+                            "time": index.clock_search(query, k_value),
+                            "k": k_value,
+                            "num_queries": num_queries,
+                            "index_type": index_type,
+                            "dimension": dimension,
+                            "dataset_total_size": self.dataset_total_size,
+                            "dataset_num_clusters": self.dataset_num_clusters,
+                        })
+                        logger.info(f"done performing queries for (num_queries = {num_queries})")
                     logger.info(f"queries done")
-        return { "benchmark_case": self, "results": results }
+        return {"benchmark_case_id": self.id(), "benchmark_case_name": self.name, "results": results}
 
     # the random seed for reproducibility
     seed: int = 12246
@@ -125,4 +126,3 @@ class BenchmarkRunner:
             case_result = case.run()
             logger.info(f"******* end case {case.name} *****\n")
             yield case_result
-

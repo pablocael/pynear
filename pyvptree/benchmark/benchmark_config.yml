@@ -6,7 +6,7 @@ benchmark:
   - name: "Pyvptree L2 Indexes Comparison"
     k: [2, 4, 8]
     num_queries: [8]
-    dimensions: [2, 4, 8, 16]
+    dimensions: [2, 3, 4, 5, 6, 7, 8, 16]
     dataset_total_size: 2500000
     dataset_num_clusters: 50
     dataset_type: "float32" # can be any numpy type as string. Default is float32
@@ -17,7 +17,7 @@ benchmark:
   - name: "L2 Comparison Low Dimensionality"
     k: [8]
     num_queries: [16]
-    dimensions: [2, 4, 8, 16]
+    dimensions: [2, 3, 4, 5, 6, 7, 8, 16]
     dataset_total_size: 2500000
     dataset_num_clusters: 50
     dataset_type: "float32"
@@ -52,7 +52,7 @@ benchmark:
   - name: "Manhattan Index Comparison"
     k: [8]
     num_queries: [16]
-    dimensions: [2, 4, 8, 16]
+    dimensions: [2, 3, 4, 5, 6, 7, 8, 16]
     dataset_total_size: 2500000
     dataset_num_clusters: 50
     index_types:

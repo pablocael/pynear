@@ -29,8 +29,10 @@ def create_index_adapter(index_name: str):
 
     return mapper[index_name]()
 
+
 # Supported 3rd party indices are: FaissIndexFlatL2, FaissIndexBinaryFlat, AnnoyL2, AnnoyManhattan, AnnoyHamming, SKLearnL2
 class IndexAdapter(ABC):
+
     @abstractmethod
     def build_index(self, data: np.ndarray):
         pass
@@ -46,6 +48,7 @@ class IndexAdapter(ABC):
     @abstractmethod
     def _search_implementation(self, query, k: int):
         pass
+
 
 class PyVPtreeAdapter(IndexAdapter):
 
@@ -66,7 +69,9 @@ class PyVPtreeAdapter(IndexAdapter):
     def _search_implementation(self, query, k: int):
         self._index.searchKNN(query, k)
 
+
 class FaissIndexFlatL2Adapter(IndexAdapter):
+
     def __init__(self):
         self._index = None
 
@@ -80,6 +85,7 @@ class FaissIndexFlatL2Adapter(IndexAdapter):
 
 
 class FaissIndexBinaryFlatAdapter(IndexAdapter):
+
     def __init__(self):
         self._index = None
 
@@ -91,7 +97,9 @@ class FaissIndexBinaryFlatAdapter(IndexAdapter):
     def _search_implementation(self, query, k: int):
         self._index.search(query, k=k)
 
+
 class AnnoyL2Adapter(IndexAdapter):
+
     def __init__(self):
         self._index = None
         pass
@@ -107,7 +115,9 @@ class AnnoyL2Adapter(IndexAdapter):
         for v in query:
             self._index.get_nns_by_vector(v, k)
 
+
 class AnnoyManhattanAdapter(IndexAdapter):
+
     def __init__(self):
         self._index = None
 
@@ -120,7 +130,9 @@ class AnnoyManhattanAdapter(IndexAdapter):
         for v in query:
             self._index.get_nns_by_vector(v, k)
 
+
 class AnnoyHammingAdapter(IndexAdapter):
+
     def __init__(self):
         self._index = None
 
@@ -135,7 +147,9 @@ class AnnoyHammingAdapter(IndexAdapter):
         for v in query:
             self._index.get_nns_by_vector(v, k)
 
+
 class SKLearnL2Adapter(IndexAdapter):
+
     def __init__(self):
         self._index = None
 
