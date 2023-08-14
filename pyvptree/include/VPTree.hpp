@@ -211,6 +211,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         build(_examples);
     }
 
+    bool isEmpty() { return _rootPartition == nullptr; }
     SerializedState serialize() const override {
         if (_rootPartition == nullptr) {
             return SerializedState();
