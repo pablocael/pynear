@@ -28,7 +28,7 @@ template <distance_func_f distance> class VPTreeNumpyAdapter {
         tree.set(array);
     }
 
-    std::tuple<std::vector<std::vector<unsigned int>>, std::vector<std::vector<float>>> searchKNN(const ndarrayf &queries, unsigned int k) {
+    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<float>>> searchKNN(const ndarrayf &queries, unsigned int k) {
 
         if (tree.isEmpty()) {
             throw std::runtime_error("indices must be first initialized with .set function");
@@ -37,7 +37,7 @@ template <distance_func_f distance> class VPTreeNumpyAdapter {
         std::vector<typename vptree::VPTree<arrayf, float, distance>::VPTreeSearchResultElement> results;
         tree.searchKNN(queries, k, results);
 
-        std::vector<std::vector<unsigned int>> indexes;
+        std::vector<std::vector<int64_t>> indexes;
         std::vector<std::vector<float>> distances;
         indexes.resize(results.size());
         distances.resize(results.size());
@@ -49,13 +49,13 @@ template <distance_func_f distance> class VPTreeNumpyAdapter {
         return std::make_tuple(indexes, distances);
     }
 
-    std::tuple<std::vector<unsigned int>, std::vector<float>> search1NN(const ndarrayf &queries) {
+    std::tuple<std::vector<int64_t>, std::vector<float>> search1NN(const ndarrayf &queries) {
 
         if (tree.isEmpty()) {
             throw std::runtime_error("indices must be first initialized with .set function");
         }
 
-        std::vector<unsigned int> indices;
+        std::vector<int64_t> indices;
         std::vector<float> distances;
         tree.search1NN(queries, indices, distances);
 
@@ -73,7 +73,7 @@ class VPTreeBinaryNumpyAdapter {
         tree.set(array);
     }
 
-    std::tuple<std::vector<std::vector<unsigned int>>, std::vector<std::vector<int64_t>>> searchKNN(const ndarrayli &queries, unsigned int k) {
+    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<int64_t>>> searchKNN(const ndarrayli &queries, unsigned int k) {
         if (tree.isEmpty()) {
             throw std::runtime_error("indices must be first initialized with .set function");
         }
@@ -81,7 +81,7 @@ class VPTreeBinaryNumpyAdapter {
         std::vector<vptree::VPTree<arrayli, int64_t, dist_hamming>::VPTreeSearchResultElement> results;
         tree.searchKNN(queries, k, results);
 
-        std::vector<std::vector<unsigned int>> indexes;
+        std::vector<std::vector<int64_t>> indexes;
         std::vector<std::vector<int64_t>> distances;
         indexes.resize(results.size());
         distances.resize(results.size());
@@ -92,12 +92,12 @@ class VPTreeBinaryNumpyAdapter {
         return std::make_tuple(indexes, distances);
     }
 
-    std::tuple<std::vector<unsigned int>, std::vector<int64_t>> search1NN(const ndarrayli &queries) {
+    std::tuple<std::vector<int64_t>, std::vector<int64_t>> search1NN(const ndarrayli &queries) {
         if (tree.isEmpty()) {
             throw std::runtime_error("indices must be first initialized with .set function");
         }
 
-        std::vector<unsigned int> indices;
+        std::vector<int64_t> indices;
         std::vector<int64_t> distances;
         tree.search1NN(queries, indices, distances);
 

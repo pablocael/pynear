@@ -31,17 +31,17 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
     struct VPTreeElement {
 
         VPTreeElement() = default;
-        VPTreeElement(unsigned int index, const T &value) {
+        VPTreeElement(int64_t index, const T &value) {
             originalIndex = index;
             val = value;
         }
 
-        unsigned int originalIndex;
+        int64_t originalIndex;
         T val;
     };
 
     struct VPTreeSearchResultElement {
-        std::vector<unsigned int> indexes;
+        std::vector<int64_t> indexes;
         std::vector<distance_type> distances;
     };
 
@@ -93,8 +93,8 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             // _examples[0] is an array of some type (variable)
             num_elements_per_example = _examples[0].val.size();
             element_size = sizeof(_examples[0].val[0]);
-            size_t total_elements_size = num_elements_per_example * element_size;
-            total_size += _examples.size() * (sizeof(unsigned int) + total_elements_size);
+            int64_t total_elements_size = num_elements_per_example * element_size;
+            total_size += _examples.size() * (sizeof(int64_t) + total_elements_size);
         }
 
         SerializedState state;
@@ -111,8 +111,8 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         p_buffer += sizeof(size_t);
 
         for (const VPTreeElement &elem : _examples) {
-            *((unsigned int *)p_buffer) = elem.originalIndex;
-            p_buffer += sizeof(unsigned int);
+            *((int64_t *)p_buffer) = elem.originalIndex;
+            p_buffer += sizeof(int64_t);
 
             for (size_t i = 0; i < num_elements_per_example; ++i) {
                 // since we dont know the sub element type of T (T is an array of something)
@@ -160,8 +160,8 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         _examples.reserve(num_examples);
         _examples.resize(num_examples);
         for (size_t i = 0; i < num_examples; ++i) {
-            unsigned int originalIndex = *((unsigned int *)(p_buffer));
-            p_buffer += sizeof(unsigned int);
+            int64_t originalIndex = *((int64_t *)(p_buffer));
+            p_buffer += sizeof(int64_t);
 
             auto &example = _examples[i];
             example.originalIndex = originalIndex;
@@ -198,14 +198,14 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             searchKNN(_rootPartition, query, k, knnQueue);
 
             // we must always return k elements for each search unless there is no k elements
-            assert(static_cast<unsigned int>(knnQueue.size()) == std::min<unsigned int>(_examples.size(), k));
+            assert(static_cast<size_t>(knnQueue.size()) == std::min<size_t>(_examples.size(), k));
 
             fillSearchResult(knnQueue, results[i]);
         }
     }
 
     // An optimized version for 1 NN search
-    void search1NN(const std::vector<T> &queries, std::vector<unsigned int> &indices, std::vector<distance_type> &distances) {
+    void search1NN(const std::vector<T> &queries, std::vector<int64_t> &indices, std::vector<distance_type> &distances) {
 
         if (_rootPartition == nullptr) {
             return;
@@ -222,7 +222,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         for (int i = 0; i < queries.size(); ++i) {
             const T &query = queries[i];
             distance_type dist = 0;
-            unsigned int index = -1;
+            int64_t index = -1;
             search1NN(_rootPartition, query, index, dist);
             distances[i] = dist;
             indices[i] = index;
@@ -248,8 +248,8 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             VPLevelPartition<distance_type> *current = _toSplit.back();
             _toSplit.pop_back();
 
-            unsigned int start = current->start();
-            unsigned int end = current->end();
+            int64_t start = current->start();
+            int64_t end = current->end();
 
             if (start == end) {
                 // stop dividing if there is only one point inside
@@ -261,7 +261,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             // put vantage point as the first element within the examples list
             std::swap(_examples[vpIndex], _examples[start]);
 
-            unsigned int median = (end + start) / 2;
+            int64_t median = (end + start) / 2;
 
             // partition in order to keep all elements smaller than median in the left and larger in the right
             std::nth_element(_examples.begin() + start + 1, _examples.begin() + median, _examples.begin() + end + 1,
@@ -307,7 +307,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
                 if (knnQueue.size() == k) {
                     knnQueue.pop();
                 }
-                unsigned int indexToAdd = _examples[i].originalIndex;
+                int64_t indexToAdd = _examples[i].originalIndex;
                 knnQueue.push(VPTreeSearchElement(indexToAdd, dist));
 
                 tau = knnQueue.top().dist;
@@ -334,7 +334,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
                 if (knnQueue.size() == k) {
                     knnQueue.pop();
                 }
-                unsigned int indexToAdd = _examples[current->start()].originalIndex;
+                int64_t indexToAdd = _examples[current->start()].originalIndex;
                 knnQueue.push(VPTreeSearchElement(indexToAdd, dist));
 
                 tau = knnQueue.top().dist;
@@ -346,7 +346,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
                 continue;
             }
 
-            unsigned int neighborsSoFar = knnQueue.size();
+            size_t neighborsSoFar = knnQueue.size();
             if (dist > current->radius()) {
                 // must search outside
 
@@ -365,7 +365,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
                 */
                 if (current->left() != nullptr) {
 
-                    unsigned int rightPartitionSize = (current->right() != nullptr) ? current->right()->size() : 0;
+                    size_t rightPartitionSize = (current->right() != nullptr) ? current->right()->size() : 0;
                     bool notEnoughPointsOutside = rightPartitionSize < (k - neighborsSoFar);
                     auto toBorder = dist - current->radius();
 
@@ -388,7 +388,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 
                 if (current->right() != nullptr) {
 
-                    unsigned int leftPartitionSize = (current->left() != nullptr) ? current->left()->size() : 0;
+                    size_t leftPartitionSize = (current->left() != nullptr) ? current->left()->size() : 0;
                     bool notEnoughPointsInside = leftPartitionSize < (k - neighborsSoFar);
                     auto toBorder = current->radius() - dist;
 
@@ -407,7 +407,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         }
     }
 
-    void search1NN(VPLevelPartition<distance_type> *partition, const T &val, unsigned int &resultIndex, distance_type &resultDist) {
+    void search1NN(VPLevelPartition<distance_type> *partition, const T &val, int64_t &resultIndex, distance_type &resultDist) {
 
         resultDist = std::numeric_limits<distance_type>::max();
         resultIndex = -1;
@@ -457,7 +457,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         }
     }
 
-    unsigned int selectVantagePoint(unsigned int fromIndex, unsigned int toIndex) {
+    int64_t selectVantagePoint(int64_t fromIndex, int64_t toIndex) {
 
         // for now, simple random point selection as basic strategy: TODO: better vantage point selection
         // considering length of active region border (as in Yianilos (1993) paper)
@@ -465,7 +465,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         assert(fromIndex >= 0 && fromIndex < _examples.size() && toIndex >= 0 && toIndex < _examples.size() && fromIndex <= toIndex &&
                "fromIndex and toIndex must be in a valid range");
 
-        unsigned int range = (toIndex - fromIndex) + 1;
+        int64_t range = (toIndex - fromIndex) + 1;
         return fromIndex + (rand() % range);
     }
 

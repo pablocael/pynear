@@ -15,7 +15,7 @@ namespace vptree {
 
 template <typename distance_type> class VPLevelPartition {
     public:
-    VPLevelPartition(distance_type radius, unsigned int start, unsigned int end) {
+    VPLevelPartition(distance_type radius, int64_t start, int64_t end) {
         // For each partition, the vantage point is the first point within the partition (pointed by indexStart)
 
         _radius = radius;
@@ -88,10 +88,10 @@ template <typename distance_type> class VPLevelPartition {
         _indexEnd = recovered->_indexEnd;
     }
 
-    bool isEmpty() { return _radius == 0; }
-    unsigned int start() { return _indexStart; }
-    unsigned int end() { return _indexEnd; }
-    unsigned int size() { return _indexEnd - _indexStart + 1; }
+    bool isEmpty() { return _indexStart == -1; }
+    int64_t start() { return _indexStart; }
+    int64_t end() { return _indexEnd; }
+    int64_t size() { return _indexEnd - _indexStart + 1; }
     void setRadius(distance_type radius) { _radius = radius; }
     distance_type radius() { return _radius; }
 
@@ -136,7 +136,7 @@ template <typename distance_type> class VPLevelPartition {
             return nullptr;
         }
 
-        VPLevelPartition *root = new VPLevelPartition(radius, (unsigned int)indexStart, (unsigned int)indexEnd);
+        VPLevelPartition *root = new VPLevelPartition(radius, indexStart, indexEnd);
         VPLevelPartition *left = rebuild_from_state(p_buffer);
         VPLevelPartition *right = rebuild_from_state(p_buffer);
         root->setChild(left, right);
@@ -145,12 +145,13 @@ template <typename distance_type> class VPLevelPartition {
 
     distance_type _radius;
 
-    // _indexStart and _indexEnd are index pointers to examples within the examples list, not index of coordinates
-    // within the coordinate buffer.For instance, _indexEnd pointing to last element of a coordinate buffer of 9 entries
-    // (3 examples of 3 dimensions each) would be pointing to 2, which is the index of the 3rd element.
+    // _indexStart and _indexEnd are index pointers to examples within the examples list of the VPTre, not index of coordinates
+    // within the coordinate buffer. For instance, if _indexEnd pointing to last element of a coordinate buffer of 9 entries
+    // (3 examples of 3 dimensions each), then it would be pointing to 2, which is the index of the 3rd element.
     // If _indexStart == _indexEnd then the level contains only one element.
-    unsigned int _indexStart; // points to the first of the example in which this level starts
-    unsigned int _indexEnd;
+    // If _indexStart == -1 then the level is empty.
+    int64_t _indexStart; // points to the first of the example in which this level starts
+    int64_t _indexEnd;
 
     VPLevelPartition<distance_type> *_left = nullptr;
     VPLevelPartition<distance_type> *_right = nullptr;
