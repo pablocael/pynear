@@ -6,6 +6,7 @@
 #include <queue>
 #include <sstream>
 #include <utility>
+#include <algorithm>
 #include <vector>
 
 #include "ISerializable.hpp"
@@ -13,7 +14,7 @@
 #define ENABLE_OMP_PARALLEL 1
 namespace vptree {
 
-template <typename distance_type> class VPLevelPartition {
+template <typename distance_type> class VPLevelPartition : public ISerializable{
     public:
     VPLevelPartition(distance_type radius, int64_t start, int64_t end) {
         // For each partition, the vantage point is the first point within the partition (pointed by indexStart)
@@ -39,44 +40,40 @@ template <typename distance_type> class VPLevelPartition {
         std::vector<const VPLevelPartition *> flatten_tree_state;
 
         flatten_tree(this, flatten_tree_state);
+        std::reverse(flatten_tree_state.begin(), flatten_tree_state.end());
 
         size_t total_size = flatten_tree_state.size() * (2 * sizeof(int64_t) + sizeof(float));
-        state.data.resize(total_size);
-
-        uint8_t *buffer = &state.data[0];
-        uint8_t *p_buffer = buffer;
+        state.reserve(total_size);
 
         // reverse the tree state since we will push it in a stack for serializing
         for (const VPLevelPartition *elem : flatten_tree_state) {
             if (elem == nullptr) {
-                (*(int64_t *)(p_buffer)) = (int64_t)(-1);
-                p_buffer += sizeof(int64_t);
-                (*(int64_t *)(p_buffer)) = (int64_t)(-1);
-                p_buffer += sizeof(int64_t);
-                (*(float *)(p_buffer)) = (float)(-1);
-                p_buffer += sizeof(float);
+                state.push((float)(-1));
+                state.push((int64_t)(-1));
+                state.push((int64_t)(-1));
                 continue;
             }
-            (*(int64_t *)(p_buffer)) = (int64_t)(elem->_indexEnd);
-            p_buffer += sizeof(int64_t);
-            (*(int64_t *)(p_buffer)) = (int64_t)(elem->_indexStart);
-            p_buffer += sizeof(int64_t);
-            (*(float *)(p_buffer)) = (float)(elem->_radius);
-            p_buffer += sizeof(float);
+
+            state.push((float)(elem->_radius));
+            state.push((int64_t)(elem->_indexStart));
+            state.push((int64_t)(elem->_indexEnd));
         }
 
-        if ((size_t)(p_buffer - buffer) != total_size) {
+        if (state.size() != total_size) {
+            std::cout << "state size: " << state.size() << " total size: " << total_size << "dont match!" << std::endl << std::flush;;
             throw new std::out_of_range("invalid serialization state, offsets dont match!");
         }
+
+        state.buildChecksum();
 
         return state;
     }
 
-    void deserialize(const SerializedState &state, uint32_t offset) {
+    void deserialize(const SerializedState &state) {
         clear();
+        SerializedState state_copy(state);
 
-        uint8_t *p_buffer = (&const_cast<std::vector<uint8_t> &>(state.data)[0]) + offset;
-        VPLevelPartition *recovered = rebuild_from_state(&p_buffer);
+        VPLevelPartition *recovered = rebuild_from_state(state_copy);
         if (recovered == nullptr) {
             return;
         }
@@ -117,28 +114,37 @@ template <typename distance_type> class VPLevelPartition {
 
     void flatten_tree(const VPLevelPartition *root, std::vector<const VPLevelPartition *> &flatten_tree_state) const {
         // visit partitions tree in preorder push all values.
-        flatten_tree_state.push_back(root);
-        if (root != nullptr) {
-            flatten_tree(root->left(), flatten_tree_state);
-            flatten_tree(root->right(), flatten_tree_state);
+        // implement pre order using a vector as a stack
+        std::vector<VPLevelPartition *> stack;
+        stack.push_back(const_cast<VPLevelPartition *>(root));
+        while(!stack.empty()) {
+            VPLevelPartition *current = stack.back();
+            stack.pop_back();
+            flatten_tree_state.push_back(current);
+            if (current == nullptr) {
+                continue;
+            }
+
+            stack.push_back(current->_left);
+            stack.push_back(current->_right);
         }
     }
 
-    VPLevelPartition *rebuild_from_state(uint8_t **p_buffer) {
-        int64_t indexEnd = (*(int64_t *)(*p_buffer));
-        *p_buffer += sizeof(int64_t);
-        int64_t indexStart = (*(int64_t *)(*p_buffer));
-        *p_buffer += sizeof(int64_t);
-        float radius = (*(float *)(*p_buffer));
-        *p_buffer += sizeof(float);
+    VPLevelPartition *rebuild_from_state(SerializedState &state) {
+        if (state.empty()) {
+            return nullptr;
+        }
 
+        int64_t indexEnd = state.pop<int64_t>();
+        int64_t indexStart = state.pop<int64_t>();
+        float radius = state.pop<float>();
         if (indexEnd == -1) {
             return nullptr;
         }
 
         VPLevelPartition *root = new VPLevelPartition(radius, indexStart, indexEnd);
-        VPLevelPartition *left = rebuild_from_state(p_buffer);
-        VPLevelPartition *right = rebuild_from_state(p_buffer);
+        VPLevelPartition *left = rebuild_from_state(state);
+        VPLevelPartition *right = rebuild_from_state(state);
         root->setChild(left, right);
         return root;
     }

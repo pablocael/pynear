@@ -22,7 +22,7 @@
 #include "ISerializable.hpp"
 #include "VPLevelPartition.hpp"
 
-#define ENABLE_OMP_PARALLEL 1
+#define ENABLE_OMP_PARALLEL 0
 
 namespace vptree {
 
@@ -78,10 +78,12 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
     }
 
     bool isEmpty() { return _rootPartition == nullptr; }
+
     SerializedState serialize() const override {
         if (_rootPartition == nullptr) {
             return SerializedState();
         }
+
 
         size_t element_size = 0;
         size_t num_elements_per_example = 0;
@@ -98,45 +100,32 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         }
 
         SerializedState state;
-        state.data.resize(total_size);
-        uint8_t *p_buffer = &state.data[0];
-
-        *((size_t *)p_buffer) = element_size;
-        p_buffer += sizeof(size_t);
-
-        *((size_t *)p_buffer) = num_elements_per_example;
-        p_buffer += sizeof(size_t);
-
-        *((size_t *)p_buffer) = (size_t)_examples.size();
-        p_buffer += sizeof(size_t);
+        state.reserve(total_size);
 
         for (const VPTreeElement &elem : _examples) {
-            *((int64_t *)p_buffer) = elem.originalIndex;
-            p_buffer += sizeof(int64_t);
+            state.push(elem.originalIndex);
 
             for (size_t i = 0; i < num_elements_per_example; ++i) {
                 // since we dont know the sub element type of T (T is an array of something)
                 // we need to copy using memcopy and memory size
-
-                std::memcpy(p_buffer, &elem.val[i], sizeof(elem.val[i]));
-                p_buffer += sizeof(elem.val[i]);
+                state.push_by_size(&elem.val[i], element_size);
             }
         }
 
-        if ((size_t)(p_buffer - (uint8_t *)&state.data[0]) != total_size) {
+        state.push(_examples.size());
+        state.push(num_elements_per_example);
+        state.push(element_size);
+
+        if(state.size() != total_size) {
             throw new std::out_of_range("invalid serialization state, offsets dont match!");
         }
 
         SerializedState partition_state = _rootPartition->serialize();
-        state += partition_state;
-        return state;
+        partition_state += state;
+        return partition_state;
     }
 
     void deserialize(const SerializedState &state) override {
-        if (_rootPartition != nullptr) {
-            delete _rootPartition;
-            _rootPartition = nullptr;
-        }
         clear();
         if (state.data.empty()) {
             return;
@@ -146,22 +135,17 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             throw new std::invalid_argument("invalid state - checksum mismatch");
         }
 
-        uint8_t *p_buffer = &const_cast<std::vector<uint8_t> &>(state.data)[0];
-        size_t elem_size = *((size_t *)p_buffer);
-        p_buffer += sizeof(size_t);
 
-        size_t num_elements_per_example = *((size_t *)p_buffer);
-        p_buffer += sizeof(size_t);
+        SerializedState copy(state);
 
-        size_t num_examples = *((size_t *)p_buffer);
-        p_buffer += sizeof(size_t);
+        size_t elem_size = copy.pop<size_t>();
+        size_t num_elements_per_example = copy.pop<size_t>();
+        size_t num_examples = copy.pop<size_t>();
 
-        _examples.clear();
         _examples.reserve(num_examples);
         _examples.resize(num_examples);
         for (size_t i = 0; i < num_examples; ++i) {
-            int64_t originalIndex = *((int64_t *)(p_buffer));
-            p_buffer += sizeof(int64_t);
+            int64_t originalIndex = copy.pop<int64_t>();
 
             auto &example = _examples[i];
             example.originalIndex = originalIndex;
@@ -169,14 +153,12 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             val.resize(num_elements_per_example);
 
             for (size_t j = 0; j < num_elements_per_example; ++j) {
-                std::memcpy(&val[j], p_buffer, elem_size);
-                p_buffer += elem_size;
+                copy.pop_by_size(&val[j], elem_size);
             }
         }
 
         _rootPartition = new VPLevelPartition<distance_type>();
-        uint32_t offset = p_buffer - &state.data[0];
-        _rootPartition->deserialize(state, offset);
+        _rootPartition->deserialize(copy);
     }
 
     void searchKNN(const std::vector<T> &queries, unsigned int k, std::vector<VPTreeSearchResultElement> &results) {
@@ -189,7 +171,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         results.resize(queries.size());
 
 #if (ENABLE_OMP_PARALLEL)
-#pragma omp parallel for schedule(static, 1) num_threads(8)
+#pragma omp parallel for schedule(static, 1) num_threads(16)
 #endif
         // i should be size_t, however msvc requires signed integral loop variables (except with -openmp:llvm)
         for (int i = 0; i < queries.size(); ++i) {
@@ -216,7 +198,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         distances.resize(queries.size());
 
 #if (ENABLE_OMP_PARALLEL)
-#pragma omp parallel for schedule(static, 1) num_threads(8)
+#pragma omp parallel for schedule(static, 1) num_threads(16)
 #endif
         // i should be size_t, see above
         for (int i = 0; i < queries.size(); ++i) {
