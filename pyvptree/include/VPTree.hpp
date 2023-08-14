@@ -189,7 +189,18 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 
     VPTree() = default;
 
+    ~VPTree() { clear(); };
+
+    void clear() {
+        if (_rootPartition != nullptr) {
+            delete _rootPartition;
+        }
+        _rootPartition = nullptr;
+        _examples.clear();
+    }
+
     VPTree(const std::vector<T> &array) {
+        clear();
 
         _examples.reserve(array.size());
         _examples.resize(array.size());
