@@ -1,49 +1,60 @@
 # 
 # Supported 3rd party indices are: FaissIndexFlatL2, FaissIndexBinaryFlat, AnnoyL2, AnnoyManhattan, AnnoyHamming, SKLearnL2
 # This allow comparing VPTree indices to thow 3 third party indices.
-benchmarks:
-- cases:
-  - name: "Pyvptree Indexes Comparison"
+benchmark:
+  cases:
+  - name: "Pyvptree L2 Indexes Comparison"
     k: [2, 4, 8]
-    num_queries: [16, 32, 128]
-    dataset:
-    - total_size: 2500000
-    - num_clusters: 50
+    num_queries: [8]
+    dimensions: [2, 4, 8, 16]
+    dataset_total_size: 2500000
+    dataset_num_clusters: 50
+    dataset_type: "float32" # can be any numpy type as string. Default is float32
     index_types:
     - VPTreeL2Index
-    - VPTreeBinaryIndex
     - VPTreeChebyshevIndex
     - VPTreeL1Index # (manhattan distance)
-  - name: "L2 Comparison"
-    k: 8
-    num_queries: 16
-    dataset:
-    - dimensions: [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
-    - total_size: 2500000
-    - num_clusters: 50
+  - name: "L2 Comparison Low Dimensionality"
+    k: [8]
+    num_queries: [16]
+    dimensions: [2, 4, 8, 16]
+    dataset_total_size: 2500000
+    dataset_num_clusters: 50
+    dataset_type: "float32"
+    index_types:
+    - FaissIndexFlatL2
+    - VPTreeL2Index
+    - AnnoyL2
+    - SKLearnL2
+  - name: "L2 Comparison High Dimensionality"
+    k: [8]
+    num_queries: [16]
+    dimensions: [32, 64, 128, 512, 1024]
+    dataset_total_size: 2500000
+    dataset_num_clusters: 50
+    dataset_type: "float32"
     index_types:
     - FaissIndexFlatL2
     - VPTreeL2Index
     - AnnoyL2
     - SKLearnL2
   - name: "Binary Index Comparison"
-    k: 8
-    num_queries: 16
-    dataset:
-    - dimensions: [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
-    - total_size: 2500000
-    - num_clusters: 50
+    k: [8]
+    num_queries: [16]
+    dimensions: [32, 64, 128, 256, 512]
+    dataset_total_size: 2500000
+    dataset_num_clusters: 50
+    dataset_type: "uint8"
     index_types:
     - FaissIndexBinaryFlat
     - AnnoyHamming
     - VPTreeBinaryIndex
   - name: "Manhattan Index Comparison"
-    k: 8
-    num_queries: 16
-    dataset:
-    - dimensions: [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
-    - total_size: 2500000
-    - num_clusters: 50
+    k: [8]
+    num_queries: [16]
+    dimensions: [2, 4, 8, 16]
+    dataset_total_size: 2500000
+    dataset_num_clusters: 50
     index_types:
     - AnnoyManhattan
     - VPTreeL1Index

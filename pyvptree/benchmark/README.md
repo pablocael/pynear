@@ -12,7 +12,7 @@ To customize the benchmark generation dimension range, see the example below:
 
 ```
 export PYTHONPATH=$PWD
-python3 pyvptree/benchmark/run_benchmarks.py --min-dimension=3 --max-dimension=8
+python3 pyvptree/benchmark/run_benchmarks.py --config-file=<config-yaml-file>
 ```
 
 This will write result images to a local ./results folder.

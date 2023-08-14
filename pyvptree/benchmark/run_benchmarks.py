@@ -3,9 +3,8 @@ import sys
 import argparse
 from pyvptree.logging import create_and_configure_log
 
-from pyvptree.benchmark import ComparatorBenchmarkCase
-from pyvptree.benchmark import ComparatorBenchmark
-from pyvptree.benchmark import BenchmarkDataset
+from pyvptree.benchmark import BenchmarkCase
+from pyvptree.benchmark import BenchmarkRunner
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
@@ -17,83 +16,49 @@ logger = create_and_configure_log(__name__)
 
 
 def create_performance_plot(result: pd.DataFrame, output_folder: str):
-    if not os.path.exists(output_folder):
-        os.mkdir(output_folder)
 
-    index_types = result.groupby("index_type")
+    plt.clf()
+    groups = result.groupby("k")
 
-    for index_type, df in index_types:
+    for k, group in groups:
+        index_types = group.groupby("index_type")
+        for index_type, df in index_types:
 
-        groups = result.groupby("k")
-        for k, group in groups:
             # create one plot per k
             # resetting index before melting to save the current index in 'index' column...
-
-            data_size = group.iloc[0]["size"]
-            query_size = group.iloc[0]["query_size"]
-            filtered = group.filter(regex="dimension|time*", axis=1)
-            df = filtered.melt("dimension", var_name="cols", value_name="query time")
-            g = sns.catplot(x="dimension", y="query time", hue='cols', data=df, kind='point', errorbar=None, legend=False)
-            g.set(title=f"Data Dimensions x Query Time\nindex_type={index_type}\ndata_size={data_size}), k={k}\nquery_size={query_size})")
+            plt.plot([str(v) for v in df["dimension"]], df["time"], label=index_type, marker='o')
+            data_size = df.iloc[0]["dataset_total_size"]
+            query_size = df.iloc[0]["num_queries"] 
+            plt.title(f"Data Dimensions x Query Time\ndata_size={data_size}), k={k}\nquery_size={query_size})")
             plt.legend(loc='upper center')
 
-            plt.tight_layout()
-            plt.savefig(os.path.join(output_folder, f"{index_type}_k_{k}.png"))
-            plt.clf()
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_folder, f"result_{k}.png"))
 
 
 def main():
 
     parser = argparse.ArgumentParser(description="Creates a stress test report for a segemaker endpoint")
-    parser.add_argument("--min-dimension",
-                        default=2,
-                        type=int,
-                        help="The minimum dimensionality of the data to generate the benchmarks",
-                        required=False)
-    parser.add_argument(
-        "--max-dimension",
-        default=32,
-        type=int,
-        help="The maximum dimensionality of the data to generate the benchmarks",
-        required=False,
-    )
     parser.add_argument(
         "--config-file",
         default="benchmark_config.yaml",
         type=str,
-        help="The maximum dimensionality of the data to generate the benchmarks",
+        help="The config file describing the benchmark cases to run",
         required=False,
     )
 
     args = parser.parse_args()
 
-    benchmark_configs = None
-    with open(args.config_file, "r") as stream:
-        try:
-            benchmark_configs = yaml.safe_load(stream)
-        except yaml.YAMLError as exc:
-            print(exc)
-            sys.exit(1)
-
-
-    min_dim = args.min_dimension
-    max_dim = args.max_dimension
-
-    print(f"creating cases for dims from {min_dim} to {max_dim}... ")
-    datasets = BenchmarkDataset.generate_gaussian_euclidean_cluster_datasets(min_dim=min_dim, max_dim=max_dim)
-
-    cases = []
-    for ds in datasets:
-        case = ComparatorBenchmarkCase(ks=[2**i for i in range(0, 5)], dataset=ds)
-        print("case created", str(case))
-        cases.append(case)
+    runner = BenchmarkRunner(args.config_file)
 
     print("start running benchmarks... ")
 
-    runner = ComparatorBenchmark(benchmark_cases=cases)
-    runner.run()
-    results = runner.result()
-    create_performance_plot(results, f"./results/from_{min_dim}_to_{max_dim}/")
+    for result in runner.run():
+        case = result["benchmark_case"]
+        case_results = result["results"]
+        dir_name = f"./results/{case.id()}"
+        os.makedirs(dir_name, exist_ok=True)
+        create_performance_plot(pd.DataFrame(case_results), dir_name)
 
     print("benchmarks done.")
     print("result images written to ./results folder")

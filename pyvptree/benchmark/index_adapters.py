@@ -64,7 +64,7 @@ class PyVPtreeAdapter(IndexAdapter):
         self._index.set(data)
 
     def _search_implementation(self, query, k: int):
-        self._index.searchKNN(query, k=k)
+        self._index.searchKNN(query, k)
 
 class FaissIndexFlatL2Adapter(IndexAdapter):
     def __init__(self):
@@ -73,7 +73,7 @@ class FaissIndexFlatL2Adapter(IndexAdapter):
     def build_index(self, data: np.ndarray):
         d = data.shape[1]
         self._index = faiss.IndexFlatL2(d)
-        self._index.add(features)
+        self._index.add(data)
 
     def _search_implementation(self, query, k: int):
         self._index.search(query, k=k)
@@ -104,7 +104,8 @@ class AnnoyL2Adapter(IndexAdapter):
         self._index.build(10)
 
     def _search_implementation(self, query, k: int):
-        self._index.get_nns_by_vector(query, k)
+        for v in query:
+            self._index.get_nns_by_vector(v, k)
 
 class AnnoyManhattanAdapter(IndexAdapter):
     def __init__(self):
@@ -116,7 +117,8 @@ class AnnoyManhattanAdapter(IndexAdapter):
             self._index.add_item(i, v)
 
     def clock_search(self, query: np.ndarray, k: int):
-        return self._index.get_nns_by_vector(query, k)
+        for v in query:
+            self._index.get_nns_by_vector(v, k)
 
 class AnnoyHammingAdapter(IndexAdapter):
     def __init__(self):
@@ -130,13 +132,15 @@ class AnnoyHammingAdapter(IndexAdapter):
         self._index.build(10)
 
     def _search_implementation(self, query, k: int):
-        self.index.get_nns_by_vector(query, k)
+        for v in query:
+            self._index.get_nns_by_vector(v, k)
 
 class SKLearnL2Adapter(IndexAdapter):
     def __init__(self):
         self._index = None
 
     def build_index(self, data: np.ndarray):
+        self._data = data
         pass
 
     def _search_implementation(self, query, k: int):
@@ -149,6 +153,7 @@ class SKLearnL2Adapter(IndexAdapter):
         """
         # sklearn uses index based on k, so need to build on the fly
         self._index = NearestNeighbors(n_neighbors=k, algorithm='kd_tree', metric='euclidean')
+        self._index.fit(self._data)
 
         s = time.time()
         self._index.kneighbors(query)
