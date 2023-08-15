@@ -20,174 +20,42 @@
 #include <vector>
 
 #include "ISerializable.hpp"
+#include "VPLevelPartition.hpp"
 
 #define ENABLE_OMP_PARALLEL 1
 
 namespace vptree {
-
-template <typename distance_type> class VPLevelPartition {
-    public:
-    VPLevelPartition(distance_type radius, unsigned int start, unsigned int end) {
-        // For each partition, the vantage point is the first point within the partition (pointed by indexStart)
-
-        _radius = radius;
-        _indexStart = start;
-        _indexEnd = end;
-    }
-
-    VPLevelPartition() {
-        // Constructs an empty level
-
-        _radius = 0;
-        _indexStart = -1;
-        _indexEnd = -1;
-    }
-
-    virtual ~VPLevelPartition() { clear(); }
-
-    SerializedState serialize() const {
-
-        SerializedState state;
-        std::vector<const VPLevelPartition *> flatten_tree_state;
-
-        flatten_tree(this, flatten_tree_state);
-
-        size_t total_size = flatten_tree_state.size() * (2 * sizeof(int64_t) + sizeof(float));
-        state.data.resize(total_size);
-
-        uint8_t *buffer = &state.data[0];
-        uint8_t *p_buffer = buffer;
-
-        // reverse the tree state since we will push it in a stack for serializing
-        for (const VPLevelPartition *elem : flatten_tree_state) {
-            if (elem == nullptr) {
-                (*(int64_t *)(p_buffer)) = (int64_t)(-1);
-                p_buffer += sizeof(int64_t);
-                (*(int64_t *)(p_buffer)) = (int64_t)(-1);
-                p_buffer += sizeof(int64_t);
-                (*(float *)(p_buffer)) = (float)(-1);
-                p_buffer += sizeof(float);
-                continue;
-            }
-            (*(int64_t *)(p_buffer)) = (int64_t)(elem->_indexEnd);
-            p_buffer += sizeof(int64_t);
-            (*(int64_t *)(p_buffer)) = (int64_t)(elem->_indexStart);
-            p_buffer += sizeof(int64_t);
-            (*(float *)(p_buffer)) = (float)(elem->_radius);
-            p_buffer += sizeof(float);
-        }
-
-        if ((size_t)(p_buffer - buffer) != total_size) {
-            throw new std::out_of_range("invalid serialization state, offsets dont match!");
-        }
-
-        return state;
-    }
-
-    void deserialize(const SerializedState &state, uint32_t offset) {
-        clear();
-
-        uint8_t *p_buffer = (&const_cast<std::vector<uint8_t> &>(state.data)[0]) + offset;
-        VPLevelPartition *recovered = rebuild_from_state(&p_buffer);
-        if (recovered == nullptr) {
-            return;
-        }
-
-        _left = recovered->_left;
-        _right = recovered->_right;
-        _radius = recovered->_radius;
-        _indexStart = recovered->_indexStart;
-        _indexEnd = recovered->_indexEnd;
-    }
-
-    bool isEmpty() { return _indexStart == -1 || _indexStart == -1; }
-    unsigned int start() { return _indexStart; }
-    unsigned int end() { return _indexEnd; }
-    unsigned int size() { return _indexEnd - _indexStart + 1; }
-    void setRadius(distance_type radius) { _radius = radius; }
-    distance_type radius() { return _radius; }
-
-    void setChild(VPLevelPartition<distance_type> *left, VPLevelPartition<distance_type> *right) {
-        _left = left;
-        _right = right;
-    }
-
-    VPLevelPartition *left() const { return _left; }
-    VPLevelPartition *right() const { return _right; }
-
-    private:
-    void clear() {
-        if (_left != nullptr)
-            delete _left;
-
-        if (_right != nullptr)
-            delete _right;
-
-        _left = nullptr;
-        _right = nullptr;
-    }
-
-    void flatten_tree(const VPLevelPartition *root, std::vector<const VPLevelPartition *> &flatten_tree_state) const {
-        // visit partitions tree in preorder push all values.
-        flatten_tree_state.push_back(root);
-        if (root != nullptr) {
-            flatten_tree(root->left(), flatten_tree_state);
-            flatten_tree(root->right(), flatten_tree_state);
-        }
-    }
-
-    VPLevelPartition *rebuild_from_state(uint8_t **p_buffer) {
-        int64_t indexEnd = (*(int64_t *)(*p_buffer));
-        *p_buffer += sizeof(int64_t);
-        int64_t indexStart = (*(int64_t *)(*p_buffer));
-        *p_buffer += sizeof(int64_t);
-        float radius = (*(float *)(*p_buffer));
-        *p_buffer += sizeof(float);
-
-        if (indexEnd == -1) {
-            return nullptr;
-        }
-
-        VPLevelPartition *root = new VPLevelPartition(radius, (unsigned int)indexStart, (unsigned int)indexEnd);
-        VPLevelPartition *left = rebuild_from_state(p_buffer);
-        VPLevelPartition *right = rebuild_from_state(p_buffer);
-        root->setChild(left, right);
-        return root;
-    }
-
-    distance_type _radius;
-
-    // _indexStart and _indexEnd are index pointers to examples within the examples list, not index of coordinates
-    // within the coordinate buffer.For instance, _indexEnd pointing to last element of a coordinate buffer of 9 entries
-    // (3 examples of 3 dimensions each) would be pointing to 2, which is the index of the 3rd element.
-    // If _indexStart == _indexEnd then the level contains only one element.
-    unsigned int _indexStart; // points to the first of the example in which this level starts
-    unsigned int _indexEnd;
-
-    VPLevelPartition<distance_type> *_left = nullptr;
-    VPLevelPartition<distance_type> *_right = nullptr;
-};
 
 template <typename T, typename distance_type, distance_type (*distance)(const T &, const T &)> class VPTree : public ISerializable {
     public:
     struct VPTreeElement {
 
         VPTreeElement() = default;
-        VPTreeElement(unsigned int index, const T &value) {
+        VPTreeElement(int64_t index, const T &value) {
             originalIndex = index;
             val = value;
         }
 
-        unsigned int originalIndex;
+        int64_t originalIndex;
         T val;
     };
 
     struct VPTreeSearchResultElement {
-        std::vector<unsigned int> indexes;
+        std::vector<int64_t> indexes;
         std::vector<distance_type> distances;
     };
 
-    VPTree() = default;
+    VPTree() {
+        _rootPartition = nullptr;
+        _examples.clear();
+    }
+
+    VPTree(const VPTree<T, distance_type, distance> &other) {
+        auto other_state = other.serialize();
+        deserialize(other_state);
+    }
+
+    const VPTree<T, distance_type, distance> &operator=(const VPTree<T, distance_type, distance> &other) { this->deserialize(other.serialize()); }
 
     ~VPTree() { clear(); };
 
@@ -199,7 +67,9 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         _examples.clear();
     }
 
-    VPTree(const std::vector<T> &array) {
+    VPTree(const std::vector<T> &array) { set(array); }
+
+    void set(const std::vector<T> &array) {
         clear();
 
         _examples.reserve(array.size());
@@ -209,6 +79,16 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         }
 
         build(_examples);
+    }
+
+    bool isEmpty() { return _rootPartition == nullptr; }
+
+    void print_state() {
+        if (_rootPartition == nullptr) {
+            return;
+        }
+
+        _rootPartition->print_state();
     }
 
     SerializedState serialize() const override {
@@ -226,50 +106,39 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             // _examples[0] is an array of some type (variable)
             num_elements_per_example = _examples[0].val.size();
             element_size = sizeof(_examples[0].val[0]);
-            size_t total_elements_size = num_elements_per_example * element_size;
-            total_size += _examples.size() * (sizeof(unsigned int) + total_elements_size);
+            int64_t total_elements_size = num_elements_per_example * element_size;
+            total_size += _examples.size() * (sizeof(int64_t) + total_elements_size);
         }
 
         SerializedState state;
-        state.data.resize(total_size);
-        uint8_t *p_buffer = &state.data[0];
-
-        *((size_t *)p_buffer) = element_size;
-        p_buffer += sizeof(size_t);
-
-        *((size_t *)p_buffer) = num_elements_per_example;
-        p_buffer += sizeof(size_t);
-
-        *((size_t *)p_buffer) = (size_t)_examples.size();
-        p_buffer += sizeof(size_t);
+        state.reserve(total_size);
 
         for (const VPTreeElement &elem : _examples) {
-            *((unsigned int *)p_buffer) = elem.originalIndex;
-            p_buffer += sizeof(unsigned int);
+            state.push(elem.originalIndex);
 
             for (size_t i = 0; i < num_elements_per_example; ++i) {
                 // since we dont know the sub element type of T (T is an array of something)
                 // we need to copy using memcopy and memory size
-
-                std::memcpy(p_buffer, &elem.val[i], sizeof(elem.val[i]));
-                p_buffer += sizeof(elem.val[i]);
+                state.push_by_size(&elem.val[i], element_size);
             }
         }
 
-        if ((size_t)(p_buffer - (uint8_t *)&state.data[0]) != total_size) {
+        state.push(_examples.size());
+        state.push(num_elements_per_example);
+        state.push(element_size);
+
+        if (state.size() != total_size) {
             throw new std::out_of_range("invalid serialization state, offsets dont match!");
         }
 
         SerializedState partition_state = _rootPartition->serialize();
-        state += partition_state;
-        return state;
+        partition_state += state;
+        partition_state.buildChecksum();
+        return partition_state;
     }
 
     void deserialize(const SerializedState &state) override {
-        if (_rootPartition != nullptr) {
-            delete _rootPartition;
-            _rootPartition = nullptr;
-        }
+        clear();
         if (state.data.empty()) {
             return;
         }
@@ -278,37 +147,30 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             throw new std::invalid_argument("invalid state - checksum mismatch");
         }
 
-        uint8_t *p_buffer = &const_cast<std::vector<uint8_t> &>(state.data)[0];
-        size_t elem_size = *((size_t *)p_buffer);
-        p_buffer += sizeof(size_t);
+        SerializedState copy(state);
 
-        size_t num_elements_per_example = *((size_t *)p_buffer);
-        p_buffer += sizeof(size_t);
+        _rootPartition = new VPLevelPartition<distance_type>();
 
-        size_t num_examples = *((size_t *)p_buffer);
-        p_buffer += sizeof(size_t);
+        size_t elem_size = copy.pop<size_t>();
+        size_t num_elements_per_example = copy.pop<size_t>();
+        size_t num_examples = copy.pop<size_t>();
 
-        _examples.clear();
         _examples.reserve(num_examples);
         _examples.resize(num_examples);
-        for (size_t i = 0; i < num_examples; ++i) {
-            unsigned int originalIndex = *((unsigned int *)(p_buffer));
-            p_buffer += sizeof(unsigned int);
+        for (int64_t i = num_examples - 1; i >= 0; --i) {
 
             auto &example = _examples[i];
-            example.originalIndex = originalIndex;
             auto &val = example.val;
             val.resize(num_elements_per_example);
 
-            for (size_t j = 0; j < num_elements_per_example; ++j) {
-                std::memcpy(&val[j], p_buffer, elem_size);
-                p_buffer += elem_size;
+            for (int64_t j = num_elements_per_example - 1; j >= 0; --j) {
+                copy.pop_by_size(&val[j], elem_size);
             }
+            int64_t originalIndex = copy.pop<int64_t>();
+            example.originalIndex = originalIndex;
         }
 
-        _rootPartition = new VPLevelPartition<distance_type>();
-        uint32_t offset = p_buffer - &state.data[0];
-        _rootPartition->deserialize(state, offset);
+        _rootPartition->deserialize(copy);
     }
 
     void searchKNN(const std::vector<T> &queries, unsigned int k, std::vector<VPTreeSearchResultElement> &results) {
@@ -321,7 +183,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         results.resize(queries.size());
 
 #if (ENABLE_OMP_PARALLEL)
-#pragma omp parallel for schedule(static, 1) num_threads(8)
+#pragma omp parallel for schedule(static, 1)
 #endif
         // i should be size_t, however msvc requires signed integral loop variables (except with -openmp:llvm)
         for (int i = 0; i < queries.size(); ++i) {
@@ -330,14 +192,14 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             searchKNN(_rootPartition, query, k, knnQueue);
 
             // we must always return k elements for each search unless there is no k elements
-            assert(static_cast<unsigned int>(knnQueue.size()) == std::min<unsigned int>(_examples.size(), k));
+            assert(static_cast<size_t>(knnQueue.size()) == std::min<size_t>(_examples.size(), k));
 
             fillSearchResult(knnQueue, results[i]);
         }
     }
 
     // An optimized version for 1 NN search
-    void search1NN(const std::vector<T> &queries, std::vector<unsigned int> &indices, std::vector<distance_type> &distances) {
+    void search1NN(const std::vector<T> &queries, std::vector<int64_t> &indices, std::vector<distance_type> &distances) {
 
         if (_rootPartition == nullptr) {
             return;
@@ -348,13 +210,13 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         distances.resize(queries.size());
 
 #if (ENABLE_OMP_PARALLEL)
-#pragma omp parallel for schedule(static, 1) num_threads(8)
+#pragma omp parallel for schedule(static, 1)
 #endif
         // i should be size_t, see above
         for (int i = 0; i < queries.size(); ++i) {
             const T &query = queries[i];
             distance_type dist = 0;
-            unsigned int index = -1;
+            int64_t index = -1;
             search1NN(_rootPartition, query, index, dist);
             distances[i] = dist;
             indices[i] = index;
@@ -380,8 +242,8 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             VPLevelPartition<distance_type> *current = _toSplit.back();
             _toSplit.pop_back();
 
-            unsigned int start = current->start();
-            unsigned int end = current->end();
+            int64_t start = current->start();
+            int64_t end = current->end();
 
             if (start == end) {
                 // stop dividing if there is only one point inside
@@ -393,7 +255,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             // put vantage point as the first element within the examples list
             std::swap(_examples[vpIndex], _examples[start]);
 
-            unsigned int median = (end + start) / 2;
+            int64_t median = (end + start) / 2;
 
             // partition in order to keep all elements smaller than median in the left and larger in the right
             std::nth_element(_examples.begin() + start + 1, _examples.begin() + median, _examples.begin() + end + 1,
@@ -407,13 +269,13 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             // Left is every one within the median distance radius
             VPLevelPartition<distance_type> *left = nullptr;
             if (start + 1 <= median) {
-                left = new VPLevelPartition<distance_type>(-1, start + 1, median);
+                left = new VPLevelPartition<distance_type>(0, start + 1, median);
                 _toSplit.push_back(left);
             }
 
             VPLevelPartition<distance_type> *right = nullptr;
             if (median + 1 <= end) {
-                right = new VPLevelPartition<distance_type>(-1, median + 1, end);
+                right = new VPLevelPartition<distance_type>(0, median + 1, end);
                 _toSplit.push_back(right);
             }
 
@@ -439,7 +301,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
                 if (knnQueue.size() == k) {
                     knnQueue.pop();
                 }
-                unsigned int indexToAdd = _examples[i].originalIndex;
+                int64_t indexToAdd = _examples[i].originalIndex;
                 knnQueue.push(VPTreeSearchElement(indexToAdd, dist));
 
                 tau = knnQueue.top().dist;
@@ -466,7 +328,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
                 if (knnQueue.size() == k) {
                     knnQueue.pop();
                 }
-                unsigned int indexToAdd = _examples[current->start()].originalIndex;
+                int64_t indexToAdd = _examples[current->start()].originalIndex;
                 knnQueue.push(VPTreeSearchElement(indexToAdd, dist));
 
                 tau = knnQueue.top().dist;
@@ -478,7 +340,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
                 continue;
             }
 
-            unsigned int neighborsSoFar = knnQueue.size();
+            size_t neighborsSoFar = knnQueue.size();
             if (dist > current->radius()) {
                 // must search outside
 
@@ -497,7 +359,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
                 */
                 if (current->left() != nullptr) {
 
-                    unsigned int rightPartitionSize = (current->right() != nullptr) ? current->right()->size() : 0;
+                    size_t rightPartitionSize = (current->right() != nullptr) ? current->right()->size() : 0;
                     bool notEnoughPointsOutside = rightPartitionSize < (k - neighborsSoFar);
                     auto toBorder = dist - current->radius();
 
@@ -520,7 +382,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 
                 if (current->right() != nullptr) {
 
-                    unsigned int leftPartitionSize = (current->left() != nullptr) ? current->left()->size() : 0;
+                    size_t leftPartitionSize = (current->left() != nullptr) ? current->left()->size() : 0;
                     bool notEnoughPointsInside = leftPartitionSize < (k - neighborsSoFar);
                     auto toBorder = current->radius() - dist;
 
@@ -539,7 +401,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         }
     }
 
-    void search1NN(VPLevelPartition<distance_type> *partition, const T &val, unsigned int &resultIndex, distance_type &resultDist) {
+    void search1NN(VPLevelPartition<distance_type> *partition, const T &val, int64_t &resultIndex, distance_type &resultDist) {
 
         resultDist = std::numeric_limits<distance_type>::max();
         resultIndex = -1;
@@ -589,7 +451,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         }
     }
 
-    unsigned int selectVantagePoint(unsigned int fromIndex, unsigned int toIndex) {
+    int64_t selectVantagePoint(int64_t fromIndex, int64_t toIndex) {
 
         // for now, simple random point selection as basic strategy: TODO: better vantage point selection
         // considering length of active region border (as in Yianilos (1993) paper)
@@ -597,7 +459,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         assert(fromIndex >= 0 && fromIndex < _examples.size() && toIndex >= 0 && toIndex < _examples.size() && fromIndex <= toIndex &&
                "fromIndex and toIndex must be in a valid range");
 
-        unsigned int range = (toIndex - fromIndex) + 1;
+        int64_t range = (toIndex - fromIndex) + 1;
         return fromIndex + (rand() % range);
     }
 

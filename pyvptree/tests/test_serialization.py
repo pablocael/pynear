@@ -65,3 +65,6 @@ def test_binary_serialization():
 
     vptree_indices_rec, vptree_distances_rec = recovered.search1NN(queries)
     assert vptree_distances_rec == vptree_distances
+
+
+test_basic_serialization()
