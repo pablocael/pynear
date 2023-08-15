@@ -95,6 +95,48 @@ TEST(VPTests, TestHamming) {
     EXPECT_EQ(dist_hamming(b17, b27), 256);
 }
 
+TEST(VPTests, TestCopy) {
+    std::default_random_engine generator;
+    std::uniform_real_distribution<float> distribution(-10, 10);
+
+    const unsigned int numPoints = 14001;
+    std::vector<Eigen::Vector3d> points;
+    points.reserve(numPoints);
+    points.resize(numPoints);
+    for (Eigen::Vector3d &point : points) {
+        point[0] = distribution(generator);
+        point[1] = distribution(generator);
+        point[2] = distribution(generator);
+    }
+
+    VPTree<Eigen::Vector3d, float, distance> tree2;
+    VPTree<Eigen::Vector3d, float, distance> tree(points);
+
+    tree2 = tree;
+
+    std::vector<Eigen::Vector3d> queries;
+    queries.resize(100);
+    for (Eigen::Vector3d &point : queries) {
+        point[0] = distribution(generator);
+        point[1] = distribution(generator);
+        point[2] = distribution(generator);
+    }
+
+    std::vector<int64_t> indices;
+    std::vector<float> distances;
+    std::vector<int64_t> indices2;
+    std::vector<float> distances2;
+    tree.search1NN(queries, indices, distances);
+    tree2.search1NN(queries, indices2, distances2);
+
+    EXPECT_EQ(indices.size(), indices2.size());
+    for (int i = 0; i < indices.size(); ++i) {
+        EXPECT_EQ(indices[i], indices2[i]) << "Vectors x and y differ at index " << i;
+        EXPECT_EQ(distances[i], distances2[i]) << "Vectors x and y differ at distance " << i;
+    }
+}
+
+
 TEST(VPTests, TestSerialization) {
 
     std::default_random_engine generator;

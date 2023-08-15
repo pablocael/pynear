@@ -55,6 +55,10 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         deserialize(other_state);
     }
 
+	const VPTree<T, distance_type, distance> &operator= (const VPTree<T, distance_type, distance> &other) {
+        this->deserialize(other.serialize());
+    }
+
     ~VPTree() { clear(); };
 
     void clear() {
