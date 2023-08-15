@@ -11,7 +11,6 @@
 
 #include "ISerializable.hpp"
 
-#define ENABLE_OMP_PARALLEL 1
 namespace vptree {
 
 template <typename distance_type> class VPLevelPartition : public ISerializable {

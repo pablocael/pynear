@@ -162,7 +162,6 @@ TEST(VPTests, TestCopy) {
     }
 }
 
-
 TEST(VPTests, TestSerialization) {
 
     std::default_random_engine generator;

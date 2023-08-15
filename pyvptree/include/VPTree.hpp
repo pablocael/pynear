@@ -55,9 +55,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         deserialize(other_state);
     }
 
-	const VPTree<T, distance_type, distance> &operator= (const VPTree<T, distance_type, distance> &other) {
-        this->deserialize(other.serialize());
-    }
+    const VPTree<T, distance_type, distance> &operator=(const VPTree<T, distance_type, distance> &other) { this->deserialize(other.serialize()); }
 
     ~VPTree() { clear(); };
 
@@ -185,7 +183,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         results.resize(queries.size());
 
 #if (ENABLE_OMP_PARALLEL)
-#pragma omp parallel for schedule(static, 1) num_threads(16)
+#pragma omp parallel for schedule(static, 1)
 #endif
         // i should be size_t, however msvc requires signed integral loop variables (except with -openmp:llvm)
         for (int i = 0; i < queries.size(); ++i) {
@@ -212,7 +210,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         distances.resize(queries.size());
 
 #if (ENABLE_OMP_PARALLEL)
-#pragma omp parallel for schedule(static, 1) num_threads(16)
+#pragma omp parallel for schedule(static, 1)
 #endif
         // i should be size_t, see above
         for (int i = 0; i < queries.size(); ++i) {
