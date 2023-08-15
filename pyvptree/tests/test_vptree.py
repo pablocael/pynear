@@ -37,6 +37,7 @@ def test_empty_index():
     try:
         vptree = pyvptree.VPTreeBinaryIndex()
         i, d = vptree.search1NN(np.random.rand(1, 8).astype(dtype=np.uint8))
+        assert i == [] and d == []
         # expect exception and should now reach this line
         # since index is empty, we should not be able to search
         assert False
@@ -46,6 +47,7 @@ def test_empty_index():
     try:
         vptree = pyvptree.VPTreeL2Index()
         i, d = vptree.search1NN(np.random.rand(1, 8).astype(dtype=np.uint8))
+        assert i == [] and d == []
         # expect exception and should now reach this line
         # since index is empty, we should not be able to search
         assert False
