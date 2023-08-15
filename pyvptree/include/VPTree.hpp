@@ -22,7 +22,7 @@
 #include "ISerializable.hpp"
 #include "VPLevelPartition.hpp"
 
-#define ENABLE_OMP_PARALLEL 0
+#define ENABLE_OMP_PARALLEL 1
 
 namespace vptree {
 
