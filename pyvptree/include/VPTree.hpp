@@ -50,6 +50,11 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         _examples.clear();
     }
 
+    VPTree(const VPTree<T, distance_type, distance> &other) {
+        auto other_state = other.serialize();
+        deserialize(other_state);
+    }
+
     ~VPTree() { clear(); };
 
     void clear() {
@@ -60,10 +65,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         _examples.clear();
     }
 
-    VPTree(const std::vector<T> &array) {
-        set(array);
-    
-    }
+    VPTree(const std::vector<T> &array) { set(array); }
 
     void set(const std::vector<T> &array) {
         clear();
@@ -79,11 +81,18 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 
     bool isEmpty() { return _rootPartition == nullptr; }
 
+    void print_state() {
+        if (_rootPartition == nullptr) {
+            return;
+        }
+
+        _rootPartition->print_state();
+    }
+
     SerializedState serialize() const override {
         if (_rootPartition == nullptr) {
             return SerializedState();
         }
-
 
         size_t element_size = 0;
         size_t num_elements_per_example = 0;
@@ -116,12 +125,13 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         state.push(num_elements_per_example);
         state.push(element_size);
 
-        if(state.size() != total_size) {
+        if (state.size() != total_size) {
             throw new std::out_of_range("invalid serialization state, offsets dont match!");
         }
 
         SerializedState partition_state = _rootPartition->serialize();
         partition_state += state;
+        partition_state.buildChecksum();
         return partition_state;
     }
 
@@ -135,8 +145,9 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             throw new std::invalid_argument("invalid state - checksum mismatch");
         }
 
-
         SerializedState copy(state);
+
+        _rootPartition = new VPLevelPartition<distance_type>();
 
         size_t elem_size = copy.pop<size_t>();
         size_t num_elements_per_example = copy.pop<size_t>();
@@ -144,20 +155,19 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 
         _examples.reserve(num_examples);
         _examples.resize(num_examples);
-        for (size_t i = 0; i < num_examples; ++i) {
-            int64_t originalIndex = copy.pop<int64_t>();
+        for (int64_t i = num_examples - 1; i >= 0; --i) {
 
             auto &example = _examples[i];
-            example.originalIndex = originalIndex;
             auto &val = example.val;
             val.resize(num_elements_per_example);
 
-            for (size_t j = 0; j < num_elements_per_example; ++j) {
+            for (int64_t j = num_elements_per_example - 1; j >= 0; --j) {
                 copy.pop_by_size(&val[j], elem_size);
             }
+            int64_t originalIndex = copy.pop<int64_t>();
+            example.originalIndex = originalIndex;
         }
 
-        _rootPartition = new VPLevelPartition<distance_type>();
         _rootPartition->deserialize(copy);
     }
 
@@ -257,13 +267,13 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             // Left is every one within the median distance radius
             VPLevelPartition<distance_type> *left = nullptr;
             if (start + 1 <= median) {
-                left = new VPLevelPartition<distance_type>(-1, start + 1, median);
+                left = new VPLevelPartition<distance_type>(0, start + 1, median);
                 _toSplit.push_back(left);
             }
 
             VPLevelPartition<distance_type> *right = nullptr;
             if (median + 1 <= end) {
-                right = new VPLevelPartition<distance_type>(-1, median + 1, end);
+                right = new VPLevelPartition<distance_type>(0, median + 1, end);
                 _toSplit.push_back(right);
             }
 

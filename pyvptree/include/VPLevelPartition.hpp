@@ -1,12 +1,12 @@
 
 #pragma once
 
+#include <algorithm>
 #include <iostream>
 #include <limits>
 #include <queue>
 #include <sstream>
 #include <utility>
-#include <algorithm>
 #include <vector>
 
 #include "ISerializable.hpp"
@@ -14,7 +14,7 @@
 #define ENABLE_OMP_PARALLEL 1
 namespace vptree {
 
-template <typename distance_type> class VPLevelPartition : public ISerializable{
+template <typename distance_type> class VPLevelPartition : public ISerializable {
     public:
     VPLevelPartition(distance_type radius, int64_t start, int64_t end) {
         // For each partition, the vantage point is the first point within the partition (pointed by indexStart)
@@ -40,6 +40,7 @@ template <typename distance_type> class VPLevelPartition : public ISerializable{
         std::vector<const VPLevelPartition *> flatten_tree_state;
 
         flatten_tree(this, flatten_tree_state);
+        // we need to reverse since we will pop elements in reverse order when deserializing
         std::reverse(flatten_tree_state.begin(), flatten_tree_state.end());
 
         size_t total_size = flatten_tree_state.size() * (2 * sizeof(int64_t) + sizeof(float));
@@ -48,7 +49,7 @@ template <typename distance_type> class VPLevelPartition : public ISerializable{
         // reverse the tree state since we will push it in a stack for serializing
         for (const VPLevelPartition *elem : flatten_tree_state) {
             if (elem == nullptr) {
-                state.push((float)(-1));
+                state.push((float)(0));
                 state.push((int64_t)(-1));
                 state.push((int64_t)(-1));
                 continue;
@@ -60,7 +61,6 @@ template <typename distance_type> class VPLevelPartition : public ISerializable{
         }
 
         if (state.size() != total_size) {
-            std::cout << "state size: " << state.size() << " total size: " << total_size << "dont match!" << std::endl << std::flush;;
             throw new std::out_of_range("invalid serialization state, offsets dont match!");
         }
 
@@ -100,6 +100,8 @@ template <typename distance_type> class VPLevelPartition : public ISerializable{
     VPLevelPartition *left() const { return _left; }
     VPLevelPartition *right() const { return _right; }
 
+    void print_state() { print_state(this, 0); }
+
     private:
     void clear() {
         if (_left != nullptr)
@@ -112,21 +114,21 @@ template <typename distance_type> class VPLevelPartition : public ISerializable{
         _right = nullptr;
     }
 
+    void print_state(const VPLevelPartition *root, int level = 0) {
+        if (root == nullptr) {
+            return;
+        }
+        print_state(root->left(), level + 1);
+        print_state(root->right(), level + 1);
+    }
+
     void flatten_tree(const VPLevelPartition *root, std::vector<const VPLevelPartition *> &flatten_tree_state) const {
         // visit partitions tree in preorder push all values.
         // implement pre order using a vector as a stack
-        std::vector<VPLevelPartition *> stack;
-        stack.push_back(const_cast<VPLevelPartition *>(root));
-        while(!stack.empty()) {
-            VPLevelPartition *current = stack.back();
-            stack.pop_back();
-            flatten_tree_state.push_back(current);
-            if (current == nullptr) {
-                continue;
-            }
-
-            stack.push_back(current->_left);
-            stack.push_back(current->_right);
+        flatten_tree_state.push_back(root);
+        if (root != nullptr) {
+            flatten_tree(root->_left, flatten_tree_state);
+            flatten_tree(root->_right, flatten_tree_state);
         }
     }
 
@@ -163,4 +165,4 @@ template <typename distance_type> class VPLevelPartition : public ISerializable{
     VPLevelPartition<distance_type> *_right = nullptr;
 };
 
-};
+}; // namespace vptree

@@ -100,7 +100,7 @@ TEST(VPTests, TestSerialization) {
     std::default_random_engine generator;
     std::uniform_real_distribution<float> distribution(-10, 10);
 
-    const unsigned int numPoints = 10000;
+    const unsigned int numPoints = 14001;
     std::vector<Eigen::Vector3d> points;
     points.reserve(numPoints);
     points.resize(numPoints);
@@ -113,7 +113,6 @@ TEST(VPTests, TestSerialization) {
     VPTree<Eigen::Vector3d, float, distance> tree2;
     VPTree<Eigen::Vector3d, float, distance> tree(points);
     auto state = tree.serialize();
-
     tree2.deserialize(state);
 
     std::vector<Eigen::Vector3d> queries;
@@ -123,7 +122,7 @@ TEST(VPTests, TestSerialization) {
         point[1] = distribution(generator);
         point[2] = distribution(generator);
     }
-    /* std::vector<VPTree<Eigen::Vector3d, float, distance>::VPTreeSearchResultElement> results; */
+
     std::vector<int64_t> indices;
     std::vector<float> distances;
     std::vector<int64_t> indices2;
@@ -133,12 +132,10 @@ TEST(VPTests, TestSerialization) {
 
     EXPECT_EQ(indices.size(), indices2.size());
     for (int i = 0; i < indices.size(); ++i) {
-      EXPECT_EQ(indices[i], indices2[i]) << "Vectors x and y differ at index " << i;
-      EXPECT_EQ(distances[i], distances2[i]) << "Vectors x and y differ at distance " << i;
+        EXPECT_EQ(indices[i], indices2[i]) << "Vectors x and y differ at index " << i;
+        EXPECT_EQ(distances[i], distances2[i]) << "Vectors x and y differ at distance " << i;
     }
-
 }
-
 
 TEST(VPTests, TestCreation) {
 
@@ -163,13 +160,10 @@ TEST(VPTests, TestCreation) {
 }
 
 TEST(VPTests, TestSearch) {
-
-    return;
-
     std::default_random_engine generator;
     std::uniform_real_distribution<float> distribution(-10, 10);
 
-    const unsigned int numPoints = 4e8;
+    const unsigned int numPoints = 4e4;
     std::vector<Eigen::Vector3d> points;
     points.resize(numPoints);
     for (Eigen::Vector3d &point : points) {
@@ -178,15 +172,10 @@ TEST(VPTests, TestSearch) {
         point[2] = distribution(generator);
     }
 
-    std::cout << "Building tree with " << numPoints << " points " << std::endl;
     auto start = std::chrono::steady_clock::now();
-
     VPTree<Eigen::Vector3d, float, distance> tree(points);
     auto end = std::chrono::steady_clock::now();
     std::chrono::duration<float> diff = end - start;
-    std::cout << "Process took " << diff.count() << " seconds " << std::endl;
-
-    std::cout << "Searching within the tree with " << numPoints << " points " << std::endl;
 
     std::vector<Eigen::Vector3d> queries;
     queries.resize(5000);
@@ -202,6 +191,5 @@ TEST(VPTests, TestSearch) {
     tree.search1NN(queries, indices, distances);
     end = std::chrono::steady_clock::now();
     diff = end - start;
-    std::cout << "Process took " << diff.count() << " seconds " << std::endl;
 }
 } // namespace vptree::tests
