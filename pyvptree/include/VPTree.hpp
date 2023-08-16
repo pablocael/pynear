@@ -175,8 +175,8 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 
     void searchKNN(const std::vector<T> &queries, unsigned int k, std::vector<VPTreeSearchResultElement> &results) {
 
-        if (_rootPartition == nullptr) {
-            return;
+        if (isEmpty()) {
+            throw std::runtime_error("indices must be first initialized with .set() function");
         }
 
         // we must return one result per queries
@@ -201,8 +201,8 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
     // An optimized version for 1 NN search
     void search1NN(const std::vector<T> &queries, std::vector<int64_t> &indices, std::vector<distance_type> &distances) {
 
-        if (_rootPartition == nullptr) {
-            return;
+        if (isEmpty()) {
+            throw std::runtime_error("indices must be first initialized with .set() function");
         }
 
         // we must return one result per queries
