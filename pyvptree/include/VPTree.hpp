@@ -223,6 +223,30 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         }
     }
 
+    friend std::ostream &operator<<(std::ostream &os, const VPTree<T, distance_type, distance> &vptree) {
+        os << "####################" << std::endl;
+        os << "# [VPTree state]" << std::endl;
+        os << "Num Data Points: " << vptree._examples.size() << std::endl;
+
+        int64_t total_memory = 0;
+        if (vptree._rootPartition != nullptr) {
+            total_memory =
+                vptree._rootPartition->numSubnodes() * sizeof(VPLevelPartition<distance_type>) + vptree._examples.size() * sizeof(VPTreeElement);
+        }
+        os << "Total Memory: " << total_memory << " bytes" << std::endl;
+        os << "####################" << std::endl;
+        os << "[+] Root Level:" << std::endl;
+        if (vptree._rootPartition != nullptr) {
+            total_memory =
+                vptree._rootPartition->numSubnodes() * sizeof(VPLevelPartition<distance_type>) + vptree._examples.size() * sizeof(VPTreeElement);
+            os << *vptree._rootPartition << std::endl;
+        } else {
+            os << "<empty>" << std::endl;
+        }
+
+        return os;
+    }
+
     protected:
     /*
      *  Builds a Vantage Point tree using each element of the given array as one coordinate buffer

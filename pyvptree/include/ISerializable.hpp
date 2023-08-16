@@ -83,7 +83,7 @@ class ISerializable {
 };
 
 std::ostream &operator<<(std::ostream &os, const SerializedState &state) {
-    for (int i = 0; i < state.data.size(); i++) {
+    for (size_t i = 0; i < state.data.size(); i++) {
         os << state.data[i];
     }
     os << std::endl;

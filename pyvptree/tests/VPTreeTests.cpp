@@ -7,6 +7,7 @@
 #include <chrono>
 #include <iostream>
 #include <random>
+#include <sstream>
 #include <vector>
 
 #include <stdint.h>
@@ -119,6 +120,26 @@ TEST(VPTests, TestEmpty) {
 
     EXPECT_EQ(indices.size(), indices2.size());
     EXPECT_EQ(indices.size(), 0);
+}
+
+TEST(VPTests, TestToString) {
+    std::default_random_engine generator;
+    std::uniform_real_distribution<float> distribution(-10, 10);
+
+    const unsigned int numPoints = 14001;
+    std::vector<Eigen::Vector3d> points;
+    points.reserve(numPoints);
+    points.resize(numPoints);
+    for (Eigen::Vector3d &point : points) {
+        point[0] = distribution(generator);
+        point[1] = distribution(generator);
+        point[2] = distribution(generator);
+    }
+
+    VPTree<Eigen::Vector3d, float, distance> tree(points);
+
+    std::stringstream ss;
+    ss << tree;
 }
 
 TEST(VPTests, TestCopy) {

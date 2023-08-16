@@ -1,7 +1,9 @@
 
 #pragma once
 
+#include "ISerializable.hpp"
 #include <algorithm>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <queue>
@@ -9,9 +11,11 @@
 #include <utility>
 #include <vector>
 
-#include "ISerializable.hpp"
-
 namespace vptree {
+
+template <typename distance_type> class VPLevelPartition;
+
+template <typename distance_type> void rec_print_state(std::ostream &os, VPLevelPartition<distance_type> *partition, int level);
 
 template <typename distance_type> class VPLevelPartition : public ISerializable {
     public:
@@ -91,6 +95,10 @@ template <typename distance_type> class VPLevelPartition : public ISerializable 
     void setRadius(distance_type radius) { _radius = radius; }
     distance_type radius() { return _radius; }
 
+    int height() { return rec_height(this, 0); }
+
+    int numSubnodes() { return rec_num_subnodes(this); }
+
     void setChild(VPLevelPartition<distance_type> *left, VPLevelPartition<distance_type> *right) {
         _left = left;
         _right = right;
@@ -99,7 +107,10 @@ template <typename distance_type> class VPLevelPartition : public ISerializable 
     VPLevelPartition *left() const { return _left; }
     VPLevelPartition *right() const { return _right; }
 
-    void print_state() { print_state(this, 0); }
+    friend std::ostream &operator<<(std::ostream &os, const VPLevelPartition<distance_type> &partition) {
+        rec_print_state<distance_type>(os, &const_cast<VPLevelPartition<distance_type> &>(partition), 0);
+        return os;
+    }
 
     private:
     void clear() {
@@ -111,14 +122,6 @@ template <typename distance_type> class VPLevelPartition : public ISerializable 
 
         _left = nullptr;
         _right = nullptr;
-    }
-
-    void print_state(const VPLevelPartition *root, int level = 0) {
-        if (root == nullptr) {
-            return;
-        }
-        print_state(root->left(), level + 1);
-        print_state(root->right(), level + 1);
     }
 
     void flatten_tree(const VPLevelPartition *root, std::vector<const VPLevelPartition *> &flatten_tree_state) const {
@@ -150,6 +153,26 @@ template <typename distance_type> class VPLevelPartition : public ISerializable 
         return root;
     }
 
+    int rec_height(VPLevelPartition *root, int level = 0) {
+
+        if (root == nullptr) {
+            return level;
+        }
+        int l_l = rec_height(root->_left, level + 1);
+        int l_r = rec_height(root->_right, level + 1);
+        return std::max(l_l, l_r) + 1;
+    }
+
+    int rec_num_subnodes(VPLevelPartition *root) {
+
+        if (root == nullptr) {
+            return 0;
+        }
+        int l_l = rec_num_subnodes(root->_left);
+        int l_r = rec_num_subnodes(root->_right);
+        return l_l + l_r + 1;
+    }
+
     distance_type _radius;
 
     // _indexStart and _indexEnd are index pointers to examples within the examples list of the VPTre, not index of coordinates
@@ -163,5 +186,36 @@ template <typename distance_type> class VPLevelPartition : public ISerializable 
     VPLevelPartition<distance_type> *_left = nullptr;
     VPLevelPartition<distance_type> *_right = nullptr;
 };
+
+template <typename distance_type> void rec_print_state(std::ostream &os, VPLevelPartition<distance_type> *partition, int level) {
+    if (partition == nullptr) {
+        return;
+    }
+
+    std::string pad;
+    for (int i = 0; i < 4 * level; ++i) {
+        pad.push_back('.');
+    }
+
+    os << pad << " Depth: " << level << std::endl;
+    os << pad << " Height: " << partition->height() << std::endl;
+    os << pad << " Num Sub Nodes: " << partition->numSubnodes() << std::endl;
+    os << pad << " Index Start: " << partition->start() << std::endl;
+    os << pad << " Index End:   " << partition->end() << std::endl;
+
+    int64_t lsize = partition->left() != nullptr ? partition->left()->height() : 0;
+    int64_t rsize = partition->right() != nullptr ? partition->right()->height() : 0;
+    os << pad << " Left Subtree Height: " << lsize << std::endl;
+    os << pad << " Right Subtree Height: " << rsize << std::endl;
+
+    if (partition->left()) {
+        os << pad << " [+] Left children:" << std::endl;
+    }
+    rec_print_state(os, partition->left(), level + 1);
+    if (partition->right()) {
+        os << pad << " [+] Right children:" << std::endl;
+    }
+    rec_print_state(os, partition->right(), level + 1);
+}
 
 }; // namespace vptree

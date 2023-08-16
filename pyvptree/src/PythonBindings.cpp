@@ -3,18 +3,19 @@
  *  Copyright 2021 Pablo Carneiro Elias
  */
 
-#include <DistanceFunctions.hpp>
-#include <VPTree.hpp>
-#include <iostream>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include <cassert>
+#include <iostream>
 #include <omp.h>
+#include <sstream>
 #include <stdexcept>
 
+#include <DistanceFunctions.hpp>
 #include <ISerializable.hpp>
+#include <VPTree.hpp>
 
 namespace py = pybind11;
 
@@ -60,6 +61,13 @@ template <distance_func_f distance> class VPTreeNumpyAdapter {
         return std::make_tuple(std::move(indices), std::move(distances));
     }
 
+    std::string to_string() {
+        std::stringstream stream;
+        stream << tree;
+
+        return stream.str();
+    }
+
     vptree::VPTree<arrayf, float, distance> tree;
 };
 
@@ -100,6 +108,13 @@ class VPTreeBinaryNumpyAdapter {
         return std::make_tuple(std::move(indices), std::move(distances));
     }
 
+    std::string to_string() {
+        std::stringstream stream;
+        stream << tree;
+
+        return stream.str();
+    }
+
     vptree::VPTree<arrayli, int64_t, dist_hamming> tree;
 };
 
@@ -107,6 +122,7 @@ PYBIND11_MODULE(_pyvptree, m) {
     py::class_<VPTreeNumpyAdapter<dist_l2_f_avx2>>(m, "VPTreeL2Index")
         .def(py::init<>())
         .def("set", &VPTreeNumpyAdapter<dist_l2_f_avx2>::set)
+        .def("to_string", &VPTreeNumpyAdapter<dist_l2_f_avx2>::to_string)
         .def("searchKNN", &VPTreeNumpyAdapter<dist_l2_f_avx2>::searchKNN)
         .def("search1NN", &VPTreeNumpyAdapter<dist_l2_f_avx2>::search1NN)
         .def(py::pickle(
@@ -130,6 +146,7 @@ PYBIND11_MODULE(_pyvptree, m) {
     py::class_<VPTreeNumpyAdapter<dist_l1_f_avx2>>(m, "VPTreeL1Index")
         .def(py::init<>())
         .def("set", &VPTreeNumpyAdapter<dist_l1_f_avx2>::set)
+        .def("to_string", &VPTreeNumpyAdapter<dist_l1_f_avx2>::to_string)
         .def("searchKNN", &VPTreeNumpyAdapter<dist_l1_f_avx2>::searchKNN)
         .def("search1NN", &VPTreeNumpyAdapter<dist_l1_f_avx2>::search1NN)
         .def(py::pickle(
@@ -153,6 +170,7 @@ PYBIND11_MODULE(_pyvptree, m) {
     py::class_<VPTreeNumpyAdapter<dist_chebyshev_f_avx2>>(m, "VPTreeChebyshevIndex")
         .def(py::init<>())
         .def("set", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::set)
+        .def("to_string", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::to_string)
         .def("searchKNN", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::searchKNN)
         .def("search1NN", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::search1NN)
         .def(py::pickle(
@@ -176,6 +194,7 @@ PYBIND11_MODULE(_pyvptree, m) {
     py::class_<VPTreeBinaryNumpyAdapter>(m, "VPTreeBinaryIndex")
         .def(py::init<>())
         .def("set", &VPTreeBinaryNumpyAdapter::set)
+        .def("to_string", &VPTreeBinaryNumpyAdapter::to_string)
         .def("searchKNN", &VPTreeBinaryNumpyAdapter::searchKNN)
         .def("search1NN", &VPTreeBinaryNumpyAdapter::search1NN)
         .def(py::pickle(
