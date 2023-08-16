@@ -192,7 +192,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             searchKNN(_rootPartition, query, k, knnQueue);
 
             // we must always return k elements for each search unless there is no k elements
-            assert(static_cast<size_t>(knnQueue.size()) == std::min<size_t>(_examples.size(), k));
+            assert(knnQueue.size() == std::min<size_t>(_examples.size(), k));
 
             fillSearchResult(knnQueue, results[i]);
         }
