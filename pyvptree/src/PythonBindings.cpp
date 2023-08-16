@@ -27,7 +27,7 @@ template <distance_func_f distance> class VPTreeNumpyAdapter {
 
     void set(const ndarrayf &array) { tree.set(array); }
 
-    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<float>>> searchKNN(const ndarrayf &queries, unsigned int k) {
+    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<float>>> searchKNN(const ndarrayf &queries, size_t k) {
 
         std::vector<typename vptree::VPTree<arrayf, float, distance>::VPTreeSearchResultElement> results;
         tree.searchKNN(queries, k, results);
@@ -69,7 +69,7 @@ class VPTreeBinaryNumpyAdapter {
 
     void set(const ndarrayli &array) { tree.set(array); }
 
-    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<int64_t>>> searchKNN(const ndarrayli &queries, unsigned int k) {
+    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<int64_t>>> searchKNN(const ndarrayli &queries, size_t k) {
 
         std::vector<vptree::VPTree<arrayli, int64_t, dist_hamming>::VPTreeSearchResultElement> results;
         tree.searchKNN(queries, k, results);

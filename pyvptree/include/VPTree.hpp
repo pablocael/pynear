@@ -177,7 +177,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         _rootPartition->deserialize(copy);
     }
 
-    void searchKNN(const std::vector<T> &queries, unsigned int k, std::vector<VPTreeSearchResultElement> &results) {
+    void searchKNN(const std::vector<T> &queries, size_t k, std::vector<VPTreeSearchResultElement> &results) {
 
         if (isEmpty()) {
             throw std::runtime_error("index must be first initialized with .set() function and non empty dataset");
