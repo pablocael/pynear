@@ -72,6 +72,10 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
     void set(const std::vector<T> &array) {
         clear();
 
+        if(array.empty()) {
+            return;
+        }
+
         _examples.reserve(array.size());
         _examples.resize(array.size());
         for (size_t i = 0; i < array.size(); ++i) {
@@ -176,7 +180,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
     void searchKNN(const std::vector<T> &queries, unsigned int k, std::vector<VPTreeSearchResultElement> &results) {
 
         if (isEmpty()) {
-            throw std::runtime_error("indices must be first initialized with .set() function");
+            throw std::runtime_error("index must be first initialized with .set() function and non empty dataset");
         }
 
         // we must return one result per queries
@@ -202,7 +206,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
     void search1NN(const std::vector<T> &queries, std::vector<int64_t> &indices, std::vector<distance_type> &distances) {
 
         if (isEmpty()) {
-            throw std::runtime_error("indices must be first initialized with .set() function");
+            throw std::runtime_error("index must be first initialized with .set() function and non empty dataset");
         }
 
         // we must return one result per queries
