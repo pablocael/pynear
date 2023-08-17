@@ -29,9 +29,9 @@ benchmark:
   - name: "L2 Comparison High Dimensionality"
     k: [8]
     num_queries: [16]
-    dimensions: [32, 64, 128, 512, 1024]
-    dataset_total_size: 2500000
-    dataset_num_clusters: 50
+    dimensions: [32, 64, 128]
+    dataset_total_size: 120000
+    dataset_num_clusters: 20
     dataset_type: "float32"
     index_types:
     - FaissIndexFlatL2
@@ -41,8 +41,8 @@ benchmark:
   - name: "Binary Index Comparison"
     k: [8]
     num_queries: [16]
-    dimensions: [32, 64, 128, 256, 512]
-    dataset_total_size: 2500000
+    dimensions: [32, 64, 128, 256]
+    dataset_total_size: 200000
     dataset_num_clusters: 50
     dataset_type: "uint8"
     index_types:

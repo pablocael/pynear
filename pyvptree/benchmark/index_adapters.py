@@ -126,7 +126,7 @@ class AnnoyManhattanAdapter(IndexAdapter):
         for i, v in enumerate(data):
             self._index.add_item(i, v)
 
-    def clock_search(self, query: np.ndarray, k: int):
+    def _search_implementation(self, query, k: int):
         for v in query:
             self._index.get_nns_by_vector(v, k)
 
@@ -166,6 +166,7 @@ class SKLearnL2Adapter(IndexAdapter):
         Searchs in index and retrieves the time it took to search
         """
         # sklearn uses index based on k, so need to build on the fly
+        # we will not clock index training stage
         self._index = NearestNeighbors(n_neighbors=k, algorithm='kd_tree', metric='euclidean')
         self._index.fit(self._data)
 
