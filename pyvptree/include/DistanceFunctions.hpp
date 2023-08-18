@@ -52,12 +52,8 @@ template <> int64_t hamming<128>(const uint64_t *pa, const uint64_t *pb) { retur
 
 template <> int64_t hamming<256>(const uint64_t *pa, const uint64_t *pb) {
 
-    __m256d result = _mm256_set_pd(
-        _mm_popcnt_u64(pa[0] ^ pb[0]),
-        _mm_popcnt_u64(pa[1] ^ pb[1]),
-        _mm_popcnt_u64(pa[2] ^ pb[2]),
-        _mm_popcnt_u64(pa[3] ^ pb[3])
-    );
+    __m256d result =
+        _mm256_set_pd(_mm_popcnt_u64(pa[0] ^ pb[0]), _mm_popcnt_u64(pa[1] ^ pb[1]), _mm_popcnt_u64(pa[2] ^ pb[2]), _mm_popcnt_u64(pa[3] ^ pb[3]));
     return (int64_t)sum4(result);
 }
 
@@ -82,7 +78,6 @@ inline float sum8(__m256 x) {
     const __m128 sum = _mm_add_ss(lo, hi);
     return _mm_cvtss_f32(sum);
 }
-
 
 double dist_l2_d_avx2(const arrayd &p1, const arrayd &p2) {
 

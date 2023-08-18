@@ -34,31 +34,31 @@ class BenchmarkCase:
 
     def run(self):
         results = []
-        for k_value in self.k:
-            for dimension in self.dimensions:
+        for dimension in self.dimensions:
+            logger.info("generating dataset ...")
+            data = generate_gaussian_dataset(
+                self.dataset_total_size,
+                self.dataset_num_clusters,
+                dimension,
+                data_type=np.dtype(self.dataset_type),
+            )
+            logger.info(f"generating dataset done")
+            for k_value in self.k:
                 for index_type in self.index_types:
                     logger.info(f"processing index_type: {index_type} for k = {k_value} and dimension = {dimension}")
-                    logger.info("generating dataset ...")
                     index = create_index_adapter(index_type)
-                    data = generate_gaussian_dataset(
-                        self.dataset_total_size,
-                        self.dataset_num_clusters,
-                        dimension,
-                        data_type=np.dtype(self.dataset_type),
-                    )
-                    logger.info(f"generating dataset done")
                     logger.info(f"buiding index ...")
                     index.build_index(data)
                     logger.info(f"buiding index done")
                     logger.info("start performing queries")
                     for num_queries in self.num_queries:
-                        logger.info(f"start performing queries (num_queries = {num_queries})")
                         query = generate_gaussian_dataset(
                             num_queries,
                             1,
                             dimension,
                             data_type=np.dtype(self.dataset_type),
                         )
+                        logger.info(f"start performing queries (num_queries = {num_queries})")
                         results.append({
                             "time": index.clock_search(query, k_value),
                             "k": k_value,

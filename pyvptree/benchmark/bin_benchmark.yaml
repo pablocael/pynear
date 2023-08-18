@@ -1,0 +1,17 @@
+# 
+# Supported 3rd party indices are: FaissIndexFlatL2, FaissIndexBinaryFlat, AnnoyL2, AnnoyManhattan, AnnoyHamming, SKLearnL2
+# This allow comparing VPTree indices to thow 3 third party indices.
+benchmark:
+  cases:
+  - name: "Binary Index Comparison"
+    k: [8]
+    num_queries: [16]
+    dimensions: [32, 64, 256]
+    dataset_total_size: 1000000
+    dataset_num_clusters: 50
+    dataset_type: "uint8"
+    index_types:
+    - FaissIndexBinaryFlat
+    - AnnoyHamming
+    - VPTreeBinaryIndex
+
