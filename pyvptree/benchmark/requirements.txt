@@ -7,3 +7,4 @@ img2vec_pytorch
 matplotlib
 seaborn
 scikit-learn
+annoy

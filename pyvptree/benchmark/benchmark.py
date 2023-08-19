@@ -1,165 +1,145 @@
 import time
-from dataclasses import dataclass
-from typing import Any, Callable, List, Tuple, Union
-
-import faiss
+import yaml
 import numpy as np
 import pandas as pd
-from sklearn.neighbors import NearestNeighbors
-
+import faiss
 import pyvptree
-from pyvptree.benchmark.dataset import BenchmarkDataset
+from sklearn.neighbors import NearestNeighbors
+from typing import Callable, Any, Dict, Generator, List, Optional, Tuple, Union
+from dataclasses import dataclass
+from pyvptree.benchmark.dataset import generate_gaussian_dataset
 from pyvptree.logging import create_and_configure_log
+from pyvptree.benchmark.index_adapters import create_index_adapter
 
 logger = create_and_configure_log(__name__)
 
+# number of searchs to perform for averaging the result
+# in order to reduce effect of high outliers
+NUM_AVG_SEARCHS = 8
+
 
 @dataclass
-class ComparatorBenchmarkCase:
+class BenchmarkCase:
+    """
+    A benchmark case to run.
+    """
+
+    name: str
+
     # list of test case K values (how many neighbors to search)
     # each case will result in multiple tests, one for each k value
-    ks: List[int]
+    k: List[int]
+    num_queries: List[int]
+    index_types: List[str]
+    dimensions: List[int]
+    dataset_total_size: int
+    dataset_num_clusters: int
+    dataset_type: str = "float32"
 
-    # the data to use in the test case
-    dataset: BenchmarkDataset
+    def run(self):
+        results = []
+        for dimension in self.dimensions:
+            logger.info("generating dataset ...")
+            data = generate_gaussian_dataset(
+                self.dataset_total_size,
+                self.dataset_num_clusters,
+                dimension,
+                data_type=np.dtype(self.dataset_type),
+            )
+            logger.info(f"generating dataset done")
+            for k_value in self.k:
+                for index_type in self.index_types:
+                    logger.info(f"processing index_type: {index_type} for k = {k_value} and dimension = {dimension}")
+                    index = create_index_adapter(index_type)
+                    logger.info(f"buiding index ...")
+                    index.build_index(data)
+                    logger.info(f"buiding index done")
+                    logger.info("start performing queries")
+                    for num_queries in self.num_queries:
+                        query = generate_gaussian_dataset(
+                            num_queries,
+                            1,
+                            dimension,
+                            data_type=np.dtype(self.dataset_type),
+                        )
+                        logger.info(f"start performing queries (num_queries = {num_queries})")
+                        runs = np.array([index.clock_search(query, k_value) for _ in range(NUM_AVG_SEARCHS)])
+                        logger.info(f"5 runs set: {runs}")
+                        runs = BenchmarkCase.reject_outliers(runs)
+                        logger.info(f"rejected {NUM_AVG_SEARCHS-len(runs)} outliers.")
+
+                        # reject outliers
+                        avg = sum(runs) / len(runs)
+                        logger.info(f"avg of {NUM_AVG_SEARCHS} searches runtime is {avg:0.4f}")
+
+                        results.append({
+                            "time": avg,
+                            "k": k_value,
+                            "num_seraches_avg": NUM_AVG_SEARCHS,
+                            "num_queries": num_queries,
+                            "index_type": index_type,
+                            "dimension": dimension,
+                            "dataset_total_size": self.dataset_total_size,
+                            "dataset_num_clusters": self.dataset_num_clusters,
+                        })
+                        logger.info(f"done performing queries for (num_queries = {num_queries})")
+                    logger.info(f"queries done")
+        return {"benchmark_case_id": self.id(), "benchmark_case_name": self.name, "results": results}
 
     # the random seed for reproducibility
     seed: int = 12246
 
+    def id(self):
+        # return name in a dns compatible format
+        return self.name.replace(" ", "-").lower()
+
     def __str__(self):
-        return f"{self.dataset.name()}-k={self.ks}"
+        return f"{self.id()}: ks={self.k}, num_queries={self.num_queries}, index_types={self.index_types}, dataset_total_size={self.dataset_total_size}, num_clusters={self.dataset_num_clusters}, seed={self.seed}"
 
+    @staticmethod
+    def reject_outliers(data, m=1.2):
+        return data[abs(data - np.mean(data)) < m * np.std(data)]
 
-class ComparatorBenchmark:
+class BenchmarkRunner:
     """
     A generic benchmark build helper class to automate benchmark generation.
     """
 
-    def __init__(self, benchmark_cases: List[ComparatorBenchmarkCase]):
+    def __init__(self, benchmark_yaml_file: str):
         """
         Build a benchmark comparator between pyvptree and faiss.
 
         Args:
             benchmark_cases (List[BenchmarkCase]): the list of benchmark cases to perform.
         """
-        self._benchmark_cases = benchmark_cases
+        self._benchmark_cases = BenchmarkRunner.read_cases_from_yaml(benchmark_yaml_file)
         self._results = pd.DataFrame()
 
-    def run(self):
+    @staticmethod
+    def read_cases_from_yaml(yaml_file: str) -> List[BenchmarkCase]:
+        """
+        Read benchmark cases from a yaml file.
+
+        Args:
+            yaml_file (str): the yaml file to read from.
+        """
+        with open(yaml_file, "r") as stream:
+            benchmark_configs = yaml.safe_load(stream)
+
+        cases = benchmark_configs.get("benchmark", {}).get("cases", [])
+
+        results = []
+        for case in cases:
+            results.append(BenchmarkCase(**case))
+
+        return results
+
+    def run(self) -> Generator[Dict[str, Any], None, None]:
         num_cases = len(self._benchmark_cases)
         logger.info(f"start running benchmark for {num_cases} cases ...")
 
-        results = []
         for case in self._benchmark_cases:
-            logger.info("***** begin case *****\n")
-            start_case = time.time()
-            logger.info(f"starting case {str(case)} ...")
-            logger.info("splittting dataset into train / test... ")
-            train, test = self._split_test_train_case(case.dataset)
-            logger.info(f"split sizes test = {test.shape[0]}, train = {train.shape[0]}... ")
-
-            start = time.time()
-            logger.info("generating faiss index ... ")
-            faiss_index = self._generate_faiss_index(train, case.dataset._pyvpindex_type)
-            logger.info(f"done, faiss index took {time.time()-start:0.3f} seconds... ")
-
-            start = time.time()
-            logger.info("generating pyvp index ... ")
-            pyvptree_index = self._generate_pyvptree_index(train, case.dataset._pyvpindex_type)
-            logger.info(f"done, pyvptree index took {time.time()-start:0.3f} seconds... ")
-            for k in case.ks:
-                logger.info("searching into faiss index ... ")
-                start = time.time()
-                self._search_knn_faiss(faiss_index, test, k)
-                end = time.time()
-                faiss_time = end - start
-                logger.info(f"faiss search for k = {k} took {faiss_time:0.3f} seconds... ")
-
-                logger.info("searching into pyvptree index ... ")
-                start = time.time()
-                self._search_knn_pyvptree(pyvptree_index, test, k)
-                end = time.time()
-                pyvptree_time = end - start
-                logger.info(f"pyvptree search for k = {k} took {pyvptree_time:0.3f} seconds... ")
-
-                results.append(
-                    {
-                        "k": k,
-                        "dimension": case.dataset.dimension(),
-                        "size": case.dataset.size(),
-                        "index_type": case.dataset.index_type().__name__,
-                        "query_size": test.shape[0],
-                        "faiss_time": faiss_time,
-                        "pyvptree_time": pyvptree_time,
-                    }
-                )
-
-                if case.dataset.index_type() == pyvptree.VPTreeL2Index:
-                    start = time.time()
-                    logger.info("generating sklearn index ... ")
-                    sklearn_index = self._generate_sklearn_index(train, k)
-                    logger.info(f"done, sklearn index took {time.time()-start:0.3f} seconds... ")
-
-                    logger.info("searching into sklearn index ... ")
-                    start = time.time()
-                    self._search_knn_sklearn(sklearn_index, test)
-                    end = time.time()
-                    sklearn_time = end - start
-                    logger.info(f"sklearn search for k = {k} took {sklearn_time:0.3f} seconds... ")
-
-                    results[-1].update({"sklearn_time": sklearn_time})
-
-            # make sure dataset is unloaded to prevent memory overflow
-            logger.info(f"case took {time.time()-start_case:0.3f}")
-            case.dataset.unload_data()
-            logger.info("***** end case *****\n")
-
-        self._results = pd.DataFrame(results)
-
-    def result(self) -> pd.DataFrame:
-        return self._results
-
-    def _split_test_train_case(self, dataset: BenchmarkDataset):
-        n_test = 8  # perform 8 queries for test and rest for train
-        data: np.ndarray = dataset.data()
-        np.random.shuffle(data)
-        n = dataset.size()
-        n_train = n - n_test
-        return data[0:n_train, :], data[n_train:, :]
-
-    def _generate_faiss_index(self, features: np.ndarray, index_type: Any):
-        d = features.shape[1]
-        faiss_index = faiss.IndexFlatL2(d)
-        if index_type == pyvptree.VPTreeBinaryIndex:
-            d = features.shape[1] * 8
-            quantizer = faiss.IndexBinaryFlat(d)
-
-            # Number of clusters.
-            nlist = int(np.sqrt(features.shape[0]))
-
-            faiss_index = faiss.IndexBinaryIVF(quantizer, d, nlist)
-            faiss_index.nprobe = d  # Number of nearest clusters to be searched per query.
-            faiss_index.train(features)
-
-        faiss_index.add(features)
-        return faiss_index
-
-    def _generate_sklearn_index(self, features: np.ndarray, k):
-        # only for L2 distances
-        return NearestNeighbors(n_neighbors=k, algorithm="kd_tree").fit(features)
-
-    def _generate_pyvptree_index(self, features: np.ndarray, index_type: Any):
-        vptree_index = pyvptree.VPTreeL2Index()
-        if index_type == pyvptree.VPTreeBinaryIndex:
-            vptree_index = pyvptree.VPTreeBinaryIndex()
-        vptree_index.set(features)
-        return vptree_index
-
-    def _search_knn_faiss(self, index, query_features, k=1):
-        return index.search(query_features, k=k)
-
-    def _search_knn_pyvptree(self, index, query_features, k=1):
-        return index.searchKNN(query_features, k)
-
-    def _search_knn_sklearn(self, index, query_features):
-        return index.kneighbors(query_features)
+            logger.info(f"***** begin case {case.name} *****\n")
+            case_result = case.run()
+            logger.info(f"******* end case {case.name} *****\n")
+            yield case_result
