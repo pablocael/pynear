@@ -10,7 +10,7 @@ Available indices are:
 | pyvptree.VPTreeL2Index         | Uses AVX2 optimized L2 (euclidean norm) distance function and VPTree algorithm to perform exact searches.                                                                                                                                         |
 | pyvptree.VPTreeL1Index         | Uses L1 (manhattan) distance function and VPTree algorithm to perform exact searches.                                                                                                                                                             |
 | pyvptree.VPTreeBinaryIndex     | Uses AVX2 optimized Hamming distances function and VPTree algorithm to perform exact searches. Supports 16, 32, 64, 128 and 256 bit dimensional vectors.                                                                                                                                                     |
-| pyvptree.VPTreeChebyshevIndex  | Uses [Chebyshev](https://en.wikipedia.org/wiki/Chebyshev_distance#:~:text=In%20mathematics%2C%20Chebyshev%20distance%20(or,differences%20along%20any%20coordinate%20dimension.) distance function and VPTree algorithm to perform exact searches. |
+| pyvptree.VPTreeChebyshevIndex  | Uses (Chebyshev)[https://en.wikipedia.org/wiki/Chebyshev_distance#:~:text=In%20mathematics%2C%20Chebyshev%20distance%20(or,differences%20along%20any%20coordinate%20dimension.] distance function and VPTree algorithm to perform exact searches. |
 
 ## Usage example
 
