@@ -9,7 +9,7 @@ Available indices are:
 |--------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | pyvptree.VPTreeL2Index         | Uses AVX2 optimized L2 (euclidean norm) distance function and VPTree algorithm to perform exact searches.                                                                                                                                         |
 | pyvptree.VPTreeL1Index         | Uses L1 (manhattan) distance function and VPTree algorithm to perform exact searches.                                                                                                                                                             |
-| pyvptree.VPTreeBinaryIndex     | Uses AVX2 optimized Hamming distances function and VPTree algorithm to perform exact searches. Supports 16, 32, 64, 128 and 256 bit dimensional vectors.                                                                                                                                                     |
+| pyvptree.VPTreeBinaryIndex     | Uses AVX2 optimized Hamming distances function and VPTree algorithm to perform exact searches. Supports 16, 32, 64, 128 and 256 bit dimensional vectors only.                                                                                                                                                     |
 | pyvptree.VPTreeChebyshevIndex  | Uses [Chebyshev](https://en.wikipedia.org/wiki/Chebyshev_distance) distance function and VPTree algorithm to perform exact searches. |
 
 ## Usage example
@@ -43,7 +43,7 @@ vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
 For convenience, apart from `searchKNN` function, vptree also provides `search1NN` for searching the closest nearest neighbor.
 
-#### pyvptree.VPTreeBinaryIndex
+#### pyvptree.VPTreeL2Index
 
 ```python
 np.random.seed(seed=42)
@@ -62,5 +62,5 @@ vptree.set(data)
 vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 ```
 
-Usage is analog to other index types.
+Usage is analog for all other index types.
 
