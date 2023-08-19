@@ -1,9 +1,8 @@
-import os
 import logging
+import os
 
 
 def create_and_configure_log(name):
-
     logger = logging.getLogger(name)
     logger.setLevel("INFO")
     level_envar = "PYVPTREE_LOG_LEVEL"
