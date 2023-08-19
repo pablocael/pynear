@@ -87,6 +87,7 @@ std::ostream &operator<<(std::ostream &os, const SerializedState &state) {
         os << state.data[i];
     }
     os << std::endl;
+    return os;
 }
 
 }; // namespace vptree
