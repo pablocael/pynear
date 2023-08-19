@@ -24,7 +24,7 @@ Examples.
 
 #### pyvptree.VPTreeBinaryIndex
 
-```
+```python
 np.random.seed(seed=42)
 
 dimension = 32 # 32 bytes are 256 bit dimensional vectos
@@ -45,7 +45,7 @@ For convenience, apart from `searchKNN` function, vptree also provides `search1N
 
 #### pyvptree.VPTreeBinaryIndex
 
-```
+```python
 np.random.seed(seed=42)
 
 dimension = 8
