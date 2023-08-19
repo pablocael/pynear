@@ -1,6 +1,6 @@
 # Introduction
 
-Pyvptree is a python library, internally built in C++, for efficient KNN search using metric distance function such as L2 distance (see VPTreeL2Index) or Hamming distances (VPTreeBinaryIndex).
+Pyvptree is a python library, internally built in C++, for efficient KNN search using metric distance function such as L2 distance (see VPTreeL2Index) or Hamming distances (VPTreeBinaryIndex) as well as other indices. It uses AVX2 instructions to optimize distance functions so to improve search performance.
 
 ## How VP-Trees work
 
