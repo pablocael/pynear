@@ -10,7 +10,7 @@ from typing import Callable, Tuple
 import numpy as np
 import pytest
 
-import pyvptree
+import pynear
 
 
 def hamming_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -35,7 +35,7 @@ def chebyshev_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 def test_empty_index():
     try:
-        vptree = pyvptree.VPTreeBinaryIndex()
+        vptree = pynear.VPTreeBinaryIndex()
         i, d = vptree.search1NN(np.random.rand(1, 8).astype(dtype=np.uint8))
         # expect exception and should now reach this line
         # since index is empty, we should not be able to search
@@ -44,7 +44,7 @@ def test_empty_index():
         pass
 
     try:
-        vptree = pyvptree.VPTreeL2Index()
+        vptree = pynear.VPTreeL2Index()
         i, d = vptree.search1NN(np.random.rand(1, 8).astype(dtype=np.uint8))
         # expect exception and should now reach this line
         # since index is empty, we should not be able to search
@@ -53,7 +53,7 @@ def test_empty_index():
         pass
 
     try:
-        vptree = pyvptree.VPTreeL2Index()
+        vptree = pynear.VPTreeL2Index()
         empty = np.array([]).reshape(-1,2)
         vptree.set(empty)
         i, d = vptree.search1NN(np.random.rand(1, 8).astype(dtype=np.uint8))
@@ -111,9 +111,9 @@ def _num_dups(distances):
 
 
 CLASSES = [
-    (pyvptree.VPTreeL2Index, exhaustive_search_euclidean),
-    (pyvptree.VPTreeL1Index, exhaustive_search_manhattan),
-    (pyvptree.VPTreeChebyshevIndex, exhaustive_search_chebyshev),
+    (pynear.VPTreeL2Index, exhaustive_search_euclidean),
+    (pynear.VPTreeL1Index, exhaustive_search_manhattan),
+    (pynear.VPTreeChebyshevIndex, exhaustive_search_chebyshev),
 ]
 
 
@@ -131,7 +131,7 @@ def test_binary():
 
     exaustive_indices, exaustive_distances = exhaustive_search_hamming(data, queries, k)
 
-    vptree = pyvptree.VPTreeBinaryIndex()
+    vptree = pynear.VPTreeBinaryIndex()
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
@@ -156,7 +156,7 @@ def test_large_binary():
 
     exaustive_indices, exaustive_distances = exhaustive_search_hamming(data, queries, k)
 
-    vptree = pyvptree.VPTreeBinaryIndex()
+    vptree = pynear.VPTreeBinaryIndex()
     vptree.set(data)
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 

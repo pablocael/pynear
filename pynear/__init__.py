@@ -1,11 +1,11 @@
 from typing import Type
-from _pyvptree import VPTreeBinaryIndex512
-from _pyvptree import VPTreeBinaryIndex256
-from _pyvptree import VPTreeBinaryIndex128
-from _pyvptree import VPTreeBinaryIndex64
-from _pyvptree import VPTreeChebyshevIndex
-from _pyvptree import VPTreeL1Index
-from _pyvptree import VPTreeL2Index
+from _pynear import VPTreeBinaryIndex512
+from _pynear import VPTreeBinaryIndex256
+from _pynear import VPTreeBinaryIndex128
+from _pynear import VPTreeBinaryIndex64
+from _pynear import VPTreeChebyshevIndex
+from _pynear import VPTreeL1Index
+from _pynear import VPTreeL2Index
 
 from ._version import __version__
 

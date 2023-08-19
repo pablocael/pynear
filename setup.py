@@ -16,9 +16,9 @@ else:
 
 ext_modules = [
     Pybind11Extension(
-        "_pyvptree",
-        ["pyvptree/src/PythonBindings.cpp"],
-        include_dirs=["pyvptree/include"],
+        "_pynear",
+        ["pynear/src/PythonBindings.cpp"],
+        include_dirs=["pynear/include"],
         cxx_std=17,
         extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
@@ -28,9 +28,9 @@ ext_modules = [
 with open("README.md", "rt", encoding="utf-8") as fr:
     long_description = fr.read()
 
-exec(open("pyvptree/_version.py").read())
+exec(open("pynear/_version.py").read())
 setup(
-    name="pyvptree",
+    name="pynear",
     version=__version__,
     packages=find_packages(),
     author="Pablo Carneiro Elias",
@@ -41,7 +41,7 @@ setup(
     ext_modules=ext_modules,
     zip_safe=False,
     install_requires=["numpy>=1.21.2"],
-    package_dir={"pyvptree": "pyvptree"},
+    package_dir={"pynear": "pynear"},
     extras_require={"test": ["pytest>=6.0"]},
     python_requires=">=3.6",
     license_files=("LICENSE",),

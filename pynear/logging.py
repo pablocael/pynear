@@ -5,7 +5,7 @@ import os
 def create_and_configure_log(name):
     logger = logging.getLogger(name)
     logger.setLevel("INFO")
-    level_envar = "PYVPTREE_LOG_LEVEL"
+    level_envar = "PYNEAR_LOG_LEVEL"
     if level_envar in os.environ:
         logger.setLevel(os.environ[level_envar])
 

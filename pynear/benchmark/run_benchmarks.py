@@ -1,10 +1,11 @@
+
 import os
 import sys
 import argparse
-from pyvptree.logging import create_and_configure_log
+from pynear.logging import create_and_configure_log
 
-from pyvptree.benchmark import BenchmarkCase
-from pyvptree.benchmark import BenchmarkRunner
+from pynear.benchmark import BenchmarkCase
+from pynear.benchmark import BenchmarkRunner
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator

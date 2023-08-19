@@ -2,11 +2,11 @@ import pickle
 
 import numpy as np
 
-import pyvptree
+import pynear
 
 
 def test_empty_index_serialization():
-    vptree = pyvptree.VPTreeL2Index()
+    vptree = pynear.VPTreeL2Index()
     data = pickle.dumps(vptree)
     recovered = pickle.loads(data)
     data_rec = pickle.dumps(recovered)
@@ -14,7 +14,7 @@ def test_empty_index_serialization():
 
     # not initializing data with .set() should
     # be equivalent of initializing with empty array
-    vptree = pyvptree.VPTreeL2Index()
+    vptree = pynear.VPTreeL2Index()
     empty = np.array([]).reshape(-1,8)
     vptree.set(empty)
     data = pickle.dumps(vptree)
@@ -22,7 +22,7 @@ def test_empty_index_serialization():
     data_rec = pickle.dumps(recovered)
     assert data_rec == data
 
-    vptree = pyvptree.VPTreeBinaryIndex()
+    vptree = pynear.VPTreeBinaryIndex()
     data = pickle.dumps(vptree)
     recovered = pickle.loads(data)
     data_rec = pickle.dumps(recovered)
@@ -38,7 +38,7 @@ def test_basic_serialization():
 
     queries = np.random.rand(num_queries, dimension).astype(dtype=np.float32)
 
-    vptree = pyvptree.VPTreeL2Index()
+    vptree = pynear.VPTreeL2Index()
     vptree.set(data)
 
     vptree_indices, vptree_distances = vptree.search1NN(queries)
@@ -59,7 +59,7 @@ def test_string_serialization():
     dimension = 8
     data = np.random.rand(num_points, dimension).astype(dtype=np.float32)
 
-    vptree = pyvptree.VPTreeL2Index()
+    vptree = pynear.VPTreeL2Index()
     vptree.set(data)
 
     string_state = vptree.to_string()
@@ -81,7 +81,7 @@ def test_binary_serialization():
 
     queries = np.random.rand(num_queries, dimension).astype(dtype=np.uint8)
 
-    vptree = pyvptree.VPTreeBinaryIndex()
+    vptree = pynear.VPTreeBinaryIndex()
     vptree.set(data)
 
     vptree_indices, vptree_distances = vptree.search1NN(queries)
