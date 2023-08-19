@@ -63,7 +63,12 @@ class BenchmarkCase:
                             data_type=np.dtype(self.dataset_type),
                         )
                         logger.info(f"start performing queries (num_queries = {num_queries})")
-                        runs = [index.clock_search(query, k_value) for _ in range(NUM_AVG_SEARCHS)]
+                        runs = np.array([index.clock_search(query, k_value) for _ in range(NUM_AVG_SEARCHS)])
+                        logger.info(f"5 runs set: {runs}")
+                        runs = BenchmarkCase.reject_outliers(runs)
+                        logger.info(f"after removing outliers: {runs}")
+
+                        # reject outliers
                         avg = sum(runs) / len(runs)
                         logger.info(f"avg of {NUM_AVG_SEARCHS} searches runtime is {avg:0.4f}")
 
@@ -91,6 +96,9 @@ class BenchmarkCase:
     def __str__(self):
         return f"{self.id()}: ks={self.k}, num_queries={self.num_queries}, index_types={self.index_types}, dataset_total_size={self.dataset_total_size}, num_clusters={self.dataset_num_clusters}, seed={self.seed}"
 
+    @staticmethod
+    def reject_outliers(data, m=2):
+        return data[abs(data - np.mean(data)) < m * np.std(data)]
 
 class BenchmarkRunner:
     """
