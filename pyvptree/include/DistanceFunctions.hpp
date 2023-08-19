@@ -48,7 +48,12 @@ inline double sum4(__m256d v) {
 /* specialized (optimized) functions */
 template <> int64_t hamming<64>(const uint64_t *pa, const uint64_t *pb) { return _mm_popcnt_u64(pa[0] ^ pb[0]); }
 
-template <> int64_t hamming<128>(const uint64_t *pa, const uint64_t *pb) { return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]); }
+template <> int64_t hamming<128>(const uint64_t *pa, const uint64_t *pb) {
+
+    __m256d result =
+        _mm256_set_pd(_mm_popcnt_u64(pa[0] ^ pb[0]), _mm_popcnt_u64(pa[1] ^ pb[1]), 0, 0);
+    return (int64_t)sum4(result);
+}
 
 template <> int64_t hamming<256>(const uint64_t *pa, const uint64_t *pb) {
 
