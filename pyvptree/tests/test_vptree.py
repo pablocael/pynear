@@ -34,7 +34,6 @@ def chebyshev_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 def test_hamming():
-
     def hamming_distance(a, b) -> np.ndarray:
         r = (1 << np.arange(8))[:, None]
         return np.count_nonzero((np.bitwise_xor(a, b) & r) != 0)

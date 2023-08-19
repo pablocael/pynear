@@ -1,15 +1,13 @@
-import os
 import argparse
-from pyvptree.logging import create_and_configure_log
-
-from pyvptree.benchmark import ComparatorBenchmarkCase
-from pyvptree.benchmark import ComparatorBenchmark
-from pyvptree.benchmark import BenchmarkDataset
+import os
 
 import matplotlib.pyplot as plt
-from matplotlib.ticker import AutoMinorLocator
 import pandas as pd
 import seaborn as sns
+from matplotlib.ticker import AutoMinorLocator
+
+from pyvptree.benchmark import BenchmarkDataset, ComparatorBenchmark, ComparatorBenchmarkCase
+from pyvptree.logging import create_and_configure_log
 
 logger = create_and_configure_log(__name__)
 
@@ -21,7 +19,6 @@ def create_performance_plot(result: pd.DataFrame, output_folder: str):
     index_types = result.groupby("index_type")
 
     for index_type, df in index_types:
-
         groups = result.groupby("k")
         for k, group in groups:
             # create one plot per k
@@ -31,9 +28,13 @@ def create_performance_plot(result: pd.DataFrame, output_folder: str):
             query_size = group.iloc[0]["query_size"]
             filtered = group.filter(regex="dimension|time*", axis=1)
             df = filtered.melt("dimension", var_name="cols", value_name="query time")
-            g = sns.catplot(x="dimension", y="query time", hue='cols', data=df, kind='point', errorbar=None, legend=False)
-            g.set(title=f"Data Dimensions x Query Time\nindex_type={index_type}\ndata_size={data_size}), k={k}\nquery_size={query_size})")
-            plt.legend(loc='upper center')
+            g = sns.catplot(
+                x="dimension", y="query time", hue="cols", data=df, kind="point", errorbar=None, legend=False
+            )
+            g.set(
+                title=f"Data Dimensions x Query Time\nindex_type={index_type}\ndata_size={data_size}), k={k}\nquery_size={query_size})"
+            )
+            plt.legend(loc="upper center")
 
             plt.tight_layout()
             plt.savefig(os.path.join(output_folder, f"{index_type}_k_{k}.png"))
@@ -41,13 +42,14 @@ def create_performance_plot(result: pd.DataFrame, output_folder: str):
 
 
 def main():
-
     parser = argparse.ArgumentParser(description="Creates a stress test report for a segemaker endpoint")
-    parser.add_argument("--min-dimension",
-                        default=2,
-                        type=int,
-                        help="The minimum dimensionality of the data to generate the benchmarks",
-                        required=False)
+    parser.add_argument(
+        "--min-dimension",
+        default=2,
+        type=int,
+        help="The minimum dimensionality of the data to generate the benchmarks",
+        required=False,
+    )
     parser.add_argument(
         "--max-dimension",
         default=32,
