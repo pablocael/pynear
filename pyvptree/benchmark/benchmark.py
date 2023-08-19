@@ -15,7 +15,7 @@ logger = create_and_configure_log(__name__)
 
 # number of searchs to perform for averaging the result
 # in order to reduce effect of high outliers
-NUM_AVG_SEARCHS = 5
+NUM_AVG_SEARCHS = 8
 
 
 @dataclass
@@ -66,7 +66,7 @@ class BenchmarkCase:
                         runs = np.array([index.clock_search(query, k_value) for _ in range(NUM_AVG_SEARCHS)])
                         logger.info(f"5 runs set: {runs}")
                         runs = BenchmarkCase.reject_outliers(runs)
-                        logger.info(f"after removing outliers: {runs}")
+                        logger.info(f"rejected {NUM_AVG_SEARCHS-len(runs)} outliers.")
 
                         # reject outliers
                         avg = sum(runs) / len(runs)
@@ -97,7 +97,7 @@ class BenchmarkCase:
         return f"{self.id()}: ks={self.k}, num_queries={self.num_queries}, index_types={self.index_types}, dataset_total_size={self.dataset_total_size}, num_clusters={self.dataset_num_clusters}, seed={self.seed}"
 
     @staticmethod
-    def reject_outliers(data, m=2):
+    def reject_outliers(data, m=1.2):
         return data[abs(data - np.mean(data)) < m * np.std(data)]
 
 class BenchmarkRunner:
