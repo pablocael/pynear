@@ -28,7 +28,8 @@ def create_performance_plot(result: pd.DataFrame, case_name: str, output_folder:
             plt.plot([str(v) for v in df["dimension"]], df["time"], label=index_type, marker='o')
             data_size = df.iloc[0]["dataset_total_size"]
             query_size = df.iloc[0]["num_queries"]
-            plt.title(f"{case_name}\nData Dimensions x Query Time\ndata_size={data_size}), k={k}\nquery_size={query_size})")
+            num_avg_searchs = df.iloc[0]["num_seraches_avg"]
+            plt.title(f"{case_name}\nData Dimensions x Query Time (avg of {num_avg_searchs})\ndata_size={data_size}), k={k}\nquery_size={query_size})")
             plt.legend(loc='upper center')
 
         plt.tight_layout()

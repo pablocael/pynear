@@ -13,6 +13,9 @@ from pyvptree.benchmark.index_adapters import create_index_adapter
 
 logger = create_and_configure_log(__name__)
 
+# number of searchs to perform for averaging the result
+# in order to reduce effect of high outliers
+NUM_AVG_SEARCHS = 5
 
 @dataclass
 class BenchmarkCase:
@@ -59,9 +62,14 @@ class BenchmarkCase:
                             data_type=np.dtype(self.dataset_type),
                         )
                         logger.info(f"start performing queries (num_queries = {num_queries})")
+                        runs = [index.clock_search(query, k_value) for _ in range(NUM_AVG_SEARCHS)]
+                        avg = sum(runs)/len(runs)
+                        logger.info(f"avg of {NUM_AVG_SEARCHS} searches runtime is {avg:0.4f}")
+
                         results.append({
-                            "time": index.clock_search(query, k_value),
+                            "time": avg,
                             "k": k_value,
+                            "num_seraches_avg": NUM_AVG_SEARCHS,
                             "num_queries": num_queries,
                             "index_type": index_type,
                             "dimension": dimension,
