@@ -4,7 +4,7 @@ Pyvptree is a python library, internally built in C++, for efficient KNN search 
 
 ## How VP-Trees work
 
-VP-Trees are binary trees that successively divide spaces in order to peform different types of tasks, such as Nearest Neighbor Search. It differs from Kd-Trees in the sense that they always partition the whole space, instead of invidiual dimensional axes, using a specific metric function and a selected "Vantage Point" that will be used as reference to allow spliting the dataset. For more details on how it works please access the following references:
+VP-Trees are binary trees that successively divide spaces in order to perform different types of tasks, such as Nearest Neighbor Search. It differs from Kd-Trees in the sense that they always partition the whole space, instead of individual dimensional axes, using a specific metric function and a selected "Vantage Point" that will be used as reference to allow splitting the dataset. For more details on how it works please access the following references:
 
 - https://en.wikipedia.org/wiki/Vantage-point_tree 
 - https://fribbels.github.io/vptree/writeup 
@@ -37,9 +37,13 @@ Performance can dramatically decrease if this library is compiled without suppor
 
 # Requirement
 
-This library needs OpenMP support to be built and installed. The whole compilation procces occur automatically by performing the installation step above.
+This library needs OpenMP support to be built and installed. The whole compilation proccess occur automatically by performing the installation step above.
 
-# Pickle serialization
+# Features
+
+For more features and all available index types, refer to [docs](./docs/README.md).
+
+## Pickle serialization
 
 Pyvptree is pickle serializable:
 ```python
@@ -61,6 +65,61 @@ vptree.set(data)
 data = pickle.dumps(vptree)
 recovered = pickle.loads(data)
 ```
+## String serialization
+
+Sometimes to check state of tree is interesting to be able to print the whole tree including information about the size and balancing.
+By using `to_string()` method one can print the whole tree to string. **Be aware that this method is really slow and should not be used for any performance demanding tasks**.
+
+```
+print(vptree.to_string())
+```
+
+Output:
+```
+####################
+# [VPTree state]
+Num Data Points: 100
+Total Memory: 8000 bytes
+####################
+[+] Root Level:
+ Depth: 0
+ Height: 14
+ Num Sub Nodes: 100
+ Index Start: 0
+ Index End:   99
+ Left Subtree Height: 12
+ Right Subtree Height: 12
+ [+] Left children:
+.... Depth: 1
+.... Height: 12
+.... Num Sub Nodes: 49
+.... Index Start: 1
+.... Index End:   49
+.... Left Subtree Height: 10
+.... Right Subtree Height: 10
+.... [+] Left children:
+........ Depth: 2
+........ Height: 10
+........ Num Sub Nodes: 24
+........ Index Start: 2
+........ Index End:   25
+........ Left Subtree Height: 8
+........ Right Subtree Height: 8
+........ [+] Left children:
+............ Depth: 3
+............ Height: 8
+............ Num Sub Nodes: 11
+............ Index Start: 3
+............ Index End:   13
+............ Left Subtree Height: 6
+............ Right Subtree Height: 6
+............ [+] Left children:
+
+...
+```
+Notice that this output can be very large.
+
+
 
 # Benchmarks
 
@@ -78,6 +137,7 @@ Benchmarks are split into dimensionality ranges for better analysis.
 To customize or regenerate the benchmarks as well as to see benchmark results, see [benchmarks](./pyvptree/benchmark/README.md) session.
 
 # Development
+
 
 ## Running Python Tests
 
@@ -118,7 +178,7 @@ for CMake to work correctly.
 
 Build generated files using Visual Studio (or whichever generator you chose) and run `vptree-tests.exe`.
 
-## Formating code
+## Formatting code
 
 ```
 make fmt
