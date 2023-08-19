@@ -80,7 +80,7 @@ Supported 3rd party indices are:
 - AnnoyHamming
 - SKLearnL2
 
- This allow comparing VPTree indices to thow 3 third party indices as well any combination of comparison.
+ This allow comparing VPTree indices to be tested with third party indices as well any combination of indices.
 
 Output results are generated in `results` folder grouped in subfolders with benchmark cases name.
 For generating benchmarks from `yaml` descriptor, see the example command below:
