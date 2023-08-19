@@ -17,17 +17,17 @@ endif
 
 .PHONY: fmt
 fmt: init-repo
-	stylize --exclude_dirs=pyvptree/include/Eigen --yapf_style="{based_on_style: google, column_limit: 150, indent_width: 4}"
+	stylize --exclude_dirs=pynear/include/Eigen --yapf_style="{based_on_style: google, column_limit: 150, indent_width: 4}"
 
 .PHONY: check-fmt
 check-fmt:
-	stylize --check --exclude_dirs=pyvptree/include/Eigen --yapf_style="{based_on_style: google, column_limit: 150, indent_width: 4}"
+	stylize --check --exclude_dirs=pynear/include/Eigen --yapf_style="{based_on_style: google, column_limit: 150, indent_width: 4}"
 
 .PHONY: test
 test:
 	export PYTHONPATH=$PWD
-	pytest pyvptree/tests
+	pytest pynear/tests
 
 .PHONY: cpp-test
 cpp-test:
-	mkdir -p build && cd build && cmake -G "Unix Makefiles" ../pyvptree && make && make test
+	mkdir -p build && cd build && cmake -G "Unix Makefiles" ../pynear && make && make test

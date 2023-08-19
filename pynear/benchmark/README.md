@@ -1,6 +1,6 @@
 # Comparison Benchmarks
 
-Several benchmarks were generated to compare performance between PyVPTree and other python libraries.
+Several benchmarks were generated to compare performance between PyNear and other python libraries.
 All benchmarks were generated using 12th Gen Intel(R) Core(TM) i9-12900, 24 cores.
 
 In the below benchmarks, other libraries such as Annoy, Faiss and SKLearn are used. Annoy is inexact search (approximate) so it is somehow unfair comparison, but being extremelly efficient is an interesting baseline.
@@ -20,22 +20,22 @@ For binary indices, only 32, 64, 128 and 256 bit dimensions were added since the
 # L1 Index Comparison
 ![L1 Index Comparison](../../docs/img/manhattan-index-comparison/result_k=8.png)
 
-# PyVPTree Index Comparison K=2
-![PyVPTree Index Comparison, K=2](../../docs/img/pyvptree-l2-indexes-comparison/result_k=2.png)
+# PyNear Index Comparison K=2
+![PyNear Index Comparison, K=2](../../docs/img/pynear-l2-indexes-comparison/result_k=2.png)
 
-# PyVPTree Index Comparison K=4
-![PyVPTree Index Comparison, K=4](../../docs/img/pyvptree-l2-indexes-comparison/result_k=4.png)
+# PyNear Index Comparison K=4
+![PyNear Index Comparison, K=4](../../docs/img/pynear-l2-indexes-comparison/result_k=4.png)
 
-# PyVPTree Index Comparison K=8
-![PyVPTree Index Comparison, K=8](../../docs/img/pyvptree-l2-indexes-comparison/result_k=8.png)
+# PyNear Index Comparison K=8
+![PyNear Index Comparison, K=8](../../docs/img/pynear-l2-indexes-comparison/result_k=8.png)
 
 # How to Create and Run Benchmarks
 
-The benchmark tool (pyvptree/benchmark/run_benchmarks.py) read `yaml` configuration files where benchmark cases can be personalized, like below example:
+The benchmark tool (pynear/benchmark/run_benchmarks.py) read `yaml` configuration files where benchmark cases can be personalized, like below example:
 ```yaml
 benchmark:
   cases:
-  - name: "Pyvptree L2 Indexes Comparison"
+  - name: "PyNear L2 Indexes Comparison"
     k: [2, 4, 8]
     num_queries: [8]
     dimensions: [2, 3, 4, 5, 6, 7, 8, 16]
@@ -89,7 +89,7 @@ For generating benchmarks from `yaml` descriptor, see the example command below:
 ## How to run
 ```
 export PYTHONPATH=$PWD
-python3 pyvptree/benchmark/run_benchmarks.py --config-file=<config-yaml-file>
+python3 pynear/benchmark/run_benchmarks.py --config-file=<config-yaml-file>
 ```
 
 This will write result images to a local ./results folder.

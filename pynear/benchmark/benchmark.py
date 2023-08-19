@@ -3,13 +3,13 @@ import yaml
 import numpy as np
 import pandas as pd
 import faiss
-import pyvptree
+import pynear
 from sklearn.neighbors import NearestNeighbors
 from typing import Callable, Any, Dict, Generator, List, Optional, Tuple, Union
 from dataclasses import dataclass
-from pyvptree.benchmark.dataset import generate_gaussian_dataset
-from pyvptree.logging import create_and_configure_log
-from pyvptree.benchmark.index_adapters import create_index_adapter
+from pynear.benchmark.dataset import generate_gaussian_dataset
+from pynear.logging import create_and_configure_log
+from pynear.benchmark.index_adapters import create_index_adapter
 
 logger = create_and_configure_log(__name__)
 
@@ -107,7 +107,7 @@ class BenchmarkRunner:
 
     def __init__(self, benchmark_yaml_file: str):
         """
-        Build a benchmark comparator between pyvptree and faiss.
+        Build a benchmark comparator between pynear and faiss.
 
         Args:
             benchmark_cases (List[BenchmarkCase]): the list of benchmark cases to perform.

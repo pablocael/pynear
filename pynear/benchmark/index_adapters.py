@@ -1,7 +1,7 @@
 import time
 import annoy
 import faiss
-import pyvptree
+import pynear
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
 from abc import ABC, abstractmethod
@@ -16,16 +16,16 @@ def create_index_adapter(index_name: str):
         'AnnoyManhattan': AnnoyManhattanAdapter,
         'AnnoyHamming': AnnoyHammingAdapter,
         'SKLearnL2': SKLearnL2Adapter,
-        'VPTreeL2Index': pyvptree.VPTreeL2Index,
-        'VPTreeL1Index': pyvptree.VPTreeL1Index,
-        'VPTreeBinaryIndex': pyvptree.VPTreeBinaryIndex,
-        'VPTreeChebyshevIndex': pyvptree.VPTreeChebyshevIndex
+        'VPTreeL2Index': pynear.VPTreeL2Index,
+        'VPTreeL1Index': pynear.VPTreeL1Index,
+        'VPTreeBinaryIndex': pynear.VPTreeBinaryIndex,
+        'VPTreeChebyshevIndex': pynear.VPTreeChebyshevIndex
     }
     if index_name not in mapper:
         raise ValueError(f'Index name {index_name} not supported')
 
     if index_name.startswith('VPTree'):
-        return PyVPtreeAdapter(index_name)
+        return PyNearAdapter(index_name)
 
     return mapper[index_name]()
 
@@ -50,16 +50,16 @@ class IndexAdapter(ABC):
         pass
 
 
-class PyVPtreeAdapter(IndexAdapter):
+class PyNearAdapter(IndexAdapter):
 
     def __init__(self, pyvp_index_name: str):
         self._index = None
         self._pyvp_index_name = pyvp_index_name
         self._pyvp_index_map = {
-            'VPTreeL2Index': pyvptree.VPTreeL2Index,
-            'VPTreeBinaryIndex': pyvptree.VPTreeBinaryIndex,
-            'VPTreeChebyshevIndex': pyvptree.VPTreeChebyshevIndex,
-            'VPTreeL1Index': pyvptree.VPTreeL1Index
+            'VPTreeL2Index': pynear.VPTreeL2Index,
+            'VPTreeBinaryIndex': pynear.VPTreeBinaryIndex,
+            'VPTreeChebyshevIndex': pynear.VPTreeChebyshevIndex,
+            'VPTreeL1Index': pynear.VPTreeL1Index
         }
 
     def build_index(self, data: np.ndarray):
