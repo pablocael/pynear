@@ -1,76 +1,96 @@
-# Comparison Benchmarks
+# How to Create and Run Benchmarks
 
-How to generate standard benchmarks:
-
-In the pyvptree root, type:
+The benchmark tool (pyvptree/benchmark/run_benchmarks.py) read `yaml` configuration files where benchmark cases can be personalized, like below example:
+```yaml
+benchmark:
+  cases:
+  - name: "Pyvptree L2 Indexes Comparison"
+    k: [2, 4, 8]
+    num_queries: [8]
+    dimensions: [2, 3, 4, 5, 6, 7, 8, 16]
+    dataset_total_size: 2500000
+    dataset_num_clusters: 50
+    dataset_type: "float32" # can be any numpy type as string. Default is float32
+    index_types:
+    - VPTreeL2Index
+    - VPTreeChebyshevIndex
+    - VPTreeL1Index # (manhattan distance)
+  - name: "L2 Comparison Low Dimensionality"
+    k: [8]
+    num_queries: [16]
+    dimensions: [2, 3, 4, 5, 6, 7, 8, 16]
+    dataset_total_size: 2500000
+    dataset_num_clusters: 50
+    dataset_type: "float32"
+    index_types:
+    - FaissIndexFlatL2
+    - VPTreeL2Index
+    - AnnoyL2
+    - SKLearnL2
+  - name: "Binary Index Comparison"
+    k: [8]
+    num_queries: [16]
+    dimensions: [32, 64, 128, 256, 512]
+    dataset_total_size: 2500000
+    dataset_num_clusters: 50
+    dataset_type: "uint8"
+    index_types:
+    - FaissIndexBinaryFlat
+    - AnnoyHamming
+    - VPTreeBinaryIndex
 
 ```
-make benchmarks
-```
 
-To customize the benchmark generation dimension range, see the example below:
+Supported 3rd party indices are:
+- FaissIndexFlatL2
+- FaissIndexBinaryFlat
+- AnnoyL2
+- AnnoyManhattan
+- AnnoyHamming
+- SKLearnL2
 
+ This allow comparing VPTree indices to thow 3 third party indices as well any combination of comparison.
+
+Output results are generated in `results` folder grouped in subfolders with benchmark cases name.
+How to generate and to customize the benchmark generation, see the example below:
+
+
+## How to run
 ```
 export PYTHONPATH=$PWD
-python3 pyvptree/benchmark/run_benchmarks.py --min-dimension=3 --max-dimension=8
+python3 pyvptree/benchmark/run_benchmarks.py --config-file=<config-yaml-file>
 ```
 
 This will write result images to a local ./results folder.
 
+# Comparison Benchmarks
 
-## Benchmarks for fixed K = 16
+Several benchmarks were generated to compare performance between PyVPTree and other python libraries.
+All benchmarks were generated using 12th Gen Intel(R) Core(TM) i9-12900, 24 cores.
 
-All benchmarks were generated using 12th Gen Intel(R) Core(TM) i7-1270P with 16 cores.
+In the below benchmarks, other libraries such as Annoy, Faiss and SKLearn are used. Annoy is inexact search (approximate) so it is somehow unfair comparison, but being extremelly efficient is an interesting baseline.
+The below benchmarks are for different values of K (1, 2, 4, 8, 16), comparing Faiss, Sklearn and Pyvptree.
 
-Benchmarks for K=16 are displayed below:
+# Binary Index Comparison
 
-### 2 to 10 dimensions Range
+For binary indices, only 32, 64, 128 and 256 bit dimensions were used since they are the most popular dimension for binary descriptors.
 
-![k=16, L2 index](../../docs/img/from_2_to_10/VPTreeL2Index_k_16.png "K=16, L2 index")
+![Binary Index Comparison](../../docs/img/binary-index-comparison/result_k=8.png)
 
-### 11 to 16 dimensions Range
+# L2 Index - Low Dimensionality Comparison
+![L2 Low Dimensionality Comparison](../../docs/img/l2-comparison-low-dimensionality/result_k=8.png)
 
-![k=16, L2 index](../../docs/img/from_11_to_16/VPTreeL2Index_k_16.png "K=16, L2 index")
+# L2 Index - High Dimensionality Comparison
+![L2 High Dimensionality Comparison](../../docs/img/l2-comparison-high-dimensionality/result_k=8.png)
 
-### 17 to 32 dimensions Range
-![k=16, L2 index](../../docs/img/from_17_to_32/VPTreeL2Index_k_16.png "K=16, L2 index")
+# L1 Index Comparison
+![L1 Index Comparison](../../docs/img/manhattan-index-comparison/result_k=8.png)
 
-### 33 to 48 dimensions Range
+# PyVPTree Index Comparison K=2
+![PyVPTree Index Comparison, K=2](../../docs/img/pyvptree-l2-indexes-comparison/result_k=2.png)
 
-![k=16, L2 index](../../docs/img/from_33_to_48/VPTreeL2Index_k_16.png "K=16, L2 index")
+# PyVPTree Index Comparison K=4
+![PyVPTree Index Comparison, K=4](../../docs/img/pyvptree-l2-indexes-comparison/result_k=4.png)
 
-### Benchmarks for other values of K
-
-The graphs below include K values of 1, 2, 4, 8 and 16:
-
-### 2 to 10 dimensions Range, for K=1, 2, 4, 8, 16
-
-![k=16, L2 index](../../docs/img/from_2_to_10/VPTreeL2Index_k_16.png "K=16, L2 index")
-![k=8, L2 index](../../docs/img/from_2_to_10/VPTreeL2Index_k_8.png "K=8, L2 index")
-![k=4, L2 index](../../docs/img/from_2_to_10/VPTreeL2Index_k_4.png "K=4, L2 index")
-![k=2, L2 index](../../docs/img/from_2_to_10/VPTreeL2Index_k_2.png "K=2, L2 index")
-![k=1, L2 index](../../docs/img/from_2_to_10/VPTreeL2Index_k_1.png "K=1, L2 index")
-
-### 11 to 16 dimensions Range, for K=1, 2, 4, 8, 16
-
-![k=16, L2 index](../../docs/img/from_11_to_16/VPTreeL2Index_k_16.png "K=16, L2 index")
-![k=8, L2 index](../../docs/img/from_11_to_16/VPTreeL2Index_k_8.png "K=8, L2 index")
-![k=4, L2 index](../../docs/img/from_11_to_16/VPTreeL2Index_k_4.png "K=4, L2 index")
-![k=2, L2 index](../../docs/img/from_11_to_16/VPTreeL2Index_k_2.png "K=2, L2 index")
-![k=1, L2 index](../../docs/img/from_11_to_16/VPTreeL2Index_k_1.png "K=1, L2 index")
-
-### 17 to 32 dimensions Range, for K=1, 2, 4, 8, 16
-
-![k=16, L2 index](../../docs/img/from_17_to_32/VPTreeL2Index_k_16.png "K=16, L2 index")
-![k=8, L2 index](../../docs/img/from_17_to_32/VPTreeL2Index_k_8.png "K=8, L2 index")
-![k=4, L2 index](../../docs/img/from_17_to_32/VPTreeL2Index_k_4.png "K=4, L2 index")
-![k=2, L2 index](../../docs/img/from_17_to_32/VPTreeL2Index_k_2.png "K=2, L2 index")
-![k=1, L2 index](../../docs/img/from_17_to_32/VPTreeL2Index_k_1.png "K=1, L2 index")
-
-### 33 to 48 dimensions Range, for K=1, 2, 4, 8, 16
-
-![k=16, L2 index](../../docs/img/from_33_to_48/VPTreeL2Index_k_16.png "K=16, L2 index")
-![k=8, L2 index](../../docs/img/from_33_to_48/VPTreeL2Index_k_8.png "K=8, L2 index")
-![k=4, L2 index](../../docs/img/from_33_to_48/VPTreeL2Index_k_4.png "K=4, L2 index")
-![k=2, L2 index](../../docs/img/from_33_to_48/VPTreeL2Index_k_2.png "K=2, L2 index")
-![k=1, L2 index](../../docs/img/from_33_to_48/VPTreeL2Index_k_1.png "K=1, L2 index")
+# PyVPTree Index Comparison K=8
+![PyVPTree Index Comparison, K=8](../../docs/img/pyvptree-l2-indexes-comparison/result_k=8.png)

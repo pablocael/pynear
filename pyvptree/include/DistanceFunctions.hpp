@@ -36,13 +36,30 @@ template <size_t nbits> int64_t hamming(const uint64_t *bs1, const uint64_t *bs2
     return h;
 }
 
+inline double sum4(__m256d v) {
+    __m128d vlow = _mm256_castpd256_pd128(v);
+    __m128d vhigh = _mm256_extractf128_pd(v, 1); // high 128
+    vlow = _mm_add_pd(vlow, vhigh);              // reduce down to 128
+
+    __m128d high64 = _mm_unpackhi_pd(vlow, vlow);
+    return _mm_cvtsd_f64(_mm_add_sd(vlow, high64)); // reduce to scalar
+}
+
 /* specialized (optimized) functions */
 template <> int64_t hamming<64>(const uint64_t *pa, const uint64_t *pb) { return _mm_popcnt_u64(pa[0] ^ pb[0]); }
 
-template <> int64_t hamming<128>(const uint64_t *pa, const uint64_t *pb) { return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]); }
+template <> int64_t hamming<128>(const uint64_t *pa, const uint64_t *pb) {
+
+    __m256d result =
+        _mm256_set_pd(_mm_popcnt_u64(pa[0] ^ pb[0]), _mm_popcnt_u64(pa[1] ^ pb[1]), 0, 0);
+    return (int64_t)sum4(result);
+}
 
 template <> int64_t hamming<256>(const uint64_t *pa, const uint64_t *pb) {
-    return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]) + _mm_popcnt_u64(pa[2] ^ pb[2]) + _mm_popcnt_u64(pa[3] ^ pb[3]);
+
+    __m256d result =
+        _mm256_set_pd(_mm_popcnt_u64(pa[0] ^ pb[0]), _mm_popcnt_u64(pa[1] ^ pb[1]), _mm_popcnt_u64(pa[2] ^ pb[2]), _mm_popcnt_u64(pa[3] ^ pb[3]));
+    return (int64_t)sum4(result);
 }
 
 inline float sum8(__m256 x) {
@@ -65,15 +82,6 @@ inline float sum8(__m256 x) {
     // sum = ( -, -, -, x0 + x1 + x2 + x3 + x4 + x5 + x6 + x7 )
     const __m128 sum = _mm_add_ss(lo, hi);
     return _mm_cvtss_f32(sum);
-}
-
-inline double sum4(__m256d v) {
-    __m128d vlow = _mm256_castpd256_pd128(v);
-    __m128d vhigh = _mm256_extractf128_pd(v, 1); // high 128
-    vlow = _mm_add_pd(vlow, vhigh);              // reduce down to 128
-
-    __m128d high64 = _mm_unpackhi_pd(vlow, vlow);
-    return _mm_cvtsd_f64(_mm_add_sd(vlow, high64)); // reduce to scalar
 }
 
 double dist_l2_d_avx2(const arrayd &p1, const arrayd &p2) {
