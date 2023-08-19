@@ -1,13 +1,13 @@
 # Introduction
 
-Pyvptree is a python library, internally built in C++, for efficient KNN search using metric distance function such as L2 distance (see VPTreeL2Index) or Hamming distances (VPTreeBinaryIndex). 
+Pyvptree is a python library, internally built in C++, for efficient KNN search using metric distance function such as L2 distance (see VPTreeL2Index) or Hamming distances (VPTreeBinaryIndex).
 
 ## How VP-Trees work
 
 VP-Trees are binary trees that successively divide spaces in order to peform different types of tasks, such as Nearest Neighbor Search. It differs from Kd-Trees in the sense that they always partition the whole space, instead of invidiual dimensional axes, using a specific metric function and a selected "Vantage Point" that will be used as reference to allow spliting the dataset. For more details on how it works please access the following references:
 
-- https://en.wikipedia.org/wiki/Vantage-point_tree 
-- https://fribbels.github.io/vptree/writeup 
+- https://en.wikipedia.org/wiki/Vantage-point_tree
+- https://fribbels.github.io/vptree/writeup
 - [Probabilistic analysis of vantage point trees](https://www.vmsta.org/journal/VMSTA/article/219/file/pdf)
 
 ### Theoretical advantage of Vantage Points Trees compared to Kd-Trees
@@ -123,4 +123,3 @@ Build generated files using Visual Studio (or whichever generator you chose) and
 ```
 make fmt
 ```
-

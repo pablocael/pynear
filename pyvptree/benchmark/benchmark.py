@@ -1,11 +1,13 @@
 import time
+from dataclasses import dataclass
+from typing import Any, Callable, List, Tuple, Union
+
+import faiss
 import numpy as np
 import pandas as pd
-import faiss
-import pyvptree
 from sklearn.neighbors import NearestNeighbors
-from typing import Callable, Any, List, Tuple, Union
-from dataclasses import dataclass
+
+import pyvptree
 from pyvptree.benchmark.dataset import BenchmarkDataset
 from pyvptree.logging import create_and_configure_log
 
@@ -44,13 +46,11 @@ class ComparatorBenchmark:
         self._results = pd.DataFrame()
 
     def run(self):
-
         num_cases = len(self._benchmark_cases)
         logger.info(f"start running benchmark for {num_cases} cases ...")
 
         results = []
         for case in self._benchmark_cases:
-
             logger.info("***** begin case *****\n")
             start_case = time.time()
             logger.info(f"starting case {str(case)} ...")
@@ -68,7 +68,6 @@ class ComparatorBenchmark:
             pyvptree_index = self._generate_pyvptree_index(train, case.dataset._pyvpindex_type)
             logger.info(f"done, pyvptree index took {time.time()-start:0.3f} seconds... ")
             for k in case.ks:
-
                 logger.info("searching into faiss index ... ")
                 start = time.time()
                 self._search_knn_faiss(faiss_index, test, k)
@@ -83,15 +82,17 @@ class ComparatorBenchmark:
                 pyvptree_time = end - start
                 logger.info(f"pyvptree search for k = {k} took {pyvptree_time:0.3f} seconds... ")
 
-                results.append({
-                    "k": k,
-                    "dimension": case.dataset.dimension(),
-                    "size": case.dataset.size(),
-                    "index_type": case.dataset.index_type().__name__,
-                    "query_size": test.shape[0],
-                    "faiss_time": faiss_time,
-                    "pyvptree_time": pyvptree_time
-                })
+                results.append(
+                    {
+                        "k": k,
+                        "dimension": case.dataset.dimension(),
+                        "size": case.dataset.size(),
+                        "index_type": case.dataset.index_type().__name__,
+                        "query_size": test.shape[0],
+                        "faiss_time": faiss_time,
+                        "pyvptree_time": pyvptree_time,
+                    }
+                )
 
                 if case.dataset.index_type() == pyvptree.VPTreeL2Index:
                     start = time.time()
@@ -119,7 +120,6 @@ class ComparatorBenchmark:
         return self._results
 
     def _split_test_train_case(self, dataset: BenchmarkDataset):
-
         n_test = 8  # perform 8 queries for test and rest for train
         data: np.ndarray = dataset.data()
         np.random.shuffle(data)
@@ -128,7 +128,6 @@ class ComparatorBenchmark:
         return data[0:n_train, :], data[n_train:, :]
 
     def _generate_faiss_index(self, features: np.ndarray, index_type: Any):
-
         d = features.shape[1]
         faiss_index = faiss.IndexFlatL2(d)
         if index_type == pyvptree.VPTreeBinaryIndex:
@@ -147,7 +146,7 @@ class ComparatorBenchmark:
 
     def _generate_sklearn_index(self, features: np.ndarray, k):
         # only for L2 distances
-        return NearestNeighbors(n_neighbors=k, algorithm='kd_tree').fit(features)
+        return NearestNeighbors(n_neighbors=k, algorithm="kd_tree").fit(features)
 
     def _generate_pyvptree_index(self, features: np.ndarray, index_type: Any):
         vptree_index = pyvptree.VPTreeL2Index()

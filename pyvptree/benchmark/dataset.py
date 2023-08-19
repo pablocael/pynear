@@ -1,24 +1,24 @@
-import os
-import h5py
-import wget
 import glob
-import numpy as np
-import pyvptree
-import pandas as pd
-from PIL import Image
+import os
 from functools import partial
-from img2vec_pytorch import Img2Vec
-from typing import Any, List, Callable, Union, Optional
-from zipfile import ZipFile, BadZipFile
 from tempfile import TemporaryDirectory
-from typing import Union
+from typing import Any, Callable, List, Optional, Union
+from zipfile import BadZipFile, ZipFile
+
+import h5py
+import numpy as np
+import pandas as pd
+import wget
+from img2vec_pytorch import Img2Vec
+from PIL import Image
+
+import pyvptree
 from pyvptree.logging import create_and_configure_log
 
 logger = create_and_configure_log(__name__)
 
 
 class BenchmarkDataset:
-
     def __init__(
         self,
         data: Union[np.ndarray, Callable[..., Any]],
@@ -99,7 +99,9 @@ class BenchmarkDataset:
         self._loaded_data = None
 
     @staticmethod
-    def generate_gaussian_euclidean_cluster_datasets(min_dim: int, max_dim: int, total_size=2500000, num_clusters=50) -> List["BenchmarkDataset"]:
+    def generate_gaussian_euclidean_cluster_datasets(
+        min_dim: int, max_dim: int, total_size=2500000, num_clusters=50
+    ) -> List["BenchmarkDataset"]:
         datasets = []
         for dim in range(min_dim, max_dim + 1):
             datasets.append(
@@ -114,7 +116,8 @@ class BenchmarkDataset:
                     ),
                     dim=dim,
                     pyvpindex_type=pyvptree.VPTreeL2Index,
-                ))
+                )
+            )
 
         return datasets
 
@@ -164,7 +167,9 @@ def generate_coco_img2vec_dataset() -> np.ndarray:
     return np.concatenate(vecs)
 
 
-def generate_euclidean_gaussian_dataset(num_clusters: int, cluster_size: int, dim: int, data_type: Any = np.float64) -> np.ndarray:
+def generate_euclidean_gaussian_dataset(
+    num_clusters: int, cluster_size: int, dim: int, data_type: Any = np.float64
+) -> np.ndarray:
     """
     Generate a set of gaussian clusters of specific size and dimention
     """
