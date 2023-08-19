@@ -31,9 +31,3 @@ test:
 .PHONY: cpp-test
 cpp-test:
 	mkdir -p build && cd build && cmake -G "Unix Makefiles" ../pyvptree && make && make test
-
-.PHONY: benchmarks
-benchmarks:
-	export PYTHONPATH=$PWD
-	pip install -r pyvptree/benchmark/requirements.txt
-	python pyvptree/benchmark/run_benchmarks.py

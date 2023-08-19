@@ -1,13 +1,13 @@
 # Introduction
 
-Pyvptree is a python library, internally built in C++, for efficient KNN search using metric distance function such as L2 distance (see VPTreeL2Index) or Hamming distances (VPTreeBinaryIndex). 
+Pyvptree is a python library, internally built in C++, for efficient KNN search using metric distance function such as L2 distance (see VPTreeL2Index) or Hamming distances (VPTreeBinaryIndex).
 
 ## How VP-Trees work
 
 VP-Trees are binary trees that successively divide spaces in order to perform different types of tasks, such as Nearest Neighbor Search. It differs from Kd-Trees in the sense that they always partition the whole space, instead of individual dimensional axes, using a specific metric function and a selected "Vantage Point" that will be used as reference to allow splitting the dataset. For more details on how it works please access the following references:
 
-- https://en.wikipedia.org/wiki/Vantage-point_tree 
-- https://fribbels.github.io/vptree/writeup 
+- https://en.wikipedia.org/wiki/Vantage-point_tree
+- https://fribbels.github.io/vptree/writeup
 - [Probabilistic analysis of vantage point trees](https://www.vmsta.org/journal/VMSTA/article/219/file/pdf)
 
 ### Theoretical advantage of Vantage Points Trees compared to Kd-Trees
@@ -123,18 +123,7 @@ Notice that this output can be very large.
 
 # Benchmarks
 
-Several datasets were built and used for time benchmarks using L2 distance functions. Although Pyvptree does support Binary Index (VPTreeBinaryIndex) using hamming distance functions,
-the benchmarks focus on L2 distances since Pyvptree's binary index still need more optimizations to be able to compete with faiss in any way.
-
-All benchmarks were generated using 12th Gen Intel(R) Core(TM) i7-1270P with 16 cores.
-
-For each benchmark we use [Faiss Library](https://github.com/facebookresearch/faiss) and [Scikit-Learn](https://scikit-learn.org/stable/install.html) as baseline of comparison.
-
-The below benchmarks are for different values of K (1, 2, 4, 8, 16), comparing Faiss, Sklearn and Pyvptree.
-
-Benchmarks are split into dimensionality ranges for better analysis.
-
-To customize or regenerate the benchmarks as well as to see benchmark results, see [benchmarks](./pyvptree/benchmark/README.md) session.
+To visualize, customize or regenerate the benchmarks as well as to see benchmark results, see [benchmarks](./pyvptree/benchmark/README.md) session.
 
 # Development
 
