@@ -72,6 +72,10 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
     void set(const std::vector<T> &array) {
         clear();
 
+        if(array.empty()) {
+            return;
+        }
+
         _examples.reserve(array.size());
         _examples.resize(array.size());
         for (size_t i = 0; i < array.size(); ++i) {
@@ -173,10 +177,10 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         _rootPartition->deserialize(copy);
     }
 
-    void searchKNN(const std::vector<T> &queries, unsigned int k, std::vector<VPTreeSearchResultElement> &results) {
+    void searchKNN(const std::vector<T> &queries, size_t k, std::vector<VPTreeSearchResultElement> &results) {
 
-        if (_rootPartition == nullptr) {
-            return;
+        if (isEmpty()) {
+            throw std::runtime_error("index must be first initialized with .set() function and non empty dataset");
         }
 
         // we must return one result per queries
@@ -192,7 +196,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             searchKNN(_rootPartition, query, k, knnQueue);
 
             // we must always return k elements for each search unless there is no k elements
-            assert(static_cast<size_t>(knnQueue.size()) == std::min<size_t>(_examples.size(), k));
+            assert(knnQueue.size() == std::min<size_t>(_examples.size(), k));
 
             fillSearchResult(knnQueue, results[i]);
         }
@@ -201,8 +205,8 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
     // An optimized version for 1 NN search
     void search1NN(const std::vector<T> &queries, std::vector<int64_t> &indices, std::vector<distance_type> &distances) {
 
-        if (_rootPartition == nullptr) {
-            return;
+        if (isEmpty()) {
+            throw std::runtime_error("index must be first initialized with .set() function and non empty dataset");
         }
 
         // we must return one result per queries

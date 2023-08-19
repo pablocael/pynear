@@ -172,4 +172,3 @@ Build generated files using Visual Studio (or whichever generator you chose) and
 ```
 make fmt
 ```
-

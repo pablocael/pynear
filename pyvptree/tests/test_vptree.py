@@ -37,7 +37,6 @@ def test_empty_index():
     try:
         vptree = pyvptree.VPTreeBinaryIndex()
         i, d = vptree.search1NN(np.random.rand(1, 8).astype(dtype=np.uint8))
-        assert i == [] and d == []
         # expect exception and should now reach this line
         # since index is empty, we should not be able to search
         assert False
@@ -47,16 +46,26 @@ def test_empty_index():
     try:
         vptree = pyvptree.VPTreeL2Index()
         i, d = vptree.search1NN(np.random.rand(1, 8).astype(dtype=np.uint8))
-        assert i == [] and d == []
         # expect exception and should now reach this line
         # since index is empty, we should not be able to search
         assert False
     except Exception:
         pass
 
+    try:
+        vptree = pyvptree.VPTreeL2Index()
+        empty = np.array([]).reshape(-1,2)
+        vptree.set(empty)
+        i, d = vptree.search1NN(np.random.rand(1, 8).astype(dtype=np.uint8))
+        assert False
+
+        # expect no exception and should now reach this line
+        # since index is empty, we should not be able to search
+    except Exception:
+        pass
+
 
 def test_hamming():
-
     def hamming_distance(a, b) -> np.ndarray:
         r = (1 << np.arange(8))[:, None]
         return np.count_nonzero((np.bitwise_xor(a, b) & r) != 0)
