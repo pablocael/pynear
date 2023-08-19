@@ -17,6 +17,7 @@ logger = create_and_configure_log(__name__)
 # in order to reduce effect of high outliers
 NUM_AVG_SEARCHS = 5
 
+
 @dataclass
 class BenchmarkCase:
     """
@@ -63,7 +64,7 @@ class BenchmarkCase:
                         )
                         logger.info(f"start performing queries (num_queries = {num_queries})")
                         runs = [index.clock_search(query, k_value) for _ in range(NUM_AVG_SEARCHS)]
-                        avg = sum(runs)/len(runs)
+                        avg = sum(runs) / len(runs)
                         logger.info(f"avg of {NUM_AVG_SEARCHS} searches runtime is {avg:0.4f}")
 
                         results.append({

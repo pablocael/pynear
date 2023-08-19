@@ -17,9 +17,9 @@ def create_index_adapter(index_name: str):
         'AnnoyHamming': AnnoyHammingAdapter,
         'SKLearnL2': SKLearnL2Adapter,
         'VPTreeL2Index': pyvptree.VPTreeL2Index,
-        'VPTreeL1Index': pyvptree.VPTreeL1Index
+        'VPTreeL1Index': pyvptree.VPTreeL1Index,
         'VPTreeBinaryIndex': pyvptree.VPTreeBinaryIndex,
-        'VPTreeChebyshevIndex': pyvptree.VPTreeChebyshevIndex,
+        'VPTreeChebyshevIndex': pyvptree.VPTreeChebyshevIndex
     }
     if index_name not in mapper:
         raise ValueError(f'Index name {index_name} not supported')
