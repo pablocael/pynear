@@ -1,3 +1,34 @@
+# Comparison Benchmarks
+
+Several benchmarks were generated to compare performance between PyVPTree and other python libraries.
+All benchmarks were generated using 12th Gen Intel(R) Core(TM) i9-12900, 24 cores.
+
+In the below benchmarks, other libraries such as Annoy, Faiss and SKLearn are used. Annoy is inexact search (approximate) so it is somehow unfair comparison, but being extremelly efficient is an interesting baseline.
+
+# Binary Index Comparison
+
+For binary indices, only 32, 64, 128 and 256 bit dimensions were added since they are the most popular dimension for binary descriptors.
+
+![Binary Index Comparison](../../docs/img/binary-index-comparison/result_k=8.png)
+
+# L2 Index - Low Dimensionality Comparison
+![L2 Low Dimensionality Comparison](../../docs/img/l2-comparison-low-dimensionality/result_k=8.png)
+
+# L2 Index - High Dimensionality Comparison
+![L2 High Dimensionality Comparison](../../docs/img/l2-comparison-high-dimensionality/result_k=8.png)
+
+# L1 Index Comparison
+![L1 Index Comparison](../../docs/img/manhattan-index-comparison/result_k=8.png)
+
+# PyVPTree Index Comparison K=2
+![PyVPTree Index Comparison, K=2](../../docs/img/pyvptree-l2-indexes-comparison/result_k=2.png)
+
+# PyVPTree Index Comparison K=4
+![PyVPTree Index Comparison, K=4](../../docs/img/pyvptree-l2-indexes-comparison/result_k=4.png)
+
+# PyVPTree Index Comparison K=8
+![PyVPTree Index Comparison, K=8](../../docs/img/pyvptree-l2-indexes-comparison/result_k=8.png)
+
 # How to Create and Run Benchmarks
 
 The benchmark tool (pyvptree/benchmark/run_benchmarks.py) read `yaml` configuration files where benchmark cases can be personalized, like below example:
@@ -52,7 +83,7 @@ Supported 3rd party indices are:
  This allow comparing VPTree indices to thow 3 third party indices as well any combination of comparison.
 
 Output results are generated in `results` folder grouped in subfolders with benchmark cases name.
-How to generate and to customize the benchmark generation, see the example below:
+For generating benchmarks from `yaml` descriptor, see the example command below:
 
 
 ## How to run
@@ -63,34 +94,3 @@ python3 pyvptree/benchmark/run_benchmarks.py --config-file=<config-yaml-file>
 
 This will write result images to a local ./results folder.
 
-# Comparison Benchmarks
-
-Several benchmarks were generated to compare performance between PyVPTree and other python libraries.
-All benchmarks were generated using 12th Gen Intel(R) Core(TM) i9-12900, 24 cores.
-
-In the below benchmarks, other libraries such as Annoy, Faiss and SKLearn are used. Annoy is inexact search (approximate) so it is somehow unfair comparison, but being extremelly efficient is an interesting baseline.
-The below benchmarks are for different values of K (1, 2, 4, 8, 16), comparing Faiss, Sklearn and Pyvptree.
-
-# Binary Index Comparison
-
-For binary indices, only 32, 64, 128 and 256 bit dimensions were used since they are the most popular dimension for binary descriptors.
-
-![Binary Index Comparison](../../docs/img/binary-index-comparison/result_k=8.png)
-
-# L2 Index - Low Dimensionality Comparison
-![L2 Low Dimensionality Comparison](../../docs/img/l2-comparison-low-dimensionality/result_k=8.png)
-
-# L2 Index - High Dimensionality Comparison
-![L2 High Dimensionality Comparison](../../docs/img/l2-comparison-high-dimensionality/result_k=8.png)
-
-# L1 Index Comparison
-![L1 Index Comparison](../../docs/img/manhattan-index-comparison/result_k=8.png)
-
-# PyVPTree Index Comparison K=2
-![PyVPTree Index Comparison, K=2](../../docs/img/pyvptree-l2-indexes-comparison/result_k=2.png)
-
-# PyVPTree Index Comparison K=4
-![PyVPTree Index Comparison, K=4](../../docs/img/pyvptree-l2-indexes-comparison/result_k=4.png)
-
-# PyVPTree Index Comparison K=8
-![PyVPTree Index Comparison, K=8](../../docs/img/pyvptree-l2-indexes-comparison/result_k=8.png)
