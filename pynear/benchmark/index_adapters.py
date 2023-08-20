@@ -1,30 +1,33 @@
+from abc import ABC
+from abc import abstractmethod
 import time
+
 import annoy
 import faiss
-import pynear
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
-from abc import ABC, abstractmethod
+
+import pynear
 
 
 def create_index_adapter(index_name: str):
     # Supported 3rd party indices are: FaissIndexFlatL2, FaissIndexBinaryFlat, AnnoyL2, AnnoyManhattan, AnnoyHamming, SKLearnL2
     mapper = {
-        'FaissIndexFlatL2': FaissIndexFlatL2Adapter,
-        'FaissIndexBinaryFlat': FaissIndexBinaryFlatAdapter,
-        'AnnoyL2': AnnoyL2Adapter,
-        'AnnoyManhattan': AnnoyManhattanAdapter,
-        'AnnoyHamming': AnnoyHammingAdapter,
-        'SKLearnL2': SKLearnL2Adapter,
-        'VPTreeL2Index': pynear.VPTreeL2Index,
-        'VPTreeL1Index': pynear.VPTreeL1Index,
-        'VPTreeBinaryIndex': pynear.VPTreeBinaryIndex,
-        'VPTreeChebyshevIndex': pynear.VPTreeChebyshevIndex
+        "FaissIndexFlatL2": FaissIndexFlatL2Adapter,
+        "FaissIndexBinaryFlat": FaissIndexBinaryFlatAdapter,
+        "AnnoyL2": AnnoyL2Adapter,
+        "AnnoyManhattan": AnnoyManhattanAdapter,
+        "AnnoyHamming": AnnoyHammingAdapter,
+        "SKLearnL2": SKLearnL2Adapter,
+        "VPTreeL2Index": pynear.VPTreeL2Index,
+        "VPTreeL1Index": pynear.VPTreeL1Index,
+        "VPTreeBinaryIndex": pynear.VPTreeBinaryIndex,
+        "VPTreeChebyshevIndex": pynear.VPTreeChebyshevIndex,
     }
     if index_name not in mapper:
-        raise ValueError(f'Index name {index_name} not supported')
+        raise ValueError(f"Index name {index_name} not supported")
 
-    if index_name.startswith('VPTree'):
+    if index_name.startswith("VPTree"):
         return PyNearAdapter(index_name)
 
     return mapper[index_name]()
@@ -32,7 +35,6 @@ def create_index_adapter(index_name: str):
 
 # Supported 3rd party indices are: FaissIndexFlatL2, FaissIndexBinaryFlat, AnnoyL2, AnnoyManhattan, AnnoyHamming, SKLearnL2
 class IndexAdapter(ABC):
-
     @abstractmethod
     def build_index(self, data: np.ndarray):
         pass
@@ -51,15 +53,14 @@ class IndexAdapter(ABC):
 
 
 class PyNearAdapter(IndexAdapter):
-
     def __init__(self, pyvp_index_name: str):
         self._index = None
         self._pyvp_index_name = pyvp_index_name
         self._pyvp_index_map = {
-            'VPTreeL2Index': pynear.VPTreeL2Index,
-            'VPTreeBinaryIndex': pynear.VPTreeBinaryIndex,
-            'VPTreeChebyshevIndex': pynear.VPTreeChebyshevIndex,
-            'VPTreeL1Index': pynear.VPTreeL1Index
+            "VPTreeL2Index": pynear.VPTreeL2Index,
+            "VPTreeBinaryIndex": pynear.VPTreeBinaryIndex,
+            "VPTreeChebyshevIndex": pynear.VPTreeChebyshevIndex,
+            "VPTreeL1Index": pynear.VPTreeL1Index,
         }
 
     def build_index(self, data: np.ndarray):
@@ -71,7 +72,6 @@ class PyNearAdapter(IndexAdapter):
 
 
 class FaissIndexFlatL2Adapter(IndexAdapter):
-
     def __init__(self):
         self._index = None
 
@@ -85,7 +85,6 @@ class FaissIndexFlatL2Adapter(IndexAdapter):
 
 
 class FaissIndexBinaryFlatAdapter(IndexAdapter):
-
     def __init__(self):
         self._index = None
 
@@ -99,13 +98,12 @@ class FaissIndexBinaryFlatAdapter(IndexAdapter):
 
 
 class AnnoyL2Adapter(IndexAdapter):
-
     def __init__(self):
         self._index = None
         pass
 
     def build_index(self, data: np.ndarray):
-        self._index = annoy.AnnoyIndex(data.shape[1], 'euclidean')
+        self._index = annoy.AnnoyIndex(data.shape[1], "euclidean")
         for i, v in enumerate(data):
             self._index.add_item(i, v)
 
@@ -117,12 +115,11 @@ class AnnoyL2Adapter(IndexAdapter):
 
 
 class AnnoyManhattanAdapter(IndexAdapter):
-
     def __init__(self):
         self._index = None
 
     def build_index(self, data: np.ndarray):
-        self._index = annoy.AnnoyIndex(data.shape[1], 'manhattan')
+        self._index = annoy.AnnoyIndex(data.shape[1], "manhattan")
         for i, v in enumerate(data):
             self._index.add_item(i, v)
 
@@ -132,12 +129,11 @@ class AnnoyManhattanAdapter(IndexAdapter):
 
 
 class AnnoyHammingAdapter(IndexAdapter):
-
     def __init__(self):
         self._index = None
 
     def build_index(self, data: np.ndarray):
-        self._index = annoy.AnnoyIndex(data.shape[1], 'hamming')
+        self._index = annoy.AnnoyIndex(data.shape[1], "hamming")
         for i, v in enumerate(data):
             self._index.add_item(i, v)
 
@@ -149,7 +145,6 @@ class AnnoyHammingAdapter(IndexAdapter):
 
 
 class SKLearnL2Adapter(IndexAdapter):
-
     def __init__(self):
         self._index = None
 
@@ -167,7 +162,7 @@ class SKLearnL2Adapter(IndexAdapter):
         """
         # sklearn uses index based on k, so need to build on the fly
         # we will not clock index training stage
-        self._index = NearestNeighbors(n_neighbors=k, algorithm='kd_tree', metric='euclidean')
+        self._index = NearestNeighbors(n_neighbors=k, algorithm="kd_tree", metric="euclidean")
         self._index.fit(self._data)
 
         s = time.time()

@@ -85,8 +85,7 @@ template <> int64_t hamming_u64<64>(const uint64_t *pa, const uint64_t *pb) { re
 
 template <> int64_t hamming_u64<128>(const uint64_t *pa, const uint64_t *pb) {
 
-    __m256d result =
-        _mm256_set_pd(_mm_popcnt_u64(pa[0] ^ pb[0]), _mm_popcnt_u64(pa[1] ^ pb[1]), 0, 0);
+    __m256d result = _mm256_set_pd(_mm_popcnt_u64(pa[0] ^ pb[0]), _mm_popcnt_u64(pa[1] ^ pb[1]), 0, 0);
     return (int64_t)sum4(result);
 }
 

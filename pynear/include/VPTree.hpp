@@ -72,7 +72,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
     void set(const std::vector<T> &array) {
         clear();
 
-        if(array.empty()) {
+        if (array.empty()) {
             return;
         }
 

@@ -1,8 +1,8 @@
-from typing import Type
-from _pynear import VPTreeBinaryIndex512
-from _pynear import VPTreeBinaryIndex256
-from _pynear import VPTreeBinaryIndex128
+# flake8: noqa
 from _pynear import VPTreeBinaryIndex64
+from _pynear import VPTreeBinaryIndex128
+from _pynear import VPTreeBinaryIndex256
+from _pynear import VPTreeBinaryIndex512
 from _pynear import VPTreeChebyshevIndex
 from _pynear import VPTreeL1Index
 from _pynear import VPTreeL2Index
@@ -11,7 +11,6 @@ from ._version import __version__
 
 
 class VPTreeBinaryIndex:
-
     def __init__(self):
         self._index = None
         self._dimension = None
@@ -38,7 +37,9 @@ class VPTreeBinaryIndex:
 
         dim = queries.shape[1]
         if dim != self._dimension:
-            raise ValueError(f"invalid data dimension: index built data and query data dimensions must agree, index built data dimension is {dim}")
+            raise ValueError(
+                f"invalid data dimension: index built data and query data dimensions must agree, index built data dimension is {dim}"
+            )
 
         self._validate(queries)
         return self._index.searchKNN(queries, k)
@@ -54,7 +55,7 @@ class VPTreeBinaryIndex:
         if len(input.shape) != 2:
             raise ValueError("invalid data shape: binary indexes must be 2D")
 
-        if input.dtype != 'uint8':
+        if input.dtype != "uint8":
             raise TypeError("invalid data type: binary indexes must be uint8")
 
         dim = input.shape[1]

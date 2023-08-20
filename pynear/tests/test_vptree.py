@@ -5,7 +5,8 @@
 
 from collections import Counter
 from functools import partial
-from typing import Callable, Tuple
+from typing import Callable
+from typing import Tuple
 
 import numpy as np
 import pytest
@@ -54,7 +55,7 @@ def test_empty_index():
 
     try:
         vptree = pynear.VPTreeL2Index()
-        empty = np.array([]).reshape(-1,2)
+        empty = np.array([]).reshape(-1, 2)
         vptree.set(empty)
         i, d = vptree.search1NN(np.random.rand(1, 8).astype(dtype=np.uint8))
         assert False

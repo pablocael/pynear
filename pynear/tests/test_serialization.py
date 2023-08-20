@@ -15,7 +15,7 @@ def test_empty_index_serialization():
     # not initializing data with .set() should
     # be equivalent of initializing with empty array
     vptree = pynear.VPTreeL2Index()
-    empty = np.array([]).reshape(-1,8)
+    empty = np.array([]).reshape(-1, 8)
     vptree.set(empty)
     data = pickle.dumps(vptree)
     recovered = pickle.loads(data)
@@ -27,6 +27,7 @@ def test_empty_index_serialization():
     recovered = pickle.loads(data)
     data_rec = pickle.dumps(recovered)
     assert data_rec == data
+
 
 def test_basic_serialization():
     np.random.seed(seed=42)
@@ -52,6 +53,7 @@ def test_basic_serialization():
     vptree_indices_rec, vptree_distances_rec = recovered.search1NN(queries)
     assert vptree_indices_rec == vptree_indices and vptree_distances_rec == vptree_distances
 
+
 def test_string_serialization():
     np.random.seed(seed=42)
 
@@ -70,6 +72,7 @@ def test_string_serialization():
     restored_string_state = restored.to_string()
 
     assert restored_string_state == string_state
+
 
 def test_binary_serialization():
     np.random.seed(seed=42)

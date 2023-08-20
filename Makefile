@@ -1,8 +1,8 @@
 .PHONY: init-repo
 init-repo:
 ifeq (, $(shell which clang-format))
-	@echo "Installing stylize ..."
-	@pip install stylize
+	@echo "Installing formatting tools ..."
+	@pip install isort black
 ifeq ($(UNAME_S),Linux)
 	sudo apt install clang-format
 endif
@@ -17,11 +17,10 @@ endif
 
 .PHONY: fmt
 fmt: init-repo
-	stylize --exclude_dirs=pynear/include/Eigen --yapf_style="{based_on_style: google, column_limit: 150, indent_width: 4}"
-
-.PHONY: check-fmt
-check-fmt:
-	stylize --check --exclude_dirs=pynear/include/Eigen --yapf_style="{based_on_style: google, column_limit: 150, indent_width: 4}"
+	clang-format -i --verbose pynear/src/*.cpp pynear/include/*.hpp
+	isort --sl --fss -j 0 .
+	flake8
+	black .
 
 .PHONY: test
 test:
