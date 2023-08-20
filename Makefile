@@ -2,7 +2,7 @@
 init-repo:
 ifeq (, $(shell which clang-format))
 	@echo "Installing formatting tools ..."
-	@pip install isort black
+	@pip install isort black flake8
 ifeq ($(UNAME_S),Linux)
 	sudo apt install clang-format
 endif
