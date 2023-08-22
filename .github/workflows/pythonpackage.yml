@@ -32,9 +32,25 @@ jobs:
       with:
         path: ./wheelhouse/*.whl
 
+  build-sdist:
+    needs: build-wheels
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-python@v4
+      with:
+        python-version: 3.8
+    - name: Build sdist
+      run: |
+        python -m pip install build
+        python -m build --sdist
+    - uses: actions/upload-artifact@v3
+      with:
+        path: ./dist/*.tar.gz
+
   upload-pypi:
     if: github.event_name == 'release' && github.event.action == 'published'
-    needs: [build-wheels]
+    needs: [build-wheels, build-sdist]
     runs-on: ubuntu-latest
     permissions:
       id-token: write

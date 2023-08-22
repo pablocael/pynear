@@ -48,10 +48,10 @@ set_target_properties(${PROJECT_NAME} PROPERTIES PUBLIC_HEADER "${CMAKE_CURRENT_
 
 set(CONFIG_NAME ${PROJECT_NAME}Config)
 
-pybind11_add_module(pyvptree MODULE src/PythonBindings.cpp )
+pybind11_add_module(pynear MODULE src/PythonBindings.cpp )
 
-target_link_libraries(pyvptree PUBLIC OpenMP::OpenMP_CXX)
-target_include_directories(pyvptree PUBLIC
+target_link_libraries(pynear PUBLIC OpenMP::OpenMP_CXX)
+target_include_directories(pynear PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
@@ -63,7 +63,7 @@ execute_process(
   OUTPUT_VARIABLE PYTHON_SITE
   OUTPUT_STRIP_TRAILING_WHITESPACE)
 
-install(TARGETS ${PROJECT_NAME} pyvptree COMPONENT python EXPORT ${CONFIG_NAME}
+install(TARGETS ${PROJECT_NAME} pynear COMPONENT python EXPORT ${CONFIG_NAME}
     ARCHIVE DESTINATION ${PYTHON_SITE}
     LIBRARY DESTINATION ${PYTHON_SITE}
     RUNTIME DESTINATION ${PYTHON_SITE}
