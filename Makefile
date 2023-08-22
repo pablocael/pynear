@@ -18,7 +18,7 @@ endif
 .PHONY: fmt
 fmt: init-repo
 	clang-format -i --verbose pynear/src/*.cpp pynear/include/*.hpp
-	isort --sl --fss -j 0 .
+	isort -j 0 .
 	flake8
 	black .
 
