@@ -1,1 +1,1 @@
-include pyvptree/include/*.hpp
+include pynear/include/*.hpp
