@@ -1,8 +1,8 @@
-import os
 import sys
 
-from pybind11.setup_helpers import Pybind11Extension, build_ext
-from setuptools import find_packages, setup
+from pybind11.setup_helpers import Pybind11Extension
+from setuptools import find_packages
+from setuptools import setup
 
 if sys.platform == "win32":
     extra_compile_args = ["/Wall", "/arch:AVX", "/openmp"]  # /LTCG unrecognized here
@@ -31,7 +31,7 @@ with open("README.md", "rt", encoding="utf-8") as fr:
 exec(open("pynear/_version.py").read())
 setup(
     name="pynear",
-    version=__version__,
+    version=__version__,  # noqa: F821
     packages=find_packages(),
     author="Pablo Carneiro Elias",
     author_email="pablo.cael@gmail.com",

@@ -1,15 +1,16 @@
-import time
-import yaml
+from dataclasses import dataclass
+from typing import Any
+from typing import Dict
+from typing import Generator
+from typing import List
+
 import numpy as np
 import pandas as pd
-import faiss
-import pynear
-from sklearn.neighbors import NearestNeighbors
-from typing import Callable, Any, Dict, Generator, List, Optional, Tuple, Union
-from dataclasses import dataclass
+import yaml
+
 from pynear.benchmark.dataset import generate_gaussian_dataset
-from pynear.logging import create_and_configure_log
 from pynear.benchmark.index_adapters import create_index_adapter
+from pynear.logging import create_and_configure_log
 
 logger = create_and_configure_log(__name__)
 
@@ -46,14 +47,14 @@ class BenchmarkCase:
                 dimension,
                 data_type=np.dtype(self.dataset_type),
             )
-            logger.info(f"generating dataset done")
+            logger.info("generating dataset done")
             for k_value in self.k:
                 for index_type in self.index_types:
                     logger.info(f"processing index_type: {index_type} for k = {k_value} and dimension = {dimension}")
                     index = create_index_adapter(index_type)
-                    logger.info(f"buiding index ...")
+                    logger.info("buiding index ...")
                     index.build_index(data)
-                    logger.info(f"buiding index done")
+                    logger.info("buiding index done")
                     logger.info("start performing queries")
                     for num_queries in self.num_queries:
                         query = generate_gaussian_dataset(
@@ -72,18 +73,20 @@ class BenchmarkCase:
                         avg = sum(runs) / len(runs)
                         logger.info(f"avg of {NUM_AVG_SEARCHS} searches runtime is {avg:0.4f}")
 
-                        results.append({
-                            "time": avg,
-                            "k": k_value,
-                            "num_seraches_avg": NUM_AVG_SEARCHS,
-                            "num_queries": num_queries,
-                            "index_type": index_type,
-                            "dimension": dimension,
-                            "dataset_total_size": self.dataset_total_size,
-                            "dataset_num_clusters": self.dataset_num_clusters,
-                        })
+                        results.append(
+                            {
+                                "time": avg,
+                                "k": k_value,
+                                "num_seraches_avg": NUM_AVG_SEARCHS,
+                                "num_queries": num_queries,
+                                "index_type": index_type,
+                                "dimension": dimension,
+                                "dataset_total_size": self.dataset_total_size,
+                                "dataset_num_clusters": self.dataset_num_clusters,
+                            }
+                        )
                         logger.info(f"done performing queries for (num_queries = {num_queries})")
-                    logger.info(f"queries done")
+                    logger.info("queries done")
         return {"benchmark_case_id": self.id(), "benchmark_case_name": self.name, "results": results}
 
     # the random seed for reproducibility
@@ -99,6 +102,7 @@ class BenchmarkCase:
     @staticmethod
     def reject_outliers(data, m=1.2):
         return data[abs(data - np.mean(data)) < m * np.std(data)]
+
 
 class BenchmarkRunner:
     """
