@@ -1,4 +1,5 @@
 #include "gmock/gmock.h"
+#include "gtest/gtest.h"
 
 #include <MathUtils.hpp>
 #include <VPTree.hpp>
@@ -9,7 +10,7 @@
 #include <random>
 #include <sstream>
 #include <vector>
-
+#include <exception>
 #include <stdint.h>
 
 #if defined(_MSC_VER)
@@ -97,8 +98,8 @@ TEST(VPTests, TestHamming) {
 }
 
 TEST(VPTests, TestEmpty) {
-    VPTree<Eigen::Vector3d, float, distance> tree2;
     VPTree<Eigen::Vector3d, float, distance> tree;
+    tree.set(std::vector<Eigen::Vector3d>());
 
     std::default_random_engine generator;
     std::uniform_real_distribution<float> distribution(-10, 10);
@@ -113,13 +114,15 @@ TEST(VPTests, TestEmpty) {
 
     std::vector<int64_t> indices;
     std::vector<float> distances;
-    std::vector<int64_t> indices2;
-    std::vector<float> distances2;
-    tree.search1NN(queries, indices, distances);
-    tree2.search1NN(queries, indices2, distances2);
+    EXPECT_THROW(tree.search1NN(queries, indices, distances), std::runtime_error);
 
-    EXPECT_EQ(indices.size(), indices2.size());
-    EXPECT_EQ(indices.size(), 0);
+    VPTree<Eigen::Vector3d, float, distance> treeEmpty2;
+    EXPECT_THROW(treeEmpty2.search1NN(queries, indices, distances), std::runtime_error);
+
+    VPTree<Eigen::Vector3d, float, distance> nonEmpty;
+    nonEmpty.set(queries);
+    EXPECT_NO_THROW(nonEmpty.search1NN(queries, indices, distances));
+
 }
 
 TEST(VPTests, TestToString) {
