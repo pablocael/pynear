@@ -13,6 +13,7 @@
 #include <sstream>
 #include <stdexcept>
 
+#include <BKTree.hpp>
 #include <DistanceFunctions.hpp>
 #include <ISerializable.hpp>
 #include <VPTree.hpp>
@@ -20,6 +21,7 @@
 namespace py = pybind11;
 
 typedef float (*distance_func_f)(const arrayf &, const arrayf &);
+typedef int64_t (*distance_func_li)(const arrayli &, const arrayli &);
 
 template <distance_func_f distance> class VPTreeNumpyAdapter {
     public:
@@ -60,18 +62,32 @@ template <distance_func_f distance> class VPTreeNumpyAdapter {
         return stream.str();
     }
 
+    static py::tuple get_state(const VPTreeNumpyAdapter<distance> &p) {
+        vptree::SerializedState state = p.tree.serialize();
+        py::tuple t = py::make_tuple(state.data, state.checksum);
+        return t;
+    }
+
+    static VPTreeNumpyAdapter<distance> set_state(py::tuple t) {
+        VPTreeNumpyAdapter<distance> p;
+        std::vector<uint8_t> state = t[0].cast<std::vector<uint8_t>>();
+        uint8_t checksum = t[1].cast<uint8_t>();
+        p.tree.deserialize(vptree::SerializedState(state, checksum));
+        return p;
+    }
+
     vptree::VPTree<arrayf, float, distance> tree;
 };
 
-class VPTreeBinaryNumpyAdapter512 {
+template <distance_func_li distance> class VPTreeNumpyAdapterBinary {
     public:
-    VPTreeBinaryNumpyAdapter512() = default;
+    VPTreeNumpyAdapterBinary() = default;
 
     void set(const ndarrayli &array) { tree.set(array); }
 
     std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<int64_t>>> searchKNN(const ndarrayli &queries, size_t k) {
 
-        std::vector<vptree::VPTree<arrayli, int64_t, dist_hamming_512>::VPTreeSearchResultElement> results;
+        std::vector<typename vptree::VPTree<arrayli, int64_t, distance>::VPTreeSearchResultElement> results;
         tree.searchKNN(queries, k, results);
 
         std::vector<std::vector<int64_t>> indexes;
@@ -101,130 +117,44 @@ class VPTreeBinaryNumpyAdapter512 {
         return stream.str();
     }
 
-    vptree::VPTree<arrayli, int64_t, dist_hamming_512> tree;
+    static py::tuple get_state(const VPTreeNumpyAdapterBinary<distance> &p) {
+        vptree::SerializedState state = p.tree.serialize();
+        py::tuple t = py::make_tuple(state.data, state.checksum);
+        return t;
+    }
+
+    static VPTreeNumpyAdapterBinary<distance> set_state(py::tuple t) {
+        VPTreeNumpyAdapterBinary<distance> p;
+        std::vector<uint8_t> state = t[0].cast<std::vector<uint8_t>>();
+        uint8_t checksum = t[1].cast<uint8_t>();
+        p.tree.deserialize(vptree::SerializedState(state, checksum));
+        return p;
+    }
+
+    vptree::VPTree<arrayli, int64_t, distance> tree;
 };
 
-class VPTreeBinaryNumpyAdapter256 {
+template <distance_func_li distance_f> class HammingMetric : Metric<arrayli, int64_t> {
     public:
-    VPTreeBinaryNumpyAdapter256() = default;
+    static int64_t distance(const arrayli &a, const arrayli &b) { return distance_f(a, b); }
 
-    void set(const ndarrayli &array) { tree.set(array); }
-
-    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<int64_t>>> searchKNN(const ndarrayli &queries, size_t k) {
-
-        std::vector<vptree::VPTree<arrayli, int64_t, dist_hamming_256>::VPTreeSearchResultElement> results;
-        tree.searchKNN(queries, k, results);
-
-        std::vector<std::vector<int64_t>> indexes;
-        std::vector<std::vector<int64_t>> distances;
-        indexes.resize(results.size());
-        distances.resize(results.size());
-        for (size_t i = 0; i < results.size(); ++i) {
-            indexes[i] = std::move(results[i].indexes);
-            distances[i] = std::move(results[i].distances);
-        }
-        return std::make_tuple(indexes, distances);
-    }
-
-    std::tuple<std::vector<int64_t>, std::vector<int64_t>> search1NN(const ndarrayli &queries) {
-
-        std::vector<int64_t> indices;
-        std::vector<int64_t> distances;
-        tree.search1NN(queries, indices, distances);
-
-        return std::make_tuple(std::move(indices), std::move(distances));
-    }
-
-    std::string to_string() {
-        std::stringstream stream;
-        stream << tree;
-
-        return stream.str();
-    }
-
-    vptree::VPTree<arrayli, int64_t, dist_hamming_256> tree;
+    static std::optional<int64_t> threshold_distance(const arrayli &a, const arrayli &b, int64_t threshold) { return distance_f(a, b); }
 };
 
-class VPTreeBinaryNumpyAdapter128 {
+template <distance_func_li distance> class BKTreeBinaryNumpyAdapter {
     public:
-    VPTreeBinaryNumpyAdapter128() = default;
+    BKTree<arrayli, int64_t, HammingMetric<distance>> tree;
 
-    void set(const ndarrayli &array) { tree.set(array); }
+    BKTreeBinaryNumpyAdapter() = default;
 
-    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<int64_t>>> searchKNN(const ndarrayli &queries, size_t k) {
+    void set(const ndarrayli &array) { tree.update(array); }
 
-        std::vector<vptree::VPTree<arrayli, int64_t, dist_hamming_128>::VPTreeSearchResultElement> results;
-        tree.searchKNN(queries, k, results);
-
-        std::vector<std::vector<int64_t>> indexes;
-        std::vector<std::vector<int64_t>> distances;
-        indexes.resize(results.size());
-        distances.resize(results.size());
-        for (size_t i = 0; i < results.size(); ++i) {
-            indexes[i] = std::move(results[i].indexes);
-            distances[i] = std::move(results[i].distances);
-        }
-        return std::make_tuple(indexes, distances);
+    std::tuple<std::vector<std::vector<int64_t>>, std::vector<ndarrayli>> find_threshold(const ndarrayli &queries, int64_t threshold) {
+        return tree.find_batch(queries, threshold);
     }
 
-    std::tuple<std::vector<int64_t>, std::vector<int64_t>> search1NN(const ndarrayli &queries) {
-
-        std::vector<int64_t> indices;
-        std::vector<int64_t> distances;
-        tree.search1NN(queries, indices, distances);
-
-        return std::make_tuple(std::move(indices), std::move(distances));
-    }
-
-    std::string to_string() {
-        std::stringstream stream;
-        stream << tree;
-
-        return stream.str();
-    }
-
-    vptree::VPTree<arrayli, int64_t, dist_hamming_128> tree;
-};
-
-class VPTreeBinaryNumpyAdapter64 {
-    public:
-    VPTreeBinaryNumpyAdapter64() = default;
-
-    void set(const ndarrayli &array) { tree.set(array); }
-
-    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<int64_t>>> searchKNN(const ndarrayli &queries, size_t k) {
-
-        std::vector<vptree::VPTree<arrayli, int64_t, dist_hamming_64>::VPTreeSearchResultElement> results;
-        tree.searchKNN(queries, k, results);
-
-        std::vector<std::vector<int64_t>> indexes;
-        std::vector<std::vector<int64_t>> distances;
-        indexes.resize(results.size());
-        distances.resize(results.size());
-        for (size_t i = 0; i < results.size(); ++i) {
-            indexes[i] = std::move(results[i].indexes);
-            distances[i] = std::move(results[i].distances);
-        }
-        return std::make_tuple(indexes, distances);
-    }
-
-    std::tuple<std::vector<int64_t>, std::vector<int64_t>> search1NN(const ndarrayli &queries) {
-
-        std::vector<int64_t> indices;
-        std::vector<int64_t> distances;
-        tree.search1NN(queries, indices, distances);
-
-        return std::make_tuple(std::move(indices), std::move(distances));
-    }
-
-    std::string to_string() {
-        std::stringstream stream;
-        stream << tree;
-
-        return stream.str();
-    }
-
-    vptree::VPTree<arrayli, int64_t, dist_hamming_64> tree;
+    bool empty() { return tree.empty(); }
+    ndarrayli values() { return tree.values(); }
 };
 
 PYBIND11_MODULE(_pynear, m) {
@@ -234,23 +164,7 @@ PYBIND11_MODULE(_pynear, m) {
         .def("to_string", &VPTreeNumpyAdapter<dist_l2_f_avx2>::to_string)
         .def("searchKNN", &VPTreeNumpyAdapter<dist_l2_f_avx2>::searchKNN)
         .def("search1NN", &VPTreeNumpyAdapter<dist_l2_f_avx2>::search1NN)
-        .def(py::pickle(
-            [](const VPTreeNumpyAdapter<dist_l2_f_avx2> &p) { // __getstate__
-                /* Return a tuple that fully encodes the state of the object */
-                vptree::SerializedState state = p.tree.serialize();
-                py::tuple t = py::make_tuple(state.data, state.checksum);
-
-                return t;
-            },
-            [](py::tuple t) { // __setstate__
-                /* Create a new C++ instance */
-                VPTreeNumpyAdapter<dist_l2_f_avx2> p;
-                std::vector<uint8_t> state = t[0].cast<std::vector<uint8_t>>();
-                uint8_t checksum = t[1].cast<uint8_t>();
-                p.tree.deserialize(vptree::SerializedState(state, checksum));
-
-                return p;
-            }));
+        .def(py::pickle(&VPTreeNumpyAdapter<dist_l2_f_avx2>::get_state, &VPTreeNumpyAdapter<dist_l2_f_avx2>::set_state));
 
     py::class_<VPTreeNumpyAdapter<dist_l1_f_avx2>>(m, "VPTreeL1Index")
         .def(py::init<>())
@@ -258,23 +172,7 @@ PYBIND11_MODULE(_pynear, m) {
         .def("to_string", &VPTreeNumpyAdapter<dist_l1_f_avx2>::to_string)
         .def("searchKNN", &VPTreeNumpyAdapter<dist_l1_f_avx2>::searchKNN)
         .def("search1NN", &VPTreeNumpyAdapter<dist_l1_f_avx2>::search1NN)
-        .def(py::pickle(
-            [](const VPTreeNumpyAdapter<dist_l1_f_avx2> &p) { // __getstate__
-                /* Return a tuple that fully encodes the state of the object */
-                vptree::SerializedState state = p.tree.serialize();
-                py::tuple t = py::make_tuple(state.data, state.checksum);
-
-                return t;
-            },
-            [](py::tuple t) { // __setstate__
-                /* Create a new C++ instance */
-                VPTreeNumpyAdapter<dist_l1_f_avx2> p;
-                std::vector<uint8_t> state = t[0].cast<std::vector<uint8_t>>();
-                uint8_t checksum = t[1].cast<uint8_t>();
-                p.tree.deserialize(vptree::SerializedState(state, checksum));
-
-                return p;
-            }));
+        .def(py::pickle(&VPTreeNumpyAdapter<dist_l1_f_avx2>::get_state, &VPTreeNumpyAdapter<dist_l1_f_avx2>::set_state));
 
     py::class_<VPTreeNumpyAdapter<dist_chebyshev_f_avx2>>(m, "VPTreeChebyshevIndex")
         .def(py::init<>())
@@ -282,117 +180,80 @@ PYBIND11_MODULE(_pynear, m) {
         .def("to_string", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::to_string)
         .def("searchKNN", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::searchKNN)
         .def("search1NN", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::search1NN)
-        .def(py::pickle(
-            [](const VPTreeNumpyAdapter<dist_chebyshev_f_avx2> &p) { // __getstate__
-                /* Return a tuple that fully encodes the state of the object */
-                vptree::SerializedState state = p.tree.serialize();
-                py::tuple t = py::make_tuple(state.data, state.checksum);
+        .def(py::pickle(&VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::get_state, &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::set_state));
 
-                return t;
-            },
-            [](py::tuple t) { // __setstate__
-                /* Create a new C++ instance */
-                VPTreeNumpyAdapter<dist_chebyshev_f_avx2> p;
-                std::vector<uint8_t> state = t[0].cast<std::vector<uint8_t>>();
-                uint8_t checksum = t[1].cast<uint8_t>();
-                p.tree.deserialize(vptree::SerializedState(state, checksum));
-
-                return p;
-            }));
-
-    py::class_<VPTreeBinaryNumpyAdapter512>(m, "VPTreeBinaryIndex512")
+    py::class_<VPTreeNumpyAdapterBinary<dist_hamming_512>>(m, "VPTreeBinaryIndex512")
         .def(py::init<>())
-        .def("set", &VPTreeBinaryNumpyAdapter512::set)
-        .def("to_string", &VPTreeBinaryNumpyAdapter512::to_string)
-        .def("searchKNN", &VPTreeBinaryNumpyAdapter512::searchKNN)
-        .def("search1NN", &VPTreeBinaryNumpyAdapter512::search1NN)
-        .def(py::pickle(
-            [](const VPTreeBinaryNumpyAdapter512 &p) { // __getstate__
-                /* Return a tuple that fully encodes the state of the object */
-                vptree::SerializedState state = p.tree.serialize();
-                py::tuple t = py::make_tuple(state.data, state.checksum);
+        .def("set", &VPTreeNumpyAdapterBinary<dist_hamming_512>::set)
+        .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming_512>::to_string)
+        .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming_512>::searchKNN)
+        .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming_512>::search1NN)
+        .def(py::pickle(&VPTreeNumpyAdapterBinary<dist_hamming_512>::get_state, &VPTreeNumpyAdapterBinary<dist_hamming_512>::set_state));
 
-                return t;
-            },
-            [](py::tuple t) { // __setstate__
-                /* Create a new C++ instance */
-                VPTreeBinaryNumpyAdapter512 p;
-                std::vector<uint8_t> data = t[0].cast<std::vector<uint8_t>>();
-                uint8_t checksum = t[1].cast<uint8_t>();
-                p.tree.deserialize(vptree::SerializedState(data, checksum));
-
-                return p;
-            }));
-
-    py::class_<VPTreeBinaryNumpyAdapter256>(m, "VPTreeBinaryIndex256")
+    py::class_<VPTreeNumpyAdapterBinary<dist_hamming_256>>(m, "VPTreeBinaryIndex256")
         .def(py::init<>())
-        .def("set", &VPTreeBinaryNumpyAdapter256::set)
-        .def("to_string", &VPTreeBinaryNumpyAdapter256::to_string)
-        .def("searchKNN", &VPTreeBinaryNumpyAdapter256::searchKNN)
-        .def("search1NN", &VPTreeBinaryNumpyAdapter256::search1NN)
-        .def(py::pickle(
-            [](const VPTreeBinaryNumpyAdapter256 &p) { // __getstate__
-                /* Return a tuple that fully encodes the state of the object */
-                vptree::SerializedState state = p.tree.serialize();
-                py::tuple t = py::make_tuple(state.data, state.checksum);
+        .def("set", &VPTreeNumpyAdapterBinary<dist_hamming_256>::set)
+        .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming_256>::to_string)
+        .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming_256>::searchKNN)
+        .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming_256>::search1NN)
+        .def(py::pickle(&VPTreeNumpyAdapterBinary<dist_hamming_256>::get_state, &VPTreeNumpyAdapterBinary<dist_hamming_256>::set_state));
 
-                return t;
-            },
-            [](py::tuple t) { // __setstate__
-                /* Create a new C++ instance */
-                VPTreeBinaryNumpyAdapter256 p;
-                std::vector<uint8_t> data = t[0].cast<std::vector<uint8_t>>();
-                uint8_t checksum = t[1].cast<uint8_t>();
-                p.tree.deserialize(vptree::SerializedState(data, checksum));
-
-                return p;
-            }));
-
-    py::class_<VPTreeBinaryNumpyAdapter128>(m, "VPTreeBinaryIndex128")
+    py::class_<VPTreeNumpyAdapterBinary<dist_hamming_128>>(m, "VPTreeBinaryIndex128")
         .def(py::init<>())
-        .def("set", &VPTreeBinaryNumpyAdapter128::set)
-        .def("to_string", &VPTreeBinaryNumpyAdapter128::to_string)
-        .def("searchKNN", &VPTreeBinaryNumpyAdapter128::searchKNN)
-        .def("search1NN", &VPTreeBinaryNumpyAdapter128::search1NN)
-        .def(py::pickle(
-            [](const VPTreeBinaryNumpyAdapter128 &p) { // __getstate__
-                /* Return a tuple that fully encodes the state of the object */
-                vptree::SerializedState state = p.tree.serialize();
-                py::tuple t = py::make_tuple(state.data, state.checksum);
+        .def("set", &VPTreeNumpyAdapterBinary<dist_hamming_128>::set)
+        .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming_128>::to_string)
+        .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming_128>::searchKNN)
+        .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming_128>::search1NN)
+        .def(py::pickle(&VPTreeNumpyAdapterBinary<dist_hamming_128>::get_state, &VPTreeNumpyAdapterBinary<dist_hamming_128>::set_state));
 
-                return t;
-            },
-            [](py::tuple t) { // __setstate__
-                /* Create a new C++ instance */
-                VPTreeBinaryNumpyAdapter128 p;
-                std::vector<uint8_t> data = t[0].cast<std::vector<uint8_t>>();
-                uint8_t checksum = t[1].cast<uint8_t>();
-                p.tree.deserialize(vptree::SerializedState(data, checksum));
-
-                return p;
-            }));
-
-    py::class_<VPTreeBinaryNumpyAdapter64>(m, "VPTreeBinaryIndex64")
+    py::class_<VPTreeNumpyAdapterBinary<dist_hamming_64>>(m, "VPTreeBinaryIndex64")
         .def(py::init<>())
-        .def("set", &VPTreeBinaryNumpyAdapter64::set)
-        .def("to_string", &VPTreeBinaryNumpyAdapter64::to_string)
-        .def("searchKNN", &VPTreeBinaryNumpyAdapter64::searchKNN)
-        .def("search1NN", &VPTreeBinaryNumpyAdapter64::search1NN)
-        .def(py::pickle(
-            [](const VPTreeBinaryNumpyAdapter64 &p) { // __getstate__
-                /* Return a tuple that fully encodes the state of the object */
-                vptree::SerializedState state = p.tree.serialize();
-                py::tuple t = py::make_tuple(state.data, state.checksum);
+        .def("set", &VPTreeNumpyAdapterBinary<dist_hamming_64>::set)
+        .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming_64>::to_string)
+        .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming_64>::searchKNN)
+        .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming_64>::search1NN)
+        .def(py::pickle(&VPTreeNumpyAdapterBinary<dist_hamming_64>::get_state, &VPTreeNumpyAdapterBinary<dist_hamming_64>::set_state));
 
-                return t;
-            },
-            [](py::tuple t) { // __setstate__
-                /* Create a new C++ instance */
-                VPTreeBinaryNumpyAdapter64 p;
-                std::vector<uint8_t> data = t[0].cast<std::vector<uint8_t>>();
-                uint8_t checksum = t[1].cast<uint8_t>();
-                p.tree.deserialize(vptree::SerializedState(data, checksum));
+    py::class_<VPTreeNumpyAdapterBinary<dist_hamming>>(m, "VPTreeBinaryIndex")
+        .def(py::init<>())
+        .def("set", &VPTreeNumpyAdapterBinary<dist_hamming>::set)
+        .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming>::to_string)
+        .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming>::searchKNN)
+        .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming>::search1NN)
+        .def(py::pickle(&VPTreeNumpyAdapterBinary<dist_hamming>::get_state, &VPTreeNumpyAdapterBinary<dist_hamming>::set_state));
 
-                return p;
-            }));
+    py::class_<BKTreeBinaryNumpyAdapter<dist_hamming_512>>(m, "BKTreeBinaryIndex512")
+        .def(py::init<>())
+        .def("set", &BKTreeBinaryNumpyAdapter<dist_hamming_512>::set)
+        .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming_512>::find_threshold)
+        .def("empty", &BKTreeBinaryNumpyAdapter<dist_hamming_512>::empty)
+        .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming_512>::values);
+
+    py::class_<BKTreeBinaryNumpyAdapter<dist_hamming_256>>(m, "BKTreeBinaryIndex256")
+        .def(py::init<>())
+        .def("set", &BKTreeBinaryNumpyAdapter<dist_hamming_256>::set)
+        .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming_256>::find_threshold)
+        .def("empty", &BKTreeBinaryNumpyAdapter<dist_hamming_256>::empty)
+        .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming_256>::values);
+
+    py::class_<BKTreeBinaryNumpyAdapter<dist_hamming_128>>(m, "BKTreeBinaryIndex128")
+        .def(py::init<>())
+        .def("set", &BKTreeBinaryNumpyAdapter<dist_hamming_128>::set)
+        .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming_128>::find_threshold)
+        .def("empty", &BKTreeBinaryNumpyAdapter<dist_hamming_128>::empty)
+        .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming_128>::values);
+
+    py::class_<BKTreeBinaryNumpyAdapter<dist_hamming_64>>(m, "BKTreeBinaryIndex64")
+        .def(py::init<>())
+        .def("set", &BKTreeBinaryNumpyAdapter<dist_hamming_64>::set)
+        .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming_64>::find_threshold)
+        .def("empty", &BKTreeBinaryNumpyAdapter<dist_hamming_64>::empty)
+        .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming_64>::values);
+
+    py::class_<BKTreeBinaryNumpyAdapter<dist_hamming>>(m, "BKTreeBinaryIndex")
+        .def(py::init<>())
+        .def("set", &BKTreeBinaryNumpyAdapter<dist_hamming>::set)
+        .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming>::find_threshold)
+        .def("empty", &BKTreeBinaryNumpyAdapter<dist_hamming>::empty)
+        .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming>::values);
 };

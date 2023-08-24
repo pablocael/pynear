@@ -27,6 +27,21 @@ using ndarrayli = std::vector<arrayli>;
 #endif
 
 /* Hamming distances for multiples of 64 bits */
+int64_t hamming_u64(const arrayli &p1, const arrayli &p2) {
+    assert(p1.size() == p2.size());
+    assert(p1.size() % 8 == 0);
+
+    const uint64_t *bs1 = reinterpret_cast<const uint64_t *>(p1.data());
+    const uint64_t *bs2 = reinterpret_cast<const uint64_t *>(p2.data());
+
+    const size_t nwords = p1.size() / 8;
+    size_t i;
+    int64_t h = 0;
+    for (i = 0; i < nwords; i++)
+        h += _mm_popcnt_u64(bs1[i] ^ bs2[i]);
+    return h;
+}
+
 template <size_t nbits> int64_t hamming_u64(const uint64_t *bs1, const uint64_t *bs2) {
     const size_t nwords = nbits / 64;
     size_t i;
@@ -37,20 +52,65 @@ template <size_t nbits> int64_t hamming_u64(const uint64_t *bs1, const uint64_t 
 }
 
 /* Hamming distances for multiples of 32 bits */
+int32_t hamming_u32(const arrayli &p1, const arrayli &p2) {
+    assert(p1.size() == p2.size());
+    assert(p1.size() % 4 == 0);
+
+    const uint32_t *bs1 = reinterpret_cast<const uint32_t *>(p1.data());
+    const uint32_t *bs2 = reinterpret_cast<const uint32_t *>(p2.data());
+
+    const size_t nwords = p1.size() / 4;
+    size_t i;
+    int32_t h = 0;
+    for (i = 0; i < nwords; i++)
+        h += _mm_popcnt_u32(bs1[i] ^ bs2[i]);
+    return h;
+}
+
 template <size_t nbits> int32_t hamming_u32(const uint32_t *bs1, const uint32_t *bs2) {
     const size_t nwords = nbits / 32;
     size_t i;
-    int64_t h = 0;
+    int32_t h = 0;
     for (i = 0; i < nwords; i++)
         h += _mm_popcnt_u32(bs1[i] ^ bs2[i]);
     return h;
 }
 
 /* Hamming distances for multiples of 16 bits */
+int16_t hamming_u16(const arrayli &p1, const arrayli &p2) {
+    assert(p1.size() == p2.size());
+    assert(p1.size() % 2 == 0);
+
+    const uint16_t *bs1 = reinterpret_cast<const uint16_t *>(p1.data());
+    const uint16_t *bs2 = reinterpret_cast<const uint16_t *>(p2.data());
+
+    const size_t nwords = p1.size() / 2;
+    size_t i;
+    int16_t h = 0;
+    for (i = 0; i < nwords; i++)
+        h += _mm_popcnt_u32(bs1[i] ^ bs2[i]);
+    return h;
+}
+
 template <size_t nbits> int16_t hamming_u16(const uint16_t *bs1, const uint16_t *bs2) {
     const size_t nwords = nbits / 16;
     size_t i;
-    int64_t h = 0;
+    int16_t h = 0;
+    for (i = 0; i < nwords; i++)
+        h += _mm_popcnt_u32(bs1[i] ^ bs2[i]);
+    return h;
+}
+
+/* Hamming distances for multiples of 8 bits */
+int8_t hamming_u8(const arrayli &p1, const arrayli &p2) {
+    assert(p1.size() == p2.size());
+
+    const uint8_t *bs1 = p1.data();
+    const uint8_t *bs2 = p2.data();
+
+    const size_t nwords = p1.size();
+    size_t i;
+    int8_t h = 0;
     for (i = 0; i < nwords; i++)
         h += _mm_popcnt_u32(bs1[i] ^ bs2[i]);
     return h;
@@ -59,7 +119,7 @@ template <size_t nbits> int16_t hamming_u16(const uint16_t *bs1, const uint16_t 
 template <size_t nbits> int8_t hamming_u8(const uint8_t *bs1, const uint8_t *bs2) {
     const size_t nwords = nbits / 8;
     size_t i;
-    int64_t h = 0;
+    int8_t h = 0;
     for (i = 0; i < nwords; i++)
         h += _mm_popcnt_u32(bs1[i] ^ bs2[i]);
     return h;
@@ -207,7 +267,7 @@ float dist_l2_f_avx2(const arrayf &p1, const arrayf &p2) {
 double dist_l2_d(const arrayd &p1, const arrayd &p2) {
 
     double result = 0;
-    auto i = p1.size();
+    size_t i = p1.size();
     while (i--) {
         double d = (p1[i] - p2[i]);
         result += d * d;
@@ -219,7 +279,7 @@ double dist_l2_d(const arrayd &p1, const arrayd &p2) {
 float dist_l2_f(const arrayf &p1, const arrayf &p2) {
 
     float result = 0.;
-    auto i = p1.size();
+    size_t i = p1.size();
     while (i--) {
         float d = (p1[i] - p2[i]);
         result += d * d;
@@ -232,7 +292,7 @@ float dist_l1_f(const arrayf &p1, const arrayf &p2) {
     /* L1 metric, also called Manhattan or taxicab metric */
 
     float result = 0.;
-    auto i = p1.size();
+    size_t i = p1.size();
     while (i--) {
         result += std::fabs(p1[i] - p2[i]);
     }
@@ -245,7 +305,7 @@ float dist_l1_f_avx2(const arrayf &p1, const arrayf &p2) {
 
     const float *vec1 = &(p1[0]);
     const float *vec2 = &(p2[0]);
-    auto size = p1.size();
+    size_t size = p1.size();
 
     const size_t blocksize = 8;
     size_t i = 0;
@@ -280,7 +340,7 @@ float dist_chebyshev_f(const arrayf &p1, const arrayf &p2) {
     /* Chebyshev distance metric, also called maximum metric or L_inf metric */
 
     float result = 0.;
-    auto i = p1.size();
+    size_t i = p1.size();
     while (i--) {
         float distance = std::fabs(p1[i] - p2[i]);
         if (distance > result) {
@@ -296,7 +356,7 @@ float dist_chebyshev_f_avx2(const arrayf &p1, const arrayf &p2) {
 
     const float *vec1 = &(p1[0]);
     const float *vec2 = &(p2[0]);
-    auto size = p1.size();
+    size_t size = p1.size();
 
     const size_t blocksize = 8;
     size_t i = 0;
@@ -328,6 +388,20 @@ float dist_chebyshev_f_avx2(const arrayf &p1, const arrayf &p2) {
     return max_distance;
 }
 
+int64_t dist_hamming(const arrayli &p1, const arrayli &p2) {
+    size_t size = p1.size();
+
+    if (size % 8 == 0) {
+        return hamming_u64(p1, p2);
+    } else if (size % 4 == 0) {
+        return static_cast<int64_t>(hamming_u32(p1, p2));
+    } else if (size % 2 == 0) {
+        return static_cast<int64_t>(hamming_u16(p1, p2));
+    } else {
+        return static_cast<int64_t>(hamming_u8(p1, p2));
+    }
+}
+
 inline int64_t dist_hamming_512(const arrayli &p1, const arrayli &p2) {
 
     return hamming_u64<512>(reinterpret_cast<const uint64_t *>(&p1[0]), reinterpret_cast<const uint64_t *>(&p2[0]));
@@ -344,21 +418,20 @@ inline int64_t dist_hamming_128(const arrayli &p1, const arrayli &p2) {
 }
 
 inline int64_t dist_hamming_64(const arrayli &p1, const arrayli &p2) {
-
     return hamming_u64<64>(reinterpret_cast<const uint64_t *>(&p1[0]), reinterpret_cast<const uint64_t *>(&p2[0]));
 }
 
 inline int64_t dist_hamming_32(const arrayli &p1, const arrayli &p2) {
 
-    return hamming_u32<32>(reinterpret_cast<const uint32_t *>(&p1[0]), reinterpret_cast<const uint32_t *>(&p2[0]));
+    return static_cast<int64_t>(hamming_u32<32>(reinterpret_cast<const uint32_t *>(&p1[0]), reinterpret_cast<const uint32_t *>(&p2[0])));
 }
 
 inline int64_t dist_hamming_16(const arrayli &p1, const arrayli &p2) {
 
-    return hamming_u16<16>(reinterpret_cast<const uint16_t *>(&p1[0]), reinterpret_cast<const uint16_t *>(&p2[0]));
+    return static_cast<int64_t>(hamming_u16<16>(reinterpret_cast<const uint16_t *>(&p1[0]), reinterpret_cast<const uint16_t *>(&p2[0])));
 }
 
 inline int64_t dist_hamming_8(const arrayli &p1, const arrayli &p2) {
 
-    return hamming_u8<8>(reinterpret_cast<const uint8_t *>(&p1[0]), reinterpret_cast<const uint8_t *>(&p2[0]));
+    return static_cast<int64_t>(hamming_u8<8>(reinterpret_cast<const uint8_t *>(&p1[0]), reinterpret_cast<const uint8_t *>(&p2[0])));
 }
