@@ -157,103 +157,115 @@ template <distance_func_li distance> class BKTreeBinaryNumpyAdapter {
     ndarrayli values() { return tree.values(); }
 };
 
+static const char *index_set = "Add vectors to index";
+static const char *index_topk = "Batch find top-k vectors in index and return indices and distances";
+static const char *index_top1 = "Batch find closest vectors in index and return indices and distances";
+static const char *index_string = "Return a debug string representation of the tree";
+static const char *index_find_threshold = "Batch find all vectors below the distance threshold";
+static const char *index_values = "Return all stored vectors in arbitrary order";
+
 PYBIND11_MODULE(_pynear, m) {
     py::class_<VPTreeNumpyAdapter<dist_l2_f_avx2>>(m, "VPTreeL2Index")
         .def(py::init<>())
-        .def("set", &VPTreeNumpyAdapter<dist_l2_f_avx2>::set)
-        .def("to_string", &VPTreeNumpyAdapter<dist_l2_f_avx2>::to_string)
-        .def("searchKNN", &VPTreeNumpyAdapter<dist_l2_f_avx2>::searchKNN)
-        .def("search1NN", &VPTreeNumpyAdapter<dist_l2_f_avx2>::search1NN)
+        .def("set", &VPTreeNumpyAdapter<dist_l2_f_avx2>::set, index_set, py::arg("vectors"))
+        .def("to_string", &VPTreeNumpyAdapter<dist_l2_f_avx2>::to_string, index_string)
+        .def("searchKNN", &VPTreeNumpyAdapter<dist_l2_f_avx2>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("search1NN", &VPTreeNumpyAdapter<dist_l2_f_avx2>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapter<dist_l2_f_avx2>::get_state, &VPTreeNumpyAdapter<dist_l2_f_avx2>::set_state));
 
     py::class_<VPTreeNumpyAdapter<dist_l1_f_avx2>>(m, "VPTreeL1Index")
         .def(py::init<>())
-        .def("set", &VPTreeNumpyAdapter<dist_l1_f_avx2>::set)
-        .def("to_string", &VPTreeNumpyAdapter<dist_l1_f_avx2>::to_string)
-        .def("searchKNN", &VPTreeNumpyAdapter<dist_l1_f_avx2>::searchKNN)
-        .def("search1NN", &VPTreeNumpyAdapter<dist_l1_f_avx2>::search1NN)
+        .def("set", &VPTreeNumpyAdapter<dist_l1_f_avx2>::set, index_set, py::arg("vectors"))
+        .def("to_string", &VPTreeNumpyAdapter<dist_l1_f_avx2>::to_string, index_string)
+        .def("searchKNN", &VPTreeNumpyAdapter<dist_l1_f_avx2>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("search1NN", &VPTreeNumpyAdapter<dist_l1_f_avx2>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapter<dist_l1_f_avx2>::get_state, &VPTreeNumpyAdapter<dist_l1_f_avx2>::set_state));
 
     py::class_<VPTreeNumpyAdapter<dist_chebyshev_f_avx2>>(m, "VPTreeChebyshevIndex")
         .def(py::init<>())
-        .def("set", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::set)
-        .def("to_string", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::to_string)
-        .def("searchKNN", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::searchKNN)
-        .def("search1NN", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::search1NN)
+        .def("set", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::set, index_set, py::arg("vectors"))
+        .def("to_string", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::to_string, index_string)
+        .def("searchKNN", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("search1NN", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::get_state, &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::set_state));
 
     py::class_<VPTreeNumpyAdapterBinary<dist_hamming_512>>(m, "VPTreeBinaryIndex512")
         .def(py::init<>())
-        .def("set", &VPTreeNumpyAdapterBinary<dist_hamming_512>::set)
-        .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming_512>::to_string)
-        .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming_512>::searchKNN)
-        .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming_512>::search1NN)
+        .def("set", &VPTreeNumpyAdapterBinary<dist_hamming_512>::set, index_set, py::arg("vectors"))
+        .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming_512>::to_string, index_string)
+        .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming_512>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming_512>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapterBinary<dist_hamming_512>::get_state, &VPTreeNumpyAdapterBinary<dist_hamming_512>::set_state));
 
     py::class_<VPTreeNumpyAdapterBinary<dist_hamming_256>>(m, "VPTreeBinaryIndex256")
         .def(py::init<>())
-        .def("set", &VPTreeNumpyAdapterBinary<dist_hamming_256>::set)
-        .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming_256>::to_string)
-        .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming_256>::searchKNN)
-        .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming_256>::search1NN)
+        .def("set", &VPTreeNumpyAdapterBinary<dist_hamming_256>::set, index_set, py::arg("vectors"))
+        .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming_256>::to_string, index_string)
+        .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming_256>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming_256>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapterBinary<dist_hamming_256>::get_state, &VPTreeNumpyAdapterBinary<dist_hamming_256>::set_state));
 
     py::class_<VPTreeNumpyAdapterBinary<dist_hamming_128>>(m, "VPTreeBinaryIndex128")
         .def(py::init<>())
-        .def("set", &VPTreeNumpyAdapterBinary<dist_hamming_128>::set)
-        .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming_128>::to_string)
-        .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming_128>::searchKNN)
-        .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming_128>::search1NN)
+        .def("set", &VPTreeNumpyAdapterBinary<dist_hamming_128>::set, index_set, py::arg("vectors"))
+        .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming_128>::to_string, index_string)
+        .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming_128>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming_128>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapterBinary<dist_hamming_128>::get_state, &VPTreeNumpyAdapterBinary<dist_hamming_128>::set_state));
 
     py::class_<VPTreeNumpyAdapterBinary<dist_hamming_64>>(m, "VPTreeBinaryIndex64")
         .def(py::init<>())
-        .def("set", &VPTreeNumpyAdapterBinary<dist_hamming_64>::set)
-        .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming_64>::to_string)
-        .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming_64>::searchKNN)
-        .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming_64>::search1NN)
+        .def("set", &VPTreeNumpyAdapterBinary<dist_hamming_64>::set, index_set, py::arg("vectors"))
+        .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming_64>::to_string, index_string)
+        .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming_64>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming_64>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapterBinary<dist_hamming_64>::get_state, &VPTreeNumpyAdapterBinary<dist_hamming_64>::set_state));
 
     py::class_<VPTreeNumpyAdapterBinary<dist_hamming>>(m, "VPTreeBinaryIndex")
         .def(py::init<>())
-        .def("set", &VPTreeNumpyAdapterBinary<dist_hamming>::set)
-        .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming>::to_string)
-        .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming>::searchKNN)
-        .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming>::search1NN)
+        .def("set", &VPTreeNumpyAdapterBinary<dist_hamming>::set, index_set, py::arg("vectors"))
+        .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming>::to_string, index_string)
+        .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapterBinary<dist_hamming>::get_state, &VPTreeNumpyAdapterBinary<dist_hamming>::set_state));
 
     py::class_<BKTreeBinaryNumpyAdapter<dist_hamming_512>>(m, "BKTreeBinaryIndex512")
         .def(py::init<>())
-        .def("set", &BKTreeBinaryNumpyAdapter<dist_hamming_512>::set)
-        .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming_512>::find_threshold)
+        .def("set", &BKTreeBinaryNumpyAdapter<dist_hamming_512>::set, index_set, py::arg("vectors"))
+        .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming_512>::find_threshold, index_find_threshold, py::arg("vectors"),
+             py::arg("threshold"))
         .def("empty", &BKTreeBinaryNumpyAdapter<dist_hamming_512>::empty)
-        .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming_512>::values);
+        .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming_512>::values, index_values);
 
     py::class_<BKTreeBinaryNumpyAdapter<dist_hamming_256>>(m, "BKTreeBinaryIndex256")
         .def(py::init<>())
-        .def("set", &BKTreeBinaryNumpyAdapter<dist_hamming_256>::set)
-        .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming_256>::find_threshold)
+        .def("set", &BKTreeBinaryNumpyAdapter<dist_hamming_256>::set, index_set, py::arg("vectors"))
+        .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming_256>::find_threshold, index_find_threshold, py::arg("vectors"),
+             py::arg("threshold"))
         .def("empty", &BKTreeBinaryNumpyAdapter<dist_hamming_256>::empty)
-        .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming_256>::values);
+        .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming_256>::values, index_values);
 
     py::class_<BKTreeBinaryNumpyAdapter<dist_hamming_128>>(m, "BKTreeBinaryIndex128")
         .def(py::init<>())
-        .def("set", &BKTreeBinaryNumpyAdapter<dist_hamming_128>::set)
-        .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming_128>::find_threshold)
+        .def("set", &BKTreeBinaryNumpyAdapter<dist_hamming_128>::set, index_set, py::arg("vectors"))
+        .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming_128>::find_threshold, index_find_threshold, py::arg("vectors"),
+             py::arg("threshold"))
         .def("empty", &BKTreeBinaryNumpyAdapter<dist_hamming_128>::empty)
-        .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming_128>::values);
+        .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming_128>::values, index_values);
 
     py::class_<BKTreeBinaryNumpyAdapter<dist_hamming_64>>(m, "BKTreeBinaryIndex64")
-        .def(py::init<>())
-        .def("set", &BKTreeBinaryNumpyAdapter<dist_hamming_64>::set)
-        .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming_64>::find_threshold)
+        .def(py::init<>(), "hi")
+        .def("set", &BKTreeBinaryNumpyAdapter<dist_hamming_64>::set, index_set, py::arg("vectors"))
+        .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming_64>::find_threshold, index_find_threshold, py::arg("vectors"),
+             py::arg("threshold"))
         .def("empty", &BKTreeBinaryNumpyAdapter<dist_hamming_64>::empty)
-        .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming_64>::values);
+        .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming_64>::values, index_values);
 
     py::class_<BKTreeBinaryNumpyAdapter<dist_hamming>>(m, "BKTreeBinaryIndex")
         .def(py::init<>())
-        .def("set", &BKTreeBinaryNumpyAdapter<dist_hamming>::set)
-        .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming>::find_threshold)
+        .def("set", &BKTreeBinaryNumpyAdapter<dist_hamming>::set, index_set, py::arg("vectors"))
+        .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming>::find_threshold, index_find_threshold, py::arg("vectors"),
+             py::arg("threshold"))
         .def("empty", &BKTreeBinaryNumpyAdapter<dist_hamming>::empty)
-        .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming>::values);
+        .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming>::values, index_values);
 };
