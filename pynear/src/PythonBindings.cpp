@@ -12,16 +12,23 @@
 #include <omp.h>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 #include <BKTree.hpp>
 #include <DistanceFunctions.hpp>
 #include <ISerializable.hpp>
-#include <VPTree.hpp>
+#include <SerializableVPTree.hpp>
 
 namespace py = pybind11;
 
 typedef float (*distance_func_f)(const arrayf &, const arrayf &);
 typedef int64_t (*distance_func_li)(const arrayli &, const arrayli &);
+
+template <typename T> void ndarraySerializer(const T &input, std::vector<uint8_t> &output){};
+
+template <typename T> T ndarrayDeserializer(const std::vector<uint8_t>&input) {
+        return T();
+};
 
 template <distance_func_f distance> class VPTreeNumpyAdapter {
     public:
@@ -76,7 +83,7 @@ template <distance_func_f distance> class VPTreeNumpyAdapter {
         return p;
     }
 
-    vptree::VPTree<arrayf, float, distance> tree;
+    vptree::SerializableVPTree<arrayf, float, distance, ndarraySerializer, ndarrayDeserializer> tree;
 };
 
 template <distance_func_li distance> class VPTreeNumpyAdapterBinary {
@@ -131,7 +138,7 @@ template <distance_func_li distance> class VPTreeNumpyAdapterBinary {
         return p;
     }
 
-    vptree::VPTree<arrayli, int64_t, distance> tree;
+    vptree::SerializableVPTree<arrayli, int64_t, distance, ndarraySerializer, ndarrayDeserializer> tree;
 };
 
 template <distance_func_li distance_f> class HammingMetric : Metric<arrayli, int64_t> {

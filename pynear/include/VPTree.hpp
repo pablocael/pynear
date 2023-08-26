@@ -20,14 +20,13 @@
 #include <utility>
 #include <vector>
 
-#include "ISerializable.hpp"
 #include "VPLevelPartition.hpp"
 
 #define ENABLE_OMP_PARALLEL 1
 
 namespace vptree {
 
-template <typename T, typename distance_type, distance_type (*distance)(const T &, const T &)> class VPTree : public ISerializable {
+template <typename T, typename distance_type, distance_type (*distance)(const T &, const T &)> class VPTree {
     public:
 
     struct VPTreeSearchResultElement {
@@ -40,14 +39,8 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         _examples.clear();
     }
 
-    VPTree(const VPTree<T, distance_type, distance> &other) {
-        auto other_state = other.serialize();
-        deserialize(other_state);
-    }
 
-    const VPTree<T, distance_type, distance> &operator=(const VPTree<T, distance_type, distance> &other) { this->deserialize(other.serialize()); }
-
-    ~VPTree() { clear(); };
+    virtual ~VPTree() { clear(); };
 
     void clear() {
         if (_rootPartition != nullptr) {
@@ -87,88 +80,6 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         }
 
         _rootPartition->print_state();
-    }
-
-    SerializedState serialize() const override {
-        if (_rootPartition == nullptr) {
-            return SerializedState();
-        }
-
-        size_t element_size = 0;
-        size_t num_elements_per_example = 0;
-        size_t total_size = (size_t)(3 * sizeof(size_t));
-
-        if (_examples.size() > 0) {
-
-            // total size is the _examples total size + the examples array size plus element size
-            // _examples[0] is an array of some type (variable)
-            num_elements_per_example = _examples[0].size();
-            element_size = sizeof(_examples[0][0]);
-            int64_t total_elements_size = num_elements_per_example * element_size;
-            total_size += _examples.size() * (sizeof(int64_t) + total_elements_size);
-        }
-
-        SerializedState state;
-        state.reserve(total_size);
-
-        /* for (const VPTreeElement &elem : _examples) { */
-        /*     state.push(elem.originalIndex); */
-
-        /*     for (size_t i = 0; i < num_elements_per_example; ++i) { */
-        /*         // since we dont know the sub element type of T (T is an array of something) */
-        /*         // we need to copy using memcopy and memory size */
-        /*         state.push_by_size(&elem[i], element_size); */
-        /*     } */
-        /* } */
-
-        state.push(_examples.size());
-        state.push(num_elements_per_example);
-        state.push(element_size);
-
-        if (state.size() != total_size) {
-            throw new std::out_of_range("invalid serialization state, offsets dont match!");
-        }
-
-        SerializedState partition_state = _rootPartition->serialize();
-        partition_state += state;
-        partition_state.buildChecksum();
-        return partition_state;
-    }
-
-    void deserialize(const SerializedState &state) override {
-        clear();
-        if (state.data.empty()) {
-            return;
-        }
-
-        if (!state.isValid()) {
-            throw new std::invalid_argument("invalid state - checksum mismatch");
-        }
-
-        SerializedState copy(state);
-
-        _rootPartition = new VPLevelPartition<distance_type>();
-
-        size_t elem_size = copy.pop<size_t>();
-        size_t num_elements_per_example = copy.pop<size_t>();
-        size_t num_examples = copy.pop<size_t>();
-
-        /* _examples.reserve(num_examples); */
-        /* _examples.resize(num_examples); */
-        /* for (int64_t i = num_examples - 1; i >= 0; --i) { */
-
-        /*     auto &example = _examples[i]; */
-        /*     auto &val = example; */
-        /*     val.resize(num_elements_per_example); */
-
-        /*     for (int64_t j = num_elements_per_example - 1; j >= 0; --j) { */
-        /*         copy.pop_by_size(&val[j], elem_size); */
-        /*     } */
-        /*     int64_t originalIndex = copy.pop<int64_t>(); */
-        /*     example.originalIndex = originalIndex; */
-        /* } */
-
-        _rootPartition->deserialize(copy);
     }
 
     void searchKNN(const std::vector<T> &queries, size_t k, std::vector<VPTreeSearchResultElement> &results) {
@@ -281,7 +192,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 
             // partition in order to keep all elements smaller than median in the left and larger in the right
             std::nth_element(_indices.begin() + start + 1, _indices.begin() + median, _indices.begin() + end + 1,
-                             VPDistanceComparator(this, start));
+                             VPArgDistanceComparator(this, start));
 
             /* // distance from vantage point (which is at start index) and the median element */
             auto medianDistance = distance(_examples[_indices[start]], _examples[_indices[median]]);
@@ -483,12 +394,14 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
     /*
      * A vantage point distance comparator. Will check which from two points are closer to the reference vantage point.
      * This is used to find the median distance from vantage point in order to split the VPLevelPartition into two sets.
+     * The comparator will be used to partially sort index vector while keeping examples vector unchanged. This allows
+     * keeping original index information as the index vector will be partially sorted.
      */
-    struct VPDistanceComparator {
+    struct VPArgDistanceComparator {
 
         int64_t referenceItemIndex;
         VPTree *vptree;
-        VPDistanceComparator(VPTree* vptree, int64_t referenceItemIndex) : referenceItemIndex(referenceItemIndex), vptree(vptree) {}
+        VPArgDistanceComparator(VPTree* vptree, int64_t referenceItemIndex) : referenceItemIndex(referenceItemIndex), vptree(vptree) {}
         bool operator()(int64_t a, int64_t b) { 
             const int64_t& refIndex = vptree->_indices[referenceItemIndex];
             const auto& ref = vptree->_examples[refIndex];
@@ -496,9 +409,10 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         }
     };
 
-    friend struct VPDistanceComparator;
+    friend struct VPArgDistanceComparator;
 
     protected:
+
     std::vector<T> _examples;
     std::vector<int64_t> _indices;
     VPLevelPartition<distance_type> *_rootPartition = nullptr;
