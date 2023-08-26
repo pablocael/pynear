@@ -35,6 +35,10 @@ template <typename distance_type> class VPLevelPartition : public ISerializable 
         _indexEnd = -1;
     }
 
+    VPLevelPartition(const VPLevelPartition& other) {
+        *this = other;
+    }
+
     virtual ~VPLevelPartition() { clear(); }
 
     SerializedState serialize() const {
@@ -104,6 +108,10 @@ template <typename distance_type> class VPLevelPartition : public ISerializable 
         _right = right;
     }
 
+    VPLevelPartition* deepcopy() {
+        return rec_deepcopy(this);
+    }
+
     VPLevelPartition *left() const { return _left; }
     VPLevelPartition *right() const { return _right; }
 
@@ -151,6 +159,20 @@ template <typename distance_type> class VPLevelPartition : public ISerializable 
         VPLevelPartition *right = rebuild_from_state(state);
         root->setChild(left, right);
         return root;
+    }
+
+
+    VPLevelPartition* rec_deepcopy(VPLevelPartition* root) {
+        if(root == nullptr) {
+            return nullptr;
+        }
+
+        VPLevelPartition* result = new VPLevelPartition(*root);
+
+        result->_left = rec_deepcopy(root->_left);
+        result->_right = rec_deepcopy(root->_right);
+
+        return result;
     }
 
     int rec_height(VPLevelPartition *root, int level = 0) {

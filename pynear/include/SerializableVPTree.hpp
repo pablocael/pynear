@@ -18,13 +18,22 @@ class SerializableVPTree : public VPTree<T, distance_type, distance>, public ISe
 
     SerializableVPTree() = default;
     SerializableVPTree(const SerializableVPTree<T, distance_type, distance, serializer, deserializer> &other) {
-        auto other_state = other.serialize();
-        deserialize(other_state);
+        this->_examples = other._examples;
+        this->_indices = other._indices;
+        if(this->_rootPartition != nullptr) {
+            this->_rootPartition = other._rootPartition->deepcopy();
+        }
     }
 
     const SerializableVPTree<T, distance_type, distance, serializer, deserializer> &
     operator=(const SerializableVPTree<T, distance_type, distance, serializer, deserializer> &other) {
-        this->deserialize(other.serialize());
+        this->_examples = other._examples;
+        this->_indices = other._indices;
+        if(this->_rootPartition != nullptr) {
+            this->_rootPartition = other._rootPartition->deepcopy();
+        }
+
+        return *this;
     }
 
     SerializedState serialize() const override {

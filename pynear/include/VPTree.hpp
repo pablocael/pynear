@@ -39,6 +39,23 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         _examples.clear();
     }
 
+    VPTree(const VPTree<T, distance_type, distance> &other) {
+        _examples = other._examples;
+        _indices = other._indices;
+        if(_rootPartition != nullptr) {
+            _rootPartition = other._rootPartition->deepcopy();
+        }
+    }
+
+    const VPTree<T, distance_type, distance> &operator=(const VPTree<T, distance_type, distance> &other) {
+        _examples = other._examples;
+        _indices = other._indices;
+        if(_rootPartition != nullptr) {
+            _rootPartition = other._rootPartition->deepcopy();
+        }
+
+        return *this;
+    }
 
     virtual ~VPTree() { clear(); };
 
@@ -402,10 +419,10 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         int64_t referenceItemIndex;
         VPTree *vptree;
         VPArgDistanceComparator(VPTree* vptree, int64_t referenceItemIndex) : referenceItemIndex(referenceItemIndex), vptree(vptree) {}
-        bool operator()(int64_t a, int64_t b) { 
+        bool operator()(int64_t a, int64_t b) {
             const int64_t& refIndex = vptree->_indices[referenceItemIndex];
             const auto& ref = vptree->_examples[refIndex];
-            return distance(ref, vptree->_examples[a]) < distance(ref, vptree->_examples[b]); 
+            return distance(ref, vptree->_examples[a]) < distance(ref, vptree->_examples[b]);
         }
     };
 

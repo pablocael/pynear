@@ -24,10 +24,37 @@ namespace py = pybind11;
 typedef float (*distance_func_f)(const arrayf &, const arrayf &);
 typedef int64_t (*distance_func_li)(const arrayli &, const arrayli &);
 
-template <typename T> void ndarraySerializer(const T &input, std::vector<uint8_t> &output){};
+template <typename T>
+void arrayTypeSerializer(const std::vector<T> &input, std::vector<uint8_t> &output) {
+    // this functions should push state like a stack
+    auto size = input.size();
+    auto totalBytes = size * sizeof(T);
+    auto currentOutputSize = output.size();
+    output.resize(currentOutputSize + totalBytes + sizeof(size_t));
+    uint8_t* data = output.data();
+    for(const auto& v: input) {
+        *data = v;
+        data += sizeof(T);
+    }
 
-template <typename T> T ndarrayDeserializer(const std::vector<uint8_t>&input) {
-        return T();
+    *data = size;
+    data += sizeof(size_t);
+};
+
+template <typename T>
+std::vector<T> arrayTypeDeserializer(const std::vector<uint8_t>&input) {
+    // this function should pop state like in a stack
+    // this functions should push state like a stack
+    uint8_t* data = &const_cast<std::vector<uint8_t>&>(input).back();
+    data -= sizeof(size_t);
+    size_t numElements = *data;
+    std::vector<T> result;
+    result.resize(numElements);
+    for(size_t i  = numElements-1; i >= 0; i--) {
+        T val = *data;
+        data -= sizeof(T);
+        result[i] = val;
+    }
 };
 
 template <distance_func_f distance> class VPTreeNumpyAdapter {
@@ -83,7 +110,7 @@ template <distance_func_f distance> class VPTreeNumpyAdapter {
         return p;
     }
 
-    vptree::SerializableVPTree<arrayf, float, distance, ndarraySerializer, ndarrayDeserializer> tree;
+    vptree::SerializableVPTree<arrayf, float, distance, arrayTypeSerializer<float>, arrayTypeDeserializer<float>> tree;
 };
 
 template <distance_func_li distance> class VPTreeNumpyAdapterBinary {
@@ -138,7 +165,7 @@ template <distance_func_li distance> class VPTreeNumpyAdapterBinary {
         return p;
     }
 
-    vptree::SerializableVPTree<arrayli, int64_t, distance, ndarraySerializer, ndarrayDeserializer> tree;
+    vptree::SerializableVPTree<arrayli, int64_t, distance, arrayTypeSerializer<uint8_t>, arrayTypeDeserializer<uint8_t>> tree;
 };
 
 template <distance_func_li distance_f> class HammingMetric : Metric<arrayli, int64_t> {
