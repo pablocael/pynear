@@ -8,6 +8,7 @@
 #include <pybind11/stl.h>
 
 #include <cassert>
+#include <cstring>
 #include <iostream>
 #include <omp.h>
 #include <sstream>
@@ -24,41 +25,59 @@ namespace py = pybind11;
 typedef float (*distance_func_f)(const arrayf &, const arrayf &);
 typedef int64_t (*distance_func_li)(const arrayli &, const arrayli &);
 
-template <typename T>
-void arrayTypeSerializer(const std::vector<T> &input, std::vector<uint8_t> &output) {
+template <typename T> void ndarraySerializer(const std::vector<std::vector<T>> &input, std::vector<uint8_t> &output) {
     // this functions should push state like a stack
-    auto size = input.size();
-    auto totalBytes = size * sizeof(T);
-    auto currentOutputSize = output.size();
-    output.resize(currentOutputSize + totalBytes + sizeof(size_t));
-    uint8_t* data = output.data();
-    for(const auto& v: input) {
-        *data = v;
-        data += sizeof(T);
+    auto totalSize = input.size();
+    if (totalSize == 0) {
+        return;
     }
 
-    *data = size;
-    data += sizeof(size_t);
+    size_t dimension = input[0].size();
+    auto totalBytes = totalSize * dimension * sizeof(T);
+
+    // adding space for all elements of given dimensions + total size + dimension in bytes
+    uint8_t *data = output.data();
+    output.resize(output.size() + totalBytes + 2 * sizeof(size_t));
+    for (const auto &element : input) {
+        std::memcpy(data, &element.begin(), dimension * sizeof(T));
+        data += dimension * sizeof(T);
+    }
+
+    // store total size and dimension first
+    (*(size_t *)(data)) = totalSize;
+    data += sizeof(T);
+    (*(size_t *)(data)) = dimension;
+    data += sizeof(T);
 };
 
-template <typename T>
-std::vector<T> arrayTypeDeserializer(const std::vector<uint8_t>&input) {
-    // this function should pop state like in a stack
-    // this functions should push state like a stack
-    uint8_t* data = &const_cast<std::vector<uint8_t>&>(input).back();
-    data -= sizeof(size_t);
-    size_t numElements = *data;
-    std::vector<T> result;
-    result.resize(numElements);
-    for(size_t i  = numElements-1; i >= 0; i--) {
-        T val = *data;
-        data -= sizeof(T);
-        result[i] = val;
+template <typename T> std::vector<std::vector<T>> ndarrayDeserializer(const uint8_t *input, size_t &readBytes) {
+    uint8_t *data = const_cast<uint8_t *>(input);
+    // input points to after the data block, first must decrement
+
+    // read total size and dimension first
+    data -= 2 * sizeof(size_t);
+    size_t totalSize = (*(size_t *)(data));
+    size_t dimension = (*(size_t *)(data + sizeof(size_t)));
+    size_t elementSize = dimension * sizeof(T);
+    size_t totalBytes = totalSize * elementSize;
+
+    data -= totalBytes;
+
+    std::vector<std::vector<T>> result;
+    result.resize(totalSize);
+    for (auto &element : result) {
+        element.resize(dimension);
+        std::memcpy(&element.begin(), data, elementSize);
+        data += elementSize;
     }
+
+    readBytes = totalBytes + 2 * sizeof(size_t);
+
+    return result;
 };
 
 template <distance_func_f distance> class VPTreeNumpyAdapter {
-    public:
+public:
     VPTreeNumpyAdapter() = default;
 
     void set(const ndarrayf &array) { tree.set(array); }
@@ -114,7 +133,7 @@ template <distance_func_f distance> class VPTreeNumpyAdapter {
 };
 
 template <distance_func_li distance> class VPTreeNumpyAdapterBinary {
-    public:
+public:
     VPTreeNumpyAdapterBinary() = default;
 
     void set(const ndarrayli &array) { tree.set(array); }
@@ -169,14 +188,14 @@ template <distance_func_li distance> class VPTreeNumpyAdapterBinary {
 };
 
 template <distance_func_li distance_f> class HammingMetric : Metric<arrayli, int64_t> {
-    public:
+public:
     static int64_t distance(const arrayli &a, const arrayli &b) { return distance_f(a, b); }
 
     static std::optional<int64_t> threshold_distance(const arrayli &a, const arrayli &b, int64_t threshold) { return distance_f(a, b); }
 };
 
 template <distance_func_li distance> class BKTreeBinaryNumpyAdapter {
-    public:
+public:
     BKTree<arrayli, int64_t, HammingMetric<distance>> tree;
 
     BKTreeBinaryNumpyAdapter() = default;

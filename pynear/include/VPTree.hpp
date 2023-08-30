@@ -6,13 +6,13 @@
 #pragma once
 
 #include <algorithm>
-#include <numeric>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <omp.h>
 #include <queue>
 #include <sstream>
@@ -27,8 +27,15 @@
 namespace vptree {
 
 template <typename T, typename distance_type, distance_type (*distance)(const T &, const T &)> class VPTree {
-    public:
-
+    /*
+     * Template arguments:
+     * - T: a custom user type that will compose the VPTree element. Distance function must input this type.
+     * - distance_type: the numeric type for the distance value retrieved by distance function when
+     * - distance: a function pointer of a distance operator that will measure the distance between two objects
+     *   of type T.
+     *   measuring ddistances between two objects of type T.
+     */
+public:
     struct VPTreeSearchResultElement {
         std::vector<int64_t> indexes;
         std::vector<distance_type> distances;
@@ -42,7 +49,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
     VPTree(const VPTree<T, distance_type, distance> &other) {
         _examples = other._examples;
         _indices = other._indices;
-        if(_rootPartition != nullptr) {
+        if (_rootPartition != nullptr) {
             _rootPartition = other._rootPartition->deepcopy();
         }
     }
@@ -50,7 +57,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
     const VPTree<T, distance_type, distance> &operator=(const VPTree<T, distance_type, distance> &other) {
         _examples = other._examples;
         _indices = other._indices;
-        if(_rootPartition != nullptr) {
+        if (_rootPartition != nullptr) {
             _rootPartition = other._rootPartition->deepcopy();
         }
 
@@ -69,9 +76,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 
     VPTree(const std::vector<T> &array) { set(array); }
 
-    void set(const std::vector<T> &array) {
-        set(std::move(array));
-    }
+    void set(const std::vector<T> &array) { set(std::move(array)); }
 
     void set(const std::vector<T> &&array) {
         clear();
@@ -156,15 +161,13 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 
         int64_t total_memory = 0;
         if (vptree._rootPartition != nullptr) {
-            total_memory =
-                vptree._rootPartition->numSubnodes() * sizeof(VPLevelPartition<distance_type>) + vptree._examples.size() * sizeof(T);
+            total_memory = vptree._rootPartition->numSubnodes() * sizeof(VPLevelPartition<distance_type>) + vptree._examples.size() * sizeof(T);
         }
         os << "Total Memory: " << total_memory << " bytes" << std::endl;
         os << "####################" << std::endl;
         os << "[+] Root Level:" << std::endl;
         if (vptree._rootPartition != nullptr) {
-            total_memory =
-                vptree._rootPartition->numSubnodes() * sizeof(VPLevelPartition<distance_type>) + vptree._examples.size() * sizeof(T);
+            total_memory = vptree._rootPartition->numSubnodes() * sizeof(VPLevelPartition<distance_type>) + vptree._examples.size() * sizeof(T);
             os << *vptree._rootPartition << std::endl;
         } else {
             os << "<empty>" << std::endl;
@@ -173,7 +176,7 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         return os;
     }
 
-    protected:
+protected:
     /*
      *  Builds a Vantage Point tree using each element of the given array as one coordinate buffer
      *  using the given metric distance.
@@ -418,18 +421,17 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 
         int64_t referenceItemIndex;
         VPTree *vptree;
-        VPArgDistanceComparator(VPTree* vptree, int64_t referenceItemIndex) : referenceItemIndex(referenceItemIndex), vptree(vptree) {}
+        VPArgDistanceComparator(VPTree *vptree, int64_t referenceItemIndex) : referenceItemIndex(referenceItemIndex), vptree(vptree) {}
         bool operator()(int64_t a, int64_t b) {
-            const int64_t& refIndex = vptree->_indices[referenceItemIndex];
-            const auto& ref = vptree->_examples[refIndex];
+            const int64_t &refIndex = vptree->_indices[referenceItemIndex];
+            const auto &ref = vptree->_examples[refIndex];
             return distance(ref, vptree->_examples[a]) < distance(ref, vptree->_examples[b]);
         }
     };
 
     friend struct VPArgDistanceComparator;
 
-    protected:
-
+protected:
     std::vector<T> _examples;
     std::vector<int64_t> _indices;
     VPLevelPartition<distance_type> *_rootPartition = nullptr;

@@ -11,16 +11,35 @@
 
 namespace vptree {
 
-template <typename T, typename distance_type, distance_type (*distance)(const T &, const T &), void (*serializer)(const T &, std::vector<uint8_t> &),
-          T (*deserializer)(const std::vector<uint8_t> &)>
+template <typename T, typename distance_type, distance_type (*distance)(const T &, const T &),
+          void (*serializer)(const std::vector<T> &, std::vector<uint8_t> &), std::vector<T> (*deserializer)(const uint8_t *, size_t &)>
 class SerializableVPTree : public VPTree<T, distance_type, distance>, public ISerializable {
-    public:
-
+    /*
+     * Serializable VPTree that takes serializer and deserializer functions as a template. Since T is custom user type,
+     * serialization need custom user functions to be able to read/write custom user objects. User must resize input
+     * bytearray accordingly.
+     *
+     * Template arguments:
+     * - T: a custom user type that will compose the VPTree element. Distance function must input this type.
+     * - distance_type: the numeric type for the distance value retrieved by distance function when
+     * - distance: a function pointer of a distance operator that will measure the distance between two objects
+     *   of type T.
+     *   measuring ddistances between two objects of type T.
+     * - serializer: a function serializes and array of user type T from a bytearray.
+     *      void serialized(const std::vector<T>& input, std::vector<uint8_t>& output);
+     *      Users must write data at the end of the output vector in serializer function (append data).
+     * - deserializer function deserializes a vector of custom user type T from a bytearray:
+     *      std::vector<T> deserialize(const uint8_t* input, size_t& readBytes);
+     *      The deserializer must also return how many bytes were read from input buffer in readBytes variable. Also,
+     *      the deserializer function input pointer points to start of the data block to be read, so user needs to first
+     *      to read in same order they wrote the data (as in a file descriptor).
+     */
+public:
     SerializableVPTree() = default;
     SerializableVPTree(const SerializableVPTree<T, distance_type, distance, serializer, deserializer> &other) {
         this->_examples = other._examples;
         this->_indices = other._indices;
-        if(this->_rootPartition != nullptr) {
+        if (this->_rootPartition != nullptr) {
             this->_rootPartition = other._rootPartition->deepcopy();
         }
     }
@@ -29,7 +48,7 @@ class SerializableVPTree : public VPTree<T, distance_type, distance>, public ISe
     operator=(const SerializableVPTree<T, distance_type, distance, serializer, deserializer> &other) {
         this->_examples = other._examples;
         this->_indices = other._indices;
-        if(this->_rootPartition != nullptr) {
+        if (this->_rootPartition != nullptr) {
             this->_rootPartition = other._rootPartition->deepcopy();
         }
 

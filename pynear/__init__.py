@@ -1,7 +1,5 @@
 from typing import Tuple
 
-import numpy as np
-
 from _pynear import BKTreeBinaryIndex64
 from _pynear import BKTreeBinaryIndex128
 from _pynear import BKTreeBinaryIndex256
@@ -15,6 +13,7 @@ from _pynear import VPTreeBinaryIndex as VPTreeBinaryIndexN
 from _pynear import VPTreeChebyshevIndex
 from _pynear import VPTreeL1Index
 from _pynear import VPTreeL2Index
+import numpy as np
 
 from ._version import __version__
 

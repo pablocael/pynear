@@ -3,13 +3,13 @@
 #include <optional>
 
 template <typename key_t, typename distance_t> class Metric {
-    public:
+public:
     static distance_t distance(const key_t &a, const key_t &b);
     static std::optional<distance_t> threshold_distance(const key_t &a, const key_t &b, distance_t threshold);
 };
 
 template <typename key_t, typename distance_t> class BKNode {
-    public:
+public:
     key_t key;
     std::map<distance_t, BKNode<key_t, distance_t> *> leaves;
     std::optional<distance_t> max_distance;
@@ -34,7 +34,7 @@ template <typename key_t, typename distance_t> class BKNode {
 template <typename key_t, typename distance_t, typename metric> class BKTree {
     BKNode<key_t, distance_t> *root;
 
-    public:
+public:
     BKTree() : root(nullptr) {}
 
     bool add(key_t key) {

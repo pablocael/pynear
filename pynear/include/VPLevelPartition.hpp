@@ -18,7 +18,7 @@ template <typename distance_type> class VPLevelPartition;
 template <typename distance_type> void rec_print_state(std::ostream &os, VPLevelPartition<distance_type> *partition, int level);
 
 template <typename distance_type> class VPLevelPartition : public ISerializable {
-    public:
+public:
     VPLevelPartition(distance_type radius, int64_t start, int64_t end) {
         // For each partition, the vantage point is the first point within the partition (pointed by indexStart)
 
@@ -35,9 +35,7 @@ template <typename distance_type> class VPLevelPartition : public ISerializable 
         _indexEnd = -1;
     }
 
-    VPLevelPartition(const VPLevelPartition& other) {
-        *this = other;
-    }
+    VPLevelPartition(const VPLevelPartition &other) { *this = other; }
 
     virtual ~VPLevelPartition() { clear(); }
 
@@ -108,9 +106,7 @@ template <typename distance_type> class VPLevelPartition : public ISerializable 
         _right = right;
     }
 
-    VPLevelPartition* deepcopy() {
-        return rec_deepcopy(this);
-    }
+    VPLevelPartition *deepcopy() { return rec_deepcopy(this); }
 
     VPLevelPartition *left() const { return _left; }
     VPLevelPartition *right() const { return _right; }
@@ -120,7 +116,7 @@ template <typename distance_type> class VPLevelPartition : public ISerializable 
         return os;
     }
 
-    private:
+private:
     void clear() {
         if (_left != nullptr)
             delete _left;
@@ -161,13 +157,12 @@ template <typename distance_type> class VPLevelPartition : public ISerializable 
         return root;
     }
 
-
-    VPLevelPartition* rec_deepcopy(VPLevelPartition* root) {
-        if(root == nullptr) {
+    VPLevelPartition *rec_deepcopy(VPLevelPartition *root) {
+        if (root == nullptr) {
             return nullptr;
         }
 
-        VPLevelPartition* result = new VPLevelPartition(*root);
+        VPLevelPartition *result = new VPLevelPartition(*root);
 
         result->_left = rec_deepcopy(root->_left);
         result->_right = rec_deepcopy(root->_right);

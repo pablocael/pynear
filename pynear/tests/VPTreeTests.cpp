@@ -3,6 +3,7 @@
 
 #include <MathUtils.hpp>
 #include <VPTree.hpp>
+#include "SerializedStateObject.hpp"
 
 #include <Eigen/Core>
 #include <chrono>
@@ -226,6 +227,24 @@ TEST(VPTests, TestSerialization) {
         EXPECT_EQ(indices[i], indices2[i]) << "Vectors x and y differ at index " << i;
         EXPECT_EQ(distances[i], distances2[i]) << "Vectors x and y differ at distance " << i;
     }
+}
+
+TEST(VPTests, TestSerializedStateObject) {
+    SerializedStateObject state;
+
+    SerializedStateObjectWriter writer(state);
+    writer.push_back(1);
+    writer.push_back("my string");
+    writer.push_back(struct { int a; int b; } { 1, 2 });
+
+
+    SerializedStateObjectReader reader(state);
+    EXPECT_EQ(reader.read<int>() == 1);
+    EXPECT_EQ(reader.read<std::string>() == "my string");
+
+    auto stct = reader.read<struct { int a; int b; }>();
+    EXPECT_EQ(stct.a, 1);
+    EXPECT_EQ(stct.b, 2);
 }
 
 TEST(VPTests, TestCreation) {
