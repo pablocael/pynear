@@ -113,11 +113,10 @@ template <typename T> std::vector<T> vectorDeserializer(const uint8_t *input, si
     size_t totalSize = (*(size_t *)(data));
     data += sizeof(size_t);
 
-
     std::vector<T> result;
     result.resize(totalSize);
     for (size_t i = 0; i < totalSize; i++) {
-        result[i] = (*(T*)(data));
+        result[i] = (*(T *)(data));
         data += sizeof(T);
     }
 

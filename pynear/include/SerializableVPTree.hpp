@@ -36,11 +36,11 @@ class SerializableVPTree : public VPTree<T, distance_type, distance>, public ISe
      *      to read in same order they wrote the data (as in a file descriptor).
      */
 public:
-    SerializableVPTree() : VPTree<T, distance_type, distance>() {};
+    SerializableVPTree() : VPTree<T, distance_type, distance>(){};
     SerializableVPTree(std::vector<T> &&examples) : VPTree<T, distance_type, distance>(std::move(examples)) {}
     SerializableVPTree(std::vector<T> &examples) : VPTree<T, distance_type, distance>(examples) {}
-    SerializableVPTree(const SerializableVPTree<T, distance_type, distance, serializer, deserializer> &other) : VPTree<T, distance_type, distance>(other) {
-    }
+    SerializableVPTree(const SerializableVPTree<T, distance_type, distance, serializer, deserializer> &other)
+        : VPTree<T, distance_type, distance>(other) {}
 
     const SerializableVPTree<T, distance_type, distance, serializer, deserializer> &
     operator=(const SerializableVPTree<T, distance_type, distance, serializer, deserializer> &other) {
@@ -79,7 +79,7 @@ public:
 
         SerializedStateObjectReader reader(state);
         this->_examples = reader.readUserVector<T, deserializer>();
-        this->_indices  = reader.readUserVector<int64_t, vptree::vectorDeserializer>(); 
+        this->_indices = reader.readUserVector<int64_t, vptree::vectorDeserializer>();
 
         // Deserialize partitions
         deserializeLevelPartitions(reader);
@@ -105,9 +105,7 @@ public:
         }
     }
 
-    void deserializeLevelPartitions(SerializedStateObjectReader &reader) {
-        this->_rootPartition = rebuildFromState(reader);
-    }
+    void deserializeLevelPartitions(SerializedStateObjectReader &reader) { this->_rootPartition = rebuildFromState(reader); }
 
     void flattenTreePartitions(const VPLevelPartition<distance_type> *root,
                                std::vector<const VPLevelPartition<distance_type> *> &flattenTreeState) const {
