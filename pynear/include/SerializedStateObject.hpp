@@ -5,6 +5,7 @@
 #include <ostream>
 #include <string>
 #include <vector>
+#include "BuiltinSerializers.hpp"
 
 namespace vptree {
 
@@ -86,7 +87,6 @@ public:
         totalSize = const_cast<SerializedStateObject &>(object)._data.size();
     }
 
-    // A readonly interface for a SerializedStateObject
     template <typename T, std::vector<T> (*deserializer)(const uint8_t *, size_t &)> std::vector<T> readUserVector() {
         /*
          * Reads a contigous vector composed by custom user type T.
@@ -97,6 +97,22 @@ public:
 
         size_t numRead = 0;
         auto result = deserializer(data, numRead);
+        data += numRead;
+        totalSize -= numRead;
+        return result;
+    }
+
+    // A readonly interface for a SerializedStateObject
+    template <typename T> std::vector<T> readVector() {
+        /*
+         * Reads a contigous vector composed by a primitive (contiguous) type.
+         */
+
+        // certify we can read
+        checkRemainingBytes();
+
+        size_t numRead = 0;
+        auto result = vptree::vectorDeserializer<T>(data, numRead);
         data += numRead;
         totalSize -= numRead;
         return result;
@@ -153,6 +169,13 @@ public:
          * need a custom serializer passed as template argument
          */
         serializer(input, object()._data);
+    }
+
+    template <typename T> void writeVector(const std::vector<T> &input) {
+        /*
+         * Writes an std vector of primitive (contiguous) type to the serialized object. 
+         **/
+        vptree::vectorSerializer(input, object()._data);
     }
 
     template <typename T> void write(T type) {

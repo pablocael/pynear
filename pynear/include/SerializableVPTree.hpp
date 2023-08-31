@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include "BuiltinSerializers.hpp"
 #include "ISerializable.hpp"
 #include "VPTree.hpp"
 
@@ -58,7 +57,7 @@ public:
         // Create a writer that will write to the state object
         SerializedStateObjectWriter writer(state);
         writer.writeUserVector<T, serializer>(this->_examples);
-        writer.writeUserVector<int64_t, vptree::vectorSerializer>(this->_indices);
+        writer.writeVector<int64_t>(this->_indices);
 
         // Serialize partitions
         serializeLevelPartitions(writer);
@@ -79,7 +78,7 @@ public:
 
         SerializedStateObjectReader reader(state);
         this->_examples = reader.readUserVector<T, deserializer>();
-        this->_indices = reader.readUserVector<int64_t, vptree::vectorDeserializer>();
+        this->_indices = reader.readVector<int64_t>();
 
         // Deserialize partitions
         deserializeLevelPartitions(reader);
