@@ -8,15 +8,6 @@
 
 namespace vptree {
 
-uint8_t calculate_check_sum(const std::vector<uint8_t> &data) {
-    // create an uint8 bitmaks in which bits are alternating 0 and 1
-    uint32_t sum = 0;
-    for (uint8_t byte : data) {
-        sum += byte;
-    }
-    return sum % 256;
-};
-
 class SerializedStateObject {
     /*
      * Stores a serialized object in a byte array. The object can be read and written using
@@ -28,7 +19,7 @@ public:
 
     SerializedStateObject() { crc32::generate_table(_crc_table); }
 
-    SerializedStateObject(const std::vector<uint8_t> &data, uint8_t checksum) : _data(data), _checksum(checksum) {
+    SerializedStateObject(const std::vector<uint8_t> &data, uint32_t checksum) : _data(data), _checksum(checksum) {
         crc32::generate_table(_crc_table);
     }
 
@@ -37,7 +28,8 @@ public:
 
     size_t size() const { return _data.size(); }
     bool isEmpty() const { return _data.empty(); }
-    bool isValid() const { return _checksum == calculate_check_sum(_data); }
+    bool isValid() const { return _checksum == crc32::update(const_cast<SerializedStateObject *>(this)->_crc_table, 0, _data.data(), _data.size()); }
+
     uint32_t checksum() const { return _checksum; }
     const std::vector<uint8_t> &data() { return _data; }
 
@@ -148,50 +140,24 @@ public:
          */
     }
 
+    virtual ~SerializedStateObjectWriter() { close(); }
+
+    void close() {
+        // update checksum
+        object().updateChecksum();
+    }
+
     template <typename T, void (*serializer)(const std::vector<T> &, std::vector<uint8_t> &)> void writeUserVector(const std::vector<T> &input) {
         /*
          * Writes an user vector to the serialized object. User vectors can have any memory layout and thereforee
          * need a custom serializer passed as template argument
          */
         serializer(input, object()._data);
-
-        // update checksum
-        object().updateChecksum();
-    }
-
-    template <typename T, std::vector<T> (*deserializer)(const uint8_t *, size_t &)> std::vector<T> eraseUserVector() {
-        // erases and returns user vector for array of custom complex types with custom deserializer
-
-        size_t numRead = 0;
-
-        std::vector<uint8_t> &data = object()._data;
-        auto result = deserializer(data.data(), numRead);
-        data.resize(data.size() - numRead);
-
-        // update checksum
-        object().updateChecksum();
-
-        return result;
     }
 
     template <typename T> void write(T type) {
         // push basic whole types or structs
         object()._data.insert(object()._data.end(), (uint8_t *)&type, (uint8_t *)&type + sizeof(T));
-
-        // update checksum
-        object().updateChecksum();
-    }
-
-    template <typename T> T erase() {
-        // erases basic whole types or structs
-        // and returns the erased value
-        T value = *(T *)object()._data.data();
-        object()._data.erase(object()._data.begin(), object()._data.begin() + sizeof(T));
-
-        // update checksum
-        object().updateChecksum();
-
-        return value;
     }
 
 private:
@@ -200,5 +166,10 @@ private:
 private:
     const SerializedStateObject &_object;
 };
+
+template <> void SerializedStateObjectWriter::write(const std::string &type) {
+    // push basic whole types or structs
+    object()._data.insert(object()._data.end(), type.begin(), type.end());
+}
 
 }; // namespace vptree

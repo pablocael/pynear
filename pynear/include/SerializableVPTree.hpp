@@ -6,9 +6,9 @@
 
 #pragma once
 
+#include "BuiltinSerializers.hpp"
 #include "ISerializable.hpp"
 #include "VPTree.hpp"
-#include "BuiltinSerializers.hpp"
 
 namespace vptree {
 
@@ -36,7 +36,7 @@ class SerializableVPTree : public VPTree<T, distance_type, distance>, public ISe
      *      to read in same order they wrote the data (as in a file descriptor).
      */
 public:
-    SerializableVPTree() = default;
+    SerializableVPTree() : VPTree<T, distance_type, distance>(){};
     SerializableVPTree(std::vector<T> &&examples) : VPTree<T, distance_type, distance>(std::move(examples)) {}
     SerializableVPTree(std::vector<T> &examples) : VPTree<T, distance_type, distance>(examples) {}
     SerializableVPTree(const SerializableVPTree<T, distance_type, distance, serializer, deserializer> &other) {
@@ -96,7 +96,7 @@ public:
         deserializeLevelPartitions(reader);
     };
 
-    void serializeLevelPartitions(SerializedStateObjectWriter& writer) const {
+    void serializeLevelPartitions(SerializedStateObjectWriter &writer) const {
 
         std::vector<const VPLevelPartition<distance_type> *> flattenTreeState;
         flattenTreePartitions(this->_rootPartition, flattenTreeState);
@@ -116,9 +116,7 @@ public:
         }
     }
 
-    void deserializeLevelPartitions(SerializedStateObjectReader& reader) {
-        this->clear();
-
+    void deserializeLevelPartitions(SerializedStateObjectReader &reader) {
         VPLevelPartition<distance_type> *recovered = rebuildFromState(reader);
         if (recovered == nullptr) {
             return;
@@ -127,7 +125,8 @@ public:
         this->_rootPartition = recovered;
     }
 
-    void flattenTreePartitions(const VPLevelPartition<distance_type> *root, std::vector<const VPLevelPartition<distance_type> *> &flattenTreeState) const {
+    void flattenTreePartitions(const VPLevelPartition<distance_type> *root,
+                               std::vector<const VPLevelPartition<distance_type> *> &flattenTreeState) const {
         // visit partitions tree in preorder write all values.
         // implement pre order using a vector as a stack
         flattenTreeState.push_back(root);

@@ -248,7 +248,7 @@ TEST(VPTests, TestSerializedStateObject) {
 
     SerializedStateObjectWriter writer(state);
     writer.write(1);
-    writer.write("my string");
+    writer.write<std::string>("my string");
     writer.write<TestStruct>({ 1, 2 });
 
 

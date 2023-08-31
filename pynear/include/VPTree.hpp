@@ -57,7 +57,7 @@ public:
     const VPTree<T, distance_type, distance> &operator=(const VPTree<T, distance_type, distance> &other) {
         _examples = other._examples;
         _indices = other._indices;
-        if (_rootPartition != nullptr) {
+        if (other._rootPartition != nullptr) {
             _rootPartition = other._rootPartition->deepcopy();
         }
 

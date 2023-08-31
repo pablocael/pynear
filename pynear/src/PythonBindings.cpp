@@ -25,7 +25,6 @@ namespace py = pybind11;
 typedef float (*distance_func_f)(const arrayf &, const arrayf &);
 typedef int64_t (*distance_func_li)(const arrayli &, const arrayli &);
 
-
 template <distance_func_f distance> class VPTreeNumpyAdapter {
 public:
     VPTreeNumpyAdapter() = default;

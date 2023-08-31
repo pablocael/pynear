@@ -1,13 +1,13 @@
 #pragma once
 
-#include <vector>
 #include <Eigen/Core>
+#include <vector>
 
 namespace vptree {
 
 // Built in serializer for vector of vectors
 template <typename T> void ndarraySerializer(const std::vector<std::vector<T>> &input, std::vector<uint8_t> &output) {
-    /* 
+    /*
      * This serializer function should write state from lower to higher addresses.
      * It writes a ndarray like vector (e.g: a vector of vectors) to a byte array.
      * It will serialize meta information about the vector such as its size and dimension.
@@ -15,7 +15,7 @@ template <typename T> void ndarraySerializer(const std::vector<std::vector<T>> &
      * [totalSize(size_t)][dimension(size_t)][element1(std::vector<T>)]...[elementN(std::vector<T>)]
      *
      * See SerializableVPTree declaration for more information.
-    */
+     */
     auto totalSize = input.size();
     if (totalSize == 0) {
         return;
@@ -23,16 +23,16 @@ template <typename T> void ndarraySerializer(const std::vector<std::vector<T>> &
 
     size_t dimension = input[0].size();
     auto totalBytes = totalSize * dimension * sizeof(T);
-    uint8_t *data = output.data();
     // add space for all elements of given dimensions + total size + dimension in bytes
     output.resize(output.size() + totalBytes + 2 * sizeof(size_t));
 
+    uint8_t *data = output.data();
     // store total size and dimension first
     (*(size_t *)(data)) = totalSize;
     data += sizeof(size_t);
     (*(size_t *)(data)) = dimension;
     data += sizeof(size_t);
-    
+
     // store elements
     for (const auto &element : input) {
         std::memcpy(data, &element.front(), dimension * sizeof(T));
@@ -72,4 +72,4 @@ template <typename T> std::vector<std::vector<T>> ndarrayDeserializer(const uint
     return result;
 };
 
-} // namespace vptree;
+} // namespace vptree

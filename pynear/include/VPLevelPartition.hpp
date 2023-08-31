@@ -39,7 +39,6 @@ public:
 
     virtual ~VPLevelPartition() { clear(); }
 
-
     bool isEmpty() const { return _indexStart == -1; }
     int64_t start() const { return _indexStart; }
     int64_t end() const { return _indexEnd; }
@@ -77,7 +76,6 @@ private:
         _left = nullptr;
         _right = nullptr;
     }
-
 
     VPLevelPartition *rec_deepcopy(VPLevelPartition *root) {
         if (root == nullptr) {
