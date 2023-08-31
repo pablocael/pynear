@@ -114,13 +114,17 @@ template <typename key_t, typename distance_t, typename metric> class BKTree {
 
     std::tuple<std::vector<std::vector<distance_t>>, std::vector<std::vector<key_t>>> find_batch(const std::vector<key_t> &keys,
                                                                                                  distance_t threshold) {
-        std::vector<std::vector<distance_t>> distances_out;
-        std::vector<std::vector<key_t>> keys_out;
+        std::vector<std::vector<distance_t>> distances_out(keys.size());
+        std::vector<std::vector<key_t>> keys_out(keys.size());
 
-        for (auto const &key : keys) {
-            auto const &[distances_res, keys_res] = find(key, threshold);
-            distances_out.push_back(std::move(distances_res));
-            keys_out.push_back(std::move(keys_res));
+#if (ENABLE_OMP_PARALLEL)
+#pragma omp parallel for schedule(static, 1)
+#endif
+        // i should be size_t, however msvc requires signed integral loop variables (except with -openmp:llvm)
+        for (int i = 0; i < keys.size(); ++i) {
+            auto const &[distances_res, keys_res] = find(keys[i], threshold);
+            distances_out[i] = std::move(distances_res);
+            keys_out[i] = std::move(keys_res);
         }
 
         return std::make_tuple(distances_out, keys_out);
