@@ -4,7 +4,8 @@
 #include <MathUtils.hpp>
 #include <VPTree.hpp>
 #include <SerializableVPTree.hpp>
-#include "SerializedStateObject.hpp"
+#include <SerializedStateObject.hpp>
+#include <BuiltinSerializers.hpp>
 
 #include <Eigen/Core>
 #include <chrono>
@@ -248,9 +249,16 @@ TEST(VPTests, TestSerializedStateObject) {
 
     SerializedStateObjectWriter writer(state);
     writer.write(1);
-    writer.write<std::string>("my string");
+    writer.write<std::string>(std::string("my string"));
     writer.write<TestStruct>({ 1, 2 });
 
+    std::vector<int64_t> testVector;
+    testVector.resize(201);
+    for(int i = 0; i < testVector.size(); ++i) {
+        testVector[i] = i;
+    }
+
+    writer.writeUserVector<int64_t, vptree::vectorSerializer>(testVector);
 
     SerializedStateObjectReader reader(state);
     EXPECT_EQ(reader.read<int>(), 1);
@@ -259,6 +267,9 @@ TEST(VPTests, TestSerializedStateObject) {
     auto stct = reader.read<TestStruct>();
     EXPECT_EQ(stct.a, 1);
     EXPECT_EQ(stct.b, 2);
+
+    std::vector<int64_t> recoveredVector = reader.readUserVector<int64_t, vptree::vectorDeserializer>();
+    EXPECT_EQ(recoveredVector.size(), 201);
 }
 
 TEST(VPTests, TestCreation) {
