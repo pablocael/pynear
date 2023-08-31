@@ -45,9 +45,6 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION 1)
 
-file(GLOB HEADER_FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp)
-set_target_properties(${PROJECT_NAME} PROPERTIES PUBLIC_HEADER ${HEADER_FILES})
-
 set(CONFIG_NAME ${PROJECT_NAME}Config)
 
 pybind11_add_module(pynear MODULE src/PythonBindings.cpp )

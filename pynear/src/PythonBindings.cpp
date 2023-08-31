@@ -25,56 +25,6 @@ namespace py = pybind11;
 typedef float (*distance_func_f)(const arrayf &, const arrayf &);
 typedef int64_t (*distance_func_li)(const arrayli &, const arrayli &);
 
-template <typename T> void ndarraySerializer(const std::vector<std::vector<T>> &input, std::vector<uint8_t> &output) {
-    // this functions should push state like a stack
-    auto totalSize = input.size();
-    if (totalSize == 0) {
-        return;
-    }
-
-    size_t dimension = input[0].size();
-    auto totalBytes = totalSize * dimension * sizeof(T);
-
-    // adding space for all elements of given dimensions + total size + dimension in bytes
-    uint8_t *data = output.data();
-    output.resize(output.size() + totalBytes + 2 * sizeof(size_t));
-    for (const auto &element : input) {
-        std::memcpy(data, &element.begin(), dimension * sizeof(T));
-        data += dimension * sizeof(T);
-    }
-
-    // store total size and dimension first
-    (*(size_t *)(data)) = totalSize;
-    data += sizeof(T);
-    (*(size_t *)(data)) = dimension;
-    data += sizeof(T);
-};
-
-template <typename T> std::vector<std::vector<T>> ndarrayDeserializer(const uint8_t *input, size_t &readBytes) {
-    uint8_t *data = const_cast<uint8_t *>(input);
-    // input points to after the data block, first must decrement
-
-    // read total size and dimension first
-    data -= 2 * sizeof(size_t);
-    size_t totalSize = (*(size_t *)(data));
-    size_t dimension = (*(size_t *)(data + sizeof(size_t)));
-    size_t elementSize = dimension * sizeof(T);
-    size_t totalBytes = totalSize * elementSize;
-
-    data -= totalBytes;
-
-    std::vector<std::vector<T>> result;
-    result.resize(totalSize);
-    for (auto &element : result) {
-        element.resize(dimension);
-        std::memcpy(&element.begin(), data, elementSize);
-        data += elementSize;
-    }
-
-    readBytes = totalBytes + 2 * sizeof(size_t);
-
-    return result;
-};
 
 template <distance_func_f distance> class VPTreeNumpyAdapter {
 public:
@@ -116,8 +66,8 @@ public:
     }
 
     static py::tuple get_state(const VPTreeNumpyAdapter<distance> &p) {
-        vptree::SerializedState state = p.tree.serialize();
-        py::tuple t = py::make_tuple(state.data, state.checksum);
+        vptree::SerializedStateObject state = p.tree.serialize();
+        py::tuple t = py::make_tuple(state.data(), state.checksum());
         return t;
     }
 
@@ -125,11 +75,11 @@ public:
         VPTreeNumpyAdapter<distance> p;
         std::vector<uint8_t> state = t[0].cast<std::vector<uint8_t>>();
         uint8_t checksum = t[1].cast<uint8_t>();
-        p.tree.deserialize(vptree::SerializedState(state, checksum));
+        p.tree.deserialize(vptree::SerializedStateObject(state, checksum));
         return p;
     }
 
-    vptree::SerializableVPTree<arrayf, float, distance, arrayTypeSerializer<float>, arrayTypeDeserializer<float>> tree;
+    vptree::SerializableVPTree<arrayf, float, distance, vptree::ndarraySerializer<float>, vptree::ndarrayDeserializer<float>> tree;
 };
 
 template <distance_func_li distance> class VPTreeNumpyAdapterBinary {
@@ -171,8 +121,8 @@ public:
     }
 
     static py::tuple get_state(const VPTreeNumpyAdapterBinary<distance> &p) {
-        vptree::SerializedState state = p.tree.serialize();
-        py::tuple t = py::make_tuple(state.data, state.checksum);
+        vptree::SerializedStateObject state = p.tree.serialize();
+        py::tuple t = py::make_tuple(state.data(), state.checksum());
         return t;
     }
 
@@ -180,11 +130,11 @@ public:
         VPTreeNumpyAdapterBinary<distance> p;
         std::vector<uint8_t> state = t[0].cast<std::vector<uint8_t>>();
         uint8_t checksum = t[1].cast<uint8_t>();
-        p.tree.deserialize(vptree::SerializedState(state, checksum));
+        p.tree.deserialize(vptree::SerializedStateObject(state, checksum));
         return p;
     }
 
-    vptree::SerializableVPTree<arrayli, int64_t, distance, arrayTypeSerializer<uint8_t>, arrayTypeDeserializer<uint8_t>> tree;
+    vptree::SerializableVPTree<arrayli, int64_t, distance, vptree::ndarraySerializer<uint8_t>, vptree::ndarrayDeserializer<uint8_t>> tree;
 };
 
 template <distance_func_li distance_f> class HammingMetric : Metric<arrayli, int64_t> {

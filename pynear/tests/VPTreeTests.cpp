@@ -3,6 +3,7 @@
 
 #include <MathUtils.hpp>
 #include <VPTree.hpp>
+#include <SerializableVPTree.hpp>
 #include "SerializedStateObject.hpp"
 
 #include <Eigen/Core>
@@ -11,6 +12,7 @@
 #include <random>
 #include <sstream>
 #include <vector>
+#include <cmath>
 #include <exception>
 #include <stdint.h>
 
@@ -23,6 +25,13 @@
 using namespace testing;
 
 float distance(const Eigen::Vector3d &v1, const Eigen::Vector3d &v2) { return (v2 - v1).norm(); }
+float distanceVector3(const std::vector<float> &v1, const std::vector<float> &v2) { 
+    double d = 0;
+    for(int i = 0; i < 3; ++i) {
+        d += (v2[i] - v1[i]) * (v2[i] - v1[i]);
+    }
+    return std::sqrt(d);
+}
 
 /* inline uint_fast8_t popcnt_u128(__uint128_t n) */
 /* { */
@@ -193,23 +202,25 @@ TEST(VPTests, TestSerialization) {
     std::uniform_real_distribution<float> distribution(-10, 10);
 
     const unsigned int numPoints = 14001;
-    std::vector<Eigen::Vector3d> points;
+    std::vector<std::vector<float>> points;
     points.reserve(numPoints);
     points.resize(numPoints);
-    for (Eigen::Vector3d &point : points) {
+    for (auto &point : points) {
+        point.resize(3);
         point[0] = distribution(generator);
         point[1] = distribution(generator);
         point[2] = distribution(generator);
     }
 
-    VPTree<Eigen::Vector3d, float, distance> tree2;
-    VPTree<Eigen::Vector3d, float, distance> tree(points);
+    SerializableVPTree<std::vector<float>, float, distanceVector3, vptree::ndarraySerializer, vptree::ndarrayDeserializer> tree2;
+    SerializableVPTree<std::vector<float>, float, distanceVector3, vptree::ndarraySerializer, vptree::ndarrayDeserializer> tree(points);
     auto state = tree.serialize();
     tree2.deserialize(state);
 
-    std::vector<Eigen::Vector3d> queries;
+    std::vector<std::vector<float>> queries;
     queries.resize(100);
-    for (Eigen::Vector3d &point : queries) {
+    for (auto &point : queries) {
+        point.resize(3);
         point[0] = distribution(generator);
         point[1] = distribution(generator);
         point[2] = distribution(generator);
@@ -232,17 +243,20 @@ TEST(VPTests, TestSerialization) {
 TEST(VPTests, TestSerializedStateObject) {
     SerializedStateObject state;
 
+    struct TestStruct
+    { int a; int b; };
+
     SerializedStateObjectWriter writer(state);
-    writer.push_back(1);
-    writer.push_back("my string");
-    writer.push_back(struct { int a; int b; } { 1, 2 });
+    writer.write(1);
+    writer.write("my string");
+    writer.write<TestStruct>({ 1, 2 });
 
 
     SerializedStateObjectReader reader(state);
-    EXPECT_EQ(reader.read<int>() == 1);
-    EXPECT_EQ(reader.read<std::string>() == "my string");
+    EXPECT_EQ(reader.read<int>(), 1);
+    EXPECT_EQ(reader.read<std::string>(), "my string");
 
-    auto stct = reader.read<struct { int a; int b; }>();
+    auto stct = reader.read<TestStruct>();
     EXPECT_EQ(stct.a, 1);
     EXPECT_EQ(stct.b, 2);
 }

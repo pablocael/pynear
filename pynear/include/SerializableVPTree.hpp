@@ -8,6 +8,7 @@
 
 #include "ISerializable.hpp"
 #include "VPTree.hpp"
+#include "BuiltinSerializers.hpp"
 
 namespace vptree {
 
@@ -36,6 +37,8 @@ class SerializableVPTree : public VPTree<T, distance_type, distance>, public ISe
      */
 public:
     SerializableVPTree() = default;
+    SerializableVPTree(std::vector<T> &&examples) : VPTree<T, distance_type, distance>(std::move(examples)) {}
+    SerializableVPTree(std::vector<T> &examples) : VPTree<T, distance_type, distance>(examples) {}
     SerializableVPTree(const SerializableVPTree<T, distance_type, distance, serializer, deserializer> &other) {
         this->_examples = other._examples;
         this->_indices = other._indices;
@@ -55,55 +58,27 @@ public:
         return *this;
     }
 
-    SerializedState serialize() const override {
+    SerializedStateObject serialize() const override {
+
+        SerializedStateObject state;
         if (this->_rootPartition == nullptr) {
-            return SerializedState();
+            return state;
         }
 
-        size_t element_size = 0;
-        size_t num_elements_per_example = 0;
-        size_t total_size = (size_t)(3 * sizeof(size_t));
+        // Create a writer that will write to the state object
+        SerializedStateObjectWriter writer(state);
+        writer.writeUserVector<T, serializer>(this->_examples);
 
-        if (this->_examples.size() > 0) {
+        // Serialize partitions
+        serializeLevelPartitions(writer);
 
-            // total size is the _examples total size + the examples array size plus element size
-            // _examples[0] is an array of some type (variable)
-            num_elements_per_example = this->_examples[0].size();
-            element_size = sizeof(this->_examples[0][0]);
-            int64_t total_elements_size = num_elements_per_example * element_size;
-            total_size += this->_examples.size() * (sizeof(int64_t) + total_elements_size);
-        }
-
-        SerializedState state;
-        state.reserve(total_size);
-
-        /* for (const VPTreeElement &elem : _examples) { */
-        /*     state.push(elem.originalIndex); */
-
-        /*     for (size_t i = 0; i < num_elements_per_example; ++i) { */
-        /*         // since we dont know the sub element type of T (T is an array of something) */
-        /*         // we need to copy using memcopy and memory size */
-        /*         state.push_by_size(&elem[i], element_size); */
-        /*     } */
-        /* } */
-
-        state.push(this->_examples.size());
-        state.push(num_elements_per_example);
-        state.push(element_size);
-
-        if (state.size() != total_size) {
-            throw new std::out_of_range("invalid serialization state, offsets dont match!");
-        }
-
-        SerializedState partition_state = this->_rootPartition->serialize();
-        partition_state += state;
-        partition_state.buildChecksum();
-        return partition_state;
+        return state;
     }
 
-    void deserialize(const SerializedState &state) override {
+    void deserialize(const SerializedStateObject &state) override {
+
         this->clear();
-        if (state.data.empty()) {
+        if (state.isEmpty()) {
             return;
         }
 
@@ -111,31 +86,75 @@ public:
             throw new std::invalid_argument("invalid state - checksum mismatch");
         }
 
-        SerializedState copy(state);
+        SerializedStateObjectReader reader(state);
 
         this->_rootPartition = new VPLevelPartition<distance_type>();
 
-        size_t elem_size = copy.pop<size_t>();
-        size_t num_elements_per_example = copy.pop<size_t>();
-        size_t num_examples = copy.pop<size_t>();
+        this->_examples = reader.readUserVector<T, deserializer>();
 
-        /* _examples.reserve(num_examples); */
-        /* _examples.resize(num_examples); */
-        /* for (int64_t i = num_examples - 1; i >= 0; --i) { */
-
-        /*     auto &example = _examples[i]; */
-        /*     auto &val = example; */
-        /*     val.resize(num_elements_per_example); */
-
-        /*     for (int64_t j = num_elements_per_example - 1; j >= 0; --j) { */
-        /*         copy.pop_by_size(&val[j], elem_size); */
-        /*     } */
-        /*     int64_t originalIndex = copy.pop<int64_t>(); */
-        /*     example.originalIndex = originalIndex; */
-        /* } */
-
-        this->_rootPartition->deserialize(copy);
+        // Deserialize partitions
+        deserializeLevelPartitions(reader);
     };
+
+    void serializeLevelPartitions(SerializedStateObjectWriter& writer) const {
+
+        std::vector<const VPLevelPartition<distance_type> *> flattenTreeState;
+        flattenTreePartitions(this->_rootPartition, flattenTreeState);
+
+        // reverse the tree state since we will write it in a stack for serializing
+        for (const VPLevelPartition<distance_type> *elem : flattenTreeState) {
+            if (elem == nullptr) {
+                writer.write((float)(0));
+                writer.write((int64_t)(-1));
+                writer.write((int64_t)(-1));
+                continue;
+            }
+
+            writer.write((float)(elem->radius()));
+            writer.write((int64_t)(elem->start()));
+            writer.write((int64_t)(elem->end()));
+        }
+    }
+
+    void deserializeLevelPartitions(SerializedStateObjectReader& reader) {
+        this->clear();
+
+        VPLevelPartition<distance_type> *recovered = rebuildFromState(reader);
+        if (recovered == nullptr) {
+            return;
+        }
+
+        this->_rootPartition = recovered;
+    }
+
+    void flattenTreePartitions(const VPLevelPartition<distance_type> *root, std::vector<const VPLevelPartition<distance_type> *> &flattenTreeState) const {
+        // visit partitions tree in preorder write all values.
+        // implement pre order using a vector as a stack
+        flattenTreeState.push_back(root);
+        if (root != nullptr) {
+            flattenTreePartitions(root->left(), flattenTreeState);
+            flattenTreePartitions(root->right(), flattenTreeState);
+        }
+    }
+
+    VPLevelPartition<distance_type> *rebuildFromState(SerializedStateObjectReader &reader) {
+        if (reader.isEmpty()) {
+            return nullptr;
+        }
+
+        int64_t indexEnd = reader.read<int64_t>();
+        int64_t indexStart = reader.read<int64_t>();
+        float radius = reader.read<float>();
+        if (indexEnd == -1) {
+            return nullptr;
+        }
+
+        VPLevelPartition<distance_type> *root = new VPLevelPartition<distance_type>(radius, indexStart, indexEnd);
+        VPLevelPartition<distance_type> *left = rebuildFromState(reader);
+        VPLevelPartition<distance_type> *right = rebuildFromState(reader);
+        root->setChild(left, right);
+        return root;
+    }
 };
 
 } // namespace vptree

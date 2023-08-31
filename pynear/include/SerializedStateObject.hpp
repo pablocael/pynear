@@ -1,4 +1,4 @@
-#pragma onc
+#pragma once
 
 #include "crc32.hpp"
 #include <cstring>
@@ -8,7 +8,7 @@
 
 namespace vptree {
 
-uint8_t calculate_check_sum(const std::vector<uint8_t> &data) const {
+uint8_t calculate_check_sum(const std::vector<uint8_t> &data) {
     // create an uint8 bitmaks in which bits are alternating 0 and 1
     uint32_t sum = 0;
     for (uint8_t byte : data) {
@@ -80,31 +80,60 @@ class SerializedStateObjectReader {
      * So the data is pushed and read in the same order.
      *
      * Note: this class assumes SerializedStateObject instance will be alive and available during the
-     * whole lifecycle of the SerializedStateObjectReader.
+     * whole lifecycle of the SerializedStateObjectReader. Destroying the SerializedStateObject instance
+     * before the SerializedStateObjectReader will cause undefined behaviour!
      */
 public:
-    SerializedStateObjectReader(uint8_t *data) { data = data; }
-    SerializedStateObjectReader(const SerializedStateObject &object) { data = const_cast<SerializedStateObject &>(object)._data.data(); }
+    SerializedStateObjectReader(uint8_t *data, size_t totalSize) {
+        data = data;
+        totalSize = totalSize;
+    }
+
+    SerializedStateObjectReader(const SerializedStateObject &object) {
+        data = const_cast<SerializedStateObject &>(object)._data.data();
+        totalSize = const_cast<SerializedStateObject &>(object)._data.size();
+    }
 
     // A readonly interface for a SerializedStateObject
     template <typename T, std::vector<T> (*deserializer)(const uint8_t *, size_t &)> std::vector<T> readUserVector() {
         /*
-         * Readss a contigous vector composed by custom user type T.
+         * Reads a contigous vector composed by custom user type T.
          */
+
+        // certify we can read
+        checkRemainingBytes();
+
         size_t numRead = 0;
         auto result = deserializer(data, numRead);
         data += numRead;
+        totalSize -= numRead;
         return result;
     }
 
     template <typename T> T read() {
         // read basic whole types or structs
+
+        // certify we can read
+        checkRemainingBytes();
+
         T value = *(T *)data;
         data += sizeof(T);
+        totalSize -= sizeof(T);
         return value;
     }
 
+    size_t remainingBytes() const { return totalSize; }
+    bool isEmpty() const { return totalSize == 0; }
+
 private:
+    void checkRemainingBytes() {
+        if (totalSize == 0) {
+            throw new std::runtime_error("trying to read from an empty reader");
+        }
+    }
+
+private:
+    size_t totalSize = 0;
     uint8_t *data = nullptr;
 };
 
@@ -112,39 +141,56 @@ class SerializedStateObjectWriter {
 public:
     SerializedStateObjectWriter(SerializedStateObject &obj) : _object(obj) {
         /*
-         * Warning: this class assumes SerializedStateObject instance will be alive and available during the whole
-         * lifecycle of the SerializedStateObjectWriter.
+         * Writes data to SerializedStateObjectWriter instance to the end of its byte array.
+         * Note: this class assumes SerializedStateObject instance will be alive and available during the
+         * whole lifecycle of the SerializedStateObjectReader. Destroying the SerializedStateObject instance
+         * before the SerializedStateObjectReader will cause undefined behaviour!
          */
     }
 
-    template <typename T, void (*serializer)(const std::vector<T> &, std::vector<uint8_t> &)> void pushUserVector(const std::vector<T> &input) {
+    template <typename T, void (*serializer)(const std::vector<T> &, std::vector<uint8_t> &)> void writeUserVector(const std::vector<T> &input) {
         /*
          * Writes an user vector to the serialized object. User vectors can have any memory layout and thereforee
          * need a custom serializer passed as template argument
          */
         serializer(input, object()._data);
+
+        // update checksum
+        object().updateChecksum();
     }
 
-    template <typename T, std::vector<T> (*deserializer)(const uint8_t *, size_t &)> std::vector<T> popUserVector() {
-        // pop for array of custom complex types with custom deserializer
+    template <typename T, std::vector<T> (*deserializer)(const uint8_t *, size_t &)> std::vector<T> eraseUserVector() {
+        // erases and returns user vector for array of custom complex types with custom deserializer
 
         size_t numRead = 0;
 
         std::vector<uint8_t> &data = object()._data;
         auto result = deserializer(data.data(), numRead);
         data.resize(data.size() - numRead);
+
+        // update checksum
+        object().updateChecksum();
+
         return result;
     }
 
-    template <typename T> void push(T type) {
+    template <typename T> void write(T type) {
         // push basic whole types or structs
         object()._data.insert(object()._data.end(), (uint8_t *)&type, (uint8_t *)&type + sizeof(T));
+
+        // update checksum
+        object().updateChecksum();
     }
 
-    template <typename T> T pop() {
-        // pop basic whole types or structs
+    template <typename T> T erase() {
+        // erases basic whole types or structs
+        // and returns the erased value
         T value = *(T *)object()._data.data();
         object()._data.erase(object()._data.begin(), object()._data.begin() + sizeof(T));
+
+        // update checksum
+        object().updateChecksum();
+
         return value;
     }
 
