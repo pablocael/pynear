@@ -19,7 +19,7 @@ public:
 
     SerializedStateObject() { crc32::generate_table(_crc_table); }
 
-    SerializedStateObject(const std::vector<uint8_t> &data, uint32_t checksum) : _data(data), _checksum(checksum) {
+    SerializedStateObject(const std::vector<uint8_t>& data, uint32_t checksum) : _data(data), _checksum(checksum) {
         crc32::generate_table(_crc_table);
     }
 

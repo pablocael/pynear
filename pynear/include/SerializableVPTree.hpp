@@ -36,25 +36,15 @@ class SerializableVPTree : public VPTree<T, distance_type, distance>, public ISe
      *      to read in same order they wrote the data (as in a file descriptor).
      */
 public:
-    SerializableVPTree() : VPTree<T, distance_type, distance>(){};
+    SerializableVPTree() : VPTree<T, distance_type, distance>() {};
     SerializableVPTree(std::vector<T> &&examples) : VPTree<T, distance_type, distance>(std::move(examples)) {}
     SerializableVPTree(std::vector<T> &examples) : VPTree<T, distance_type, distance>(examples) {}
-    SerializableVPTree(const SerializableVPTree<T, distance_type, distance, serializer, deserializer> &other) {
-        this->_examples = other._examples;
-        this->_indices = other._indices;
-        if (this->_rootPartition != nullptr) {
-            this->_rootPartition = other._rootPartition->deepcopy();
-        }
+    SerializableVPTree(const SerializableVPTree<T, distance_type, distance, serializer, deserializer> &other) : VPTree<T, distance_type, distance>(other) {
     }
 
     const SerializableVPTree<T, distance_type, distance, serializer, deserializer> &
     operator=(const SerializableVPTree<T, distance_type, distance, serializer, deserializer> &other) {
-        this->_examples = other._examples;
-        this->_indices = other._indices;
-        if (this->_rootPartition != nullptr) {
-            this->_rootPartition = other._rootPartition->deepcopy();
-        }
-
+        VPTree<T, distance_type, distance>::operator=(other);
         return *this;
     }
 
@@ -92,7 +82,6 @@ public:
         this->_indices  = reader.readUserVector<int64_t, vptree::vectorDeserializer>(); 
 
         // Deserialize partitions
-        this->_rootPartition = new VPLevelPartition<distance_type>();
         deserializeLevelPartitions(reader);
     };
 
@@ -117,12 +106,7 @@ public:
     }
 
     void deserializeLevelPartitions(SerializedStateObjectReader &reader) {
-        VPLevelPartition<distance_type> *recovered = rebuildFromState(reader);
-        if (recovered == nullptr) {
-            return;
-        }
-
-        this->_rootPartition = recovered;
+        this->_rootPartition = rebuildFromState(reader);
     }
 
     void flattenTreePartitions(const VPLevelPartition<distance_type> *root,

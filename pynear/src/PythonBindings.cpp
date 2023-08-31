@@ -73,7 +73,7 @@ public:
     static VPTreeNumpyAdapter<distance> set_state(py::tuple t) {
         VPTreeNumpyAdapter<distance> p;
         std::vector<uint8_t> state = t[0].cast<std::vector<uint8_t>>();
-        uint8_t checksum = t[1].cast<uint8_t>();
+        uint32_t checksum = t[1].cast<uint32_t>();
         p.tree.deserialize(vptree::SerializedStateObject(state, checksum));
         return p;
     }
@@ -128,7 +128,7 @@ public:
     static VPTreeNumpyAdapterBinary<distance> set_state(py::tuple t) {
         VPTreeNumpyAdapterBinary<distance> p;
         std::vector<uint8_t> state = t[0].cast<std::vector<uint8_t>>();
-        uint8_t checksum = t[1].cast<uint8_t>();
+        uint32_t checksum = t[1].cast<uint32_t>();
         p.tree.deserialize(vptree::SerializedStateObject(state, checksum));
         return p;
     }
