@@ -118,55 +118,42 @@ CLASSES = [
 ]
 
 
-def test_binary():
+@pytest.mark.parametrize("num_points, k", [(2021, 2), (40021, 3)])
+def test_binary(num_points, k):
     np.random.seed(seed=42)
 
     dimension = 32
-    num_points = 2021
     data = np.random.normal(scale=255, loc=0, size=(num_points, dimension)).astype(dtype=np.uint8)
 
     num_queries = 8
     queries = np.random.normal(scale=255, loc=0, size=(num_queries, dimension)).astype(dtype=np.uint8)
+
+    exaustive_indices, exaustive_distances = exhaustive_search_hamming(data, queries, k)
+
+    vptree = pynear.VPTreeBinaryIndex()
+    vptree.set(data)
+    vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
+
+    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
+    vptree_distances = np.array(vptree_distances, dtype=np.int64)[:, ::-1]
+
+    assert np.array_equal(exaustive_distances, vptree_distances)
+    # assert np.array_equal(exaustive_indices, vptree_indices)  # indices order can vary for same distances
+
+
+def test_binary_duplicates():
+    dimension = 32
+    num_points = 2
+    data = np.zeros((num_points, dimension), dtype=np.uint8)
 
     k = 2
 
-    exaustive_indices, exaustive_distances = exhaustive_search_hamming(data, queries, k)
-
     vptree = pynear.VPTreeBinaryIndex()
     vptree.set(data)
-    vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
+    indices, distances = vptree.searchKNN(data, k)
 
-    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
-    vptree_distances = np.array(vptree_distances, dtype=np.int64)[:, ::-1]
-
-    assert np.array_equal(exaustive_distances, vptree_distances)
-    # assert np.array_equal(exaustive_indices, vptree_indices) # indices order can vary for same distances
-
-
-def test_large_binary():
-    np.random.seed(seed=42)
-
-    dimension = 32
-    num_points = 40021
-    data = np.random.normal(scale=255, loc=0, size=(num_points, dimension)).astype(dtype=np.uint8)
-
-    num_queries = 8
-    queries = np.random.normal(scale=255, loc=0, size=(num_queries, dimension)).astype(dtype=np.uint8)
-
-    k = 3
-
-    exaustive_indices, exaustive_distances = exhaustive_search_hamming(data, queries, k)
-
-    vptree = pynear.VPTreeBinaryIndex()
-    vptree.set(data)
-    vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
-
-    vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
-    vptree_distances = np.array(vptree_distances, dtype=np.int64)[:, ::-1]
-
-    assert np.array_equal(exaustive_distances, vptree_distances)
-    if _num_dups(exaustive_distances) == 0:
-        assert np.array_equal(exaustive_indices, vptree_indices)  # indices order can vary for same distances
+    assert [sorted(i) for i in indices] == [list(range(num_points))] * num_points
+    assert distances == [[0] * k] * num_points
 
 
 @pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
