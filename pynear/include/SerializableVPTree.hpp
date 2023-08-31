@@ -15,9 +15,9 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
           void (*serializer)(const std::vector<T> &, std::vector<uint8_t> &), std::vector<T> (*deserializer)(const uint8_t *, size_t &)>
 class SerializableVPTree : public VPTree<T, distance_type, distance>, public ISerializable {
     /*
-     * Serializable VPTree that takes serializer and deserializer functions as a template. Since T is custom user type,
-     * serialization need custom user functions to be able to read/write custom user objects. User must resize input
-     * bytearray accordingly.
+     * SerializableVPTree class that works with custom serializer and deserializer functions as a template.
+     * Since T is a generic user type, serialization need custom user functions to be able to read/write
+     * custom user objects.
      *
      * Template arguments:
      * - T: a custom user type that will compose the VPTree element. Distance function must input this type.

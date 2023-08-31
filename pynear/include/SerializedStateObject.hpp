@@ -1,11 +1,11 @@
 #pragma once
 
+#include "BuiltinSerializers.hpp"
 #include "crc32.hpp"
 #include <cstring>
 #include <ostream>
 #include <string>
 #include <vector>
-#include "BuiltinSerializers.hpp"
 
 namespace vptree {
 
@@ -62,8 +62,8 @@ class SerializedStateObjectReader {
      *
      * Example:
      * SerializedStateObjectWriter writer(obj);
-     * writer.push(myInt);
-     * writer.push(myString);
+     * writer.write(myInt);
+     * writer.write(myString);
      *
      *
      * SerializedStateObjectReader reader(obj);
@@ -173,7 +173,7 @@ public:
 
     template <typename T> void writeVector(const std::vector<T> &input) {
         /*
-         * Writes an std vector of primitive (contiguous) type to the serialized object. 
+         * Writes an std vector of primitive (contiguous) type to the serialized object.
          **/
         vptree::vectorSerializer(input, object()._data);
     }
