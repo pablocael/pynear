@@ -120,8 +120,6 @@ CLASSES = [
 
 @pytest.mark.parametrize("num_points, k", [(2021, 2), (40021, 3)])
 def test_binary(num_points, k):
-    np.random.seed(seed=42)
-
     dimension = 32
     data = np.random.normal(scale=255, loc=0, size=(num_points, dimension)).astype(dtype=np.uint8)
 
@@ -158,8 +156,6 @@ def test_binary_duplicates():
 
 @pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
 def test_k_equals_dataset(vptree_cls, exaustive_metric):
-    np.random.seed(seed=42)
-
     dimension = 8
     num_points = 2021
     data = np.random.rand(num_points, dimension).astype(dtype=np.float32)
@@ -185,8 +181,6 @@ def test_k_equals_dataset(vptree_cls, exaustive_metric):
 
 @pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
 def test_large_dataset(vptree_cls, exaustive_metric):
-    np.random.seed(seed=42)
-
     dimension = 8
     num_points = 401001
     data = np.random.rand(num_points, dimension).astype(dtype=np.float32)
@@ -214,8 +208,6 @@ def test_large_dataset(vptree_cls, exaustive_metric):
 
 @pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
 def test_large_dataset_highdim(vptree_cls, exaustive_metric):
-    np.random.seed(seed=42)
-
     dimension = 16
     num_points = 401001
     data = np.random.rand(num_points, dimension).astype(dtype=np.float32)
@@ -266,8 +258,6 @@ def test_dataset_split_less_than_k(vptree_cls, exaustive_metric):
 
 @pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
 def test_query_larger_than_dataset(vptree_cls, exaustive_metric):
-    np.random.seed(seed=42)
-
     num_points = 5
     dimension = 8
     data = np.random.rand(num_points, dimension).astype(dtype=np.float32)
@@ -292,8 +282,6 @@ def test_query_larger_than_dataset(vptree_cls, exaustive_metric):
 
 @pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
 def test_compare_with_exaustive_knn(vptree_cls, exaustive_metric):
-    np.random.seed(seed=42)
-
     num_points = 21231
     dimension = 8
     data = np.random.rand(num_points, dimension).astype(dtype=np.float32)
@@ -318,8 +306,6 @@ def test_compare_with_exaustive_knn(vptree_cls, exaustive_metric):
 
 @pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
 def test_compare_with_exaustive_1nn(vptree_cls, exaustive_metric):
-    np.random.seed(seed=42)
-
     num_points = 21231
     dimension = 8
     data = np.random.rand(num_points, dimension).astype(dtype=np.float32)

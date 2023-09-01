@@ -30,8 +30,6 @@ def test_empty_index_serialization():
 
 
 def test_basic_serialization():
-    np.random.seed(seed=42)
-
     num_points = 10
     dimension = 8
     num_queries = 2
@@ -55,8 +53,6 @@ def test_basic_serialization():
 
 
 def test_string_serialization():
-    np.random.seed(seed=42)
-
     num_points = 27
     dimension = 8
     data = np.random.rand(num_points, dimension).astype(dtype=np.float32)
@@ -75,8 +71,6 @@ def test_string_serialization():
 
 
 def test_binary_serialization():
-    np.random.seed(seed=42)
-
     num_points = 20000
     dimension = 32
     num_queries = 2
