@@ -185,10 +185,10 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         results.resize(queries.size());
 
 #if (ENABLE_OMP_PARALLEL)
-#pragma omp parallel for schedule(static, 1)
+#pragma omp parallel for schedule(static, 1) if (queries.size() > 1)
 #endif
         // i should be size_t, however msvc requires signed integral loop variables (except with -openmp:llvm)
-        for (int i = 0; i < queries.size(); ++i) {
+        for (int i = 0; i < static_cast<int>(queries.size()); ++i) {
             const T &query = queries[i];
             std::priority_queue<VPTreeSearchElement> knnQueue;
             searchKNN(_rootPartition, query, k, knnQueue);
@@ -212,10 +212,10 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         distances.resize(queries.size());
 
 #if (ENABLE_OMP_PARALLEL)
-#pragma omp parallel for schedule(static, 1)
+#pragma omp parallel for schedule(static, 1) if (queries.size() > 1)
 #endif
         // i should be size_t, see above
-        for (int i = 0; i < queries.size(); ++i) {
+        for (int i = 0; i < static_cast<int>(queries.size()); ++i) {
             const T &query = queries[i];
             distance_type dist = 0;
             int64_t index = -1;
