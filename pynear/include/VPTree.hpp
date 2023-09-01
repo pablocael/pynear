@@ -22,8 +22,6 @@
 
 #include "VPLevelPartition.hpp"
 
-#define ENABLE_OMP_PARALLEL 1
-
 namespace vptree {
 
 template <typename T, typename distance_type, distance_type (*distance)(const T &, const T &)> class VPTree {

@@ -22,6 +22,7 @@ ext_modules = [
         cxx_std=17,
         extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
+        define_macros=[("ENABLE_OMP_PARALLEL", "1")],
     ),
 ]
 
