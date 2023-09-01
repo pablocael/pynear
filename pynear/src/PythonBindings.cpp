@@ -16,10 +16,10 @@
 #include <vector>
 
 #include <BKTree.hpp>
+#include <BuiltinSerializers.hpp>
 #include <DistanceFunctions.hpp>
 #include <ISerializable.hpp>
 #include <SerializableVPTree.hpp>
-#include <BuiltinSerializers.hpp>
 
 namespace py = pybind11;
 

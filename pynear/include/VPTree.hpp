@@ -71,7 +71,7 @@ public:
 
     VPTree(const std::vector<T> &array) { set(array); }
 
-    void set(const std::vector<T> &array) { 
+    void set(const std::vector<T> &array) {
         clear();
 
         if (array.empty()) {
