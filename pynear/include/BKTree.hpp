@@ -121,7 +121,7 @@ template <typename key_t, typename distance_t, typename metric> class BKTree {
         std::vector<std::vector<key_t>> keys_out(keys.size());
 
 #if (ENABLE_OMP_PARALLEL)
-#pragma omp parallel for schedule(static, 1)
+#pragma omp parallel for schedule(static, 1) if (keys.size() > 1)
 #endif
         // i should be size_t, however msvc requires signed integral loop variables (except with -openmp:llvm)
         for (int i = 0; i < static_cast<int>(keys.size()); ++i) {
