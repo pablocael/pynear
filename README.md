@@ -105,6 +105,12 @@ To visualize, customize or regenerate the benchmarks as well as to see benchmark
 
 # Development
 
+# Building and installing localy
+
+```
+pip install .
+```
+
 
 ## Running Python Tests
 
