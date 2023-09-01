@@ -36,8 +36,8 @@ class SerializableVPTree : public VPTree<T, distance_type, distance>, public ISe
      */
 public:
     SerializableVPTree() : VPTree<T, distance_type, distance>(){};
-    SerializableVPTree(std::vector<T> &&examples) : VPTree<T, distance_type, distance>(std::move(examples)) {}
-    SerializableVPTree(std::vector<T> &examples) : VPTree<T, distance_type, distance>(examples) {}
+    SerializableVPTree(std::vector<T> &&examples) : VPTree<T, distance_type, distance>(examples) {}
+    SerializableVPTree(const std::vector<T> &examples) : VPTree<T, distance_type, distance>(examples) {}
     SerializableVPTree(const SerializableVPTree<T, distance_type, distance, serializer, deserializer> &other)
         : VPTree<T, distance_type, distance>(other) {}
 
