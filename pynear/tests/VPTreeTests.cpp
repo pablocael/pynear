@@ -212,8 +212,8 @@ TEST(VPTests, TestCopySerializableVPTree) {
         point[2] = distribution(generator);
     }
 
-    SerializableVPTree<std::vector<float>, float, distanceVector3, vptree::ndarraySerializer, vptree::ndarrayDeserializer> tree2;
-    SerializableVPTree<std::vector<float>, float, distanceVector3, vptree::ndarraySerializer, vptree::ndarrayDeserializer> tree(points);
+    SerializableVPTree<std::vector<float>, float, distanceVector3, vptree::ndarraySerializer<float>, vptree::ndarrayDeserializer<float>> tree2;
+    SerializableVPTree<std::vector<float>, float, distanceVector3, vptree::ndarraySerializer<float>, vptree::ndarrayDeserializer<float>> tree(points);
     tree2 = tree;
 
     std::vector<std::vector<float>> queries;
