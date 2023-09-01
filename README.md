@@ -8,7 +8,7 @@ PyNear aims providing different efficient algorithms for nearest neighbor search
 # Installation
 
 ```console
-pip install .
+pip install pynear
 ```
 
 Performance can dramatically decrease if this library is compiled without support to Open MP and AVX. This library was not tested under windows.
@@ -104,6 +104,12 @@ Notice that this output can be very large.
 To visualize, customize or regenerate the benchmarks as well as to see benchmark results, see [benchmarks](./pynear/benchmark/README.md) session.
 
 # Development
+
+# Building and installing localy
+
+```
+pip install .
+```
 
 
 ## Running Python Tests

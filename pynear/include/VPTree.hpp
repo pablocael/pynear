@@ -39,10 +39,7 @@ public:
         std::vector<distance_type> distances;
     };
 
-    VPTree() {
-        _rootPartition = nullptr;
-        _examples.clear();
-    }
+    VPTree() {}
 
     VPTree(const VPTree<T, distance_type, distance> &other) {
         _examples = other._examples;
@@ -74,21 +71,27 @@ public:
 
     VPTree(const std::vector<T> &array) { set(array); }
 
-    void set(const std::vector<T> &array) { set(std::move(array)); }
-
-    void set(const std::vector<T> &&array) {
+    void set(const std::vector<T> &array) { 
         clear();
 
         if (array.empty()) {
             return;
         }
 
+        // copy without move
         _examples = array;
-        _indices.resize(_examples.size());
+        build(_examples);
+    }
 
-        // initialize indices sequentially
-        std::iota(_indices.begin(), _indices.end(), 0);
+    void set(std::vector<T> &&array) {
+        clear();
 
+        if (array.empty()) {
+            return;
+        }
+
+        // copy with move
+        _examples = array;
         build(_examples);
     }
 
@@ -112,10 +115,10 @@ public:
         results.resize(queries.size());
 
 #if (ENABLE_OMP_PARALLEL)
-#pragma omp parallel for schedule(static, 1)
+#pragma omp parallel for schedule(static, 1) if (queries.size() > 1)
 #endif
         // i should be size_t, however msvc requires signed integral loop variables (except with -openmp:llvm)
-        for (int i = 0; i < queries.size(); ++i) {
+        for (int i = 0; i < static_cast<int>(queries.size()); ++i) {
             const T &query = queries[i];
             std::priority_queue<VPTreeSearchElement> knnQueue;
             searchKNN(_rootPartition, query, k, knnQueue);
@@ -139,10 +142,10 @@ public:
         distances.resize(queries.size());
 
 #if (ENABLE_OMP_PARALLEL)
-#pragma omp parallel for schedule(static, 1)
+#pragma omp parallel for schedule(static, 1) if (queries.size() > 1)
 #endif
         // i should be size_t, see above
-        for (int i = 0; i < queries.size(); ++i) {
+        for (int i = 0; i < static_cast<int>(queries.size()); ++i) {
             const T &query = queries[i];
             distance_type dist = 0;
             int64_t index = -1;
@@ -180,6 +183,11 @@ protected:
      *  using the given metric distance.
      */
     void build(const std::vector<T> &array) {
+
+        _indices.resize(_examples.size());
+
+        // initialize indices sequentially
+        std::iota(_indices.begin(), _indices.end(), 0);
 
         // Select vantage point
         std::vector<VPLevelPartition<distance_type> *> _toSplit;

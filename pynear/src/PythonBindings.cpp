@@ -146,18 +146,23 @@ public:
 
 template <distance_func_li distance> class BKTreeBinaryNumpyAdapter {
 public:
-    BKTree<arrayli, int64_t, HammingMetric<distance>> tree;
+    typedef arrayli key_t;
+    typedef int64_t distance_t;
+
+    BKTree<arrayli, distance_t, HammingMetric<distance>> tree;
 
     BKTreeBinaryNumpyAdapter() = default;
 
-    void set(const ndarrayli &array) { tree.update(array); }
+    void set(const std::vector<key_t> &array) { tree.update(array); }
 
-    std::tuple<std::vector<std::vector<int64_t>>, std::vector<ndarrayli>> find_threshold(const ndarrayli &queries, int64_t threshold) {
+    std::tuple<std::vector<std::vector<index_t>>, std::vector<std::vector<distance_t>>, std::vector<std::vector<key_t>>>
+    find_threshold(const std::vector<key_t> &queries, distance_t threshold) {
         return tree.find_batch(queries, threshold);
     }
 
     bool empty() { return tree.empty(); }
-    ndarrayli values() { return tree.values(); }
+    size_t size() { return tree.size(); }
+    std::vector<key_t> values() { return tree.values(); }
 };
 
 static const char *index_set = "Add vectors to index";
@@ -238,6 +243,7 @@ PYBIND11_MODULE(_pynear, m) {
         .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming_512>::find_threshold, index_find_threshold, py::arg("vectors"),
              py::arg("threshold"))
         .def("empty", &BKTreeBinaryNumpyAdapter<dist_hamming_512>::empty)
+        .def("size", &BKTreeBinaryNumpyAdapter<dist_hamming_512>::size)
         .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming_512>::values, index_values);
 
     py::class_<BKTreeBinaryNumpyAdapter<dist_hamming_256>>(m, "BKTreeBinaryIndex256")
@@ -246,6 +252,7 @@ PYBIND11_MODULE(_pynear, m) {
         .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming_256>::find_threshold, index_find_threshold, py::arg("vectors"),
              py::arg("threshold"))
         .def("empty", &BKTreeBinaryNumpyAdapter<dist_hamming_256>::empty)
+        .def("size", &BKTreeBinaryNumpyAdapter<dist_hamming_256>::size)
         .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming_256>::values, index_values);
 
     py::class_<BKTreeBinaryNumpyAdapter<dist_hamming_128>>(m, "BKTreeBinaryIndex128")
@@ -254,6 +261,7 @@ PYBIND11_MODULE(_pynear, m) {
         .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming_128>::find_threshold, index_find_threshold, py::arg("vectors"),
              py::arg("threshold"))
         .def("empty", &BKTreeBinaryNumpyAdapter<dist_hamming_128>::empty)
+        .def("size", &BKTreeBinaryNumpyAdapter<dist_hamming_128>::size)
         .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming_128>::values, index_values);
 
     py::class_<BKTreeBinaryNumpyAdapter<dist_hamming_64>>(m, "BKTreeBinaryIndex64")
@@ -262,6 +270,7 @@ PYBIND11_MODULE(_pynear, m) {
         .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming_64>::find_threshold, index_find_threshold, py::arg("vectors"),
              py::arg("threshold"))
         .def("empty", &BKTreeBinaryNumpyAdapter<dist_hamming_64>::empty)
+        .def("size", &BKTreeBinaryNumpyAdapter<dist_hamming_64>::size)
         .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming_64>::values, index_values);
 
     py::class_<BKTreeBinaryNumpyAdapter<dist_hamming>>(m, "BKTreeBinaryIndex")
@@ -270,5 +279,6 @@ PYBIND11_MODULE(_pynear, m) {
         .def("find_threshold", &BKTreeBinaryNumpyAdapter<dist_hamming>::find_threshold, index_find_threshold, py::arg("vectors"),
              py::arg("threshold"))
         .def("empty", &BKTreeBinaryNumpyAdapter<dist_hamming>::empty)
+        .def("size", &BKTreeBinaryNumpyAdapter<dist_hamming>::size)
         .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming>::values, index_values);
 };
