@@ -6,12 +6,12 @@
 
 #include <Eigen/Core>
 #include <chrono>
+#include <exception>
 #include <iostream>
 #include <random>
 #include <sstream>
-#include <vector>
-#include <exception>
 #include <stdint.h>
+#include <vector>
 
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -122,7 +122,6 @@ TEST(VPTests, TestEmpty) {
     VPTree<Eigen::Vector3d, float, distance> nonEmpty;
     nonEmpty.set(queries);
     EXPECT_NO_THROW(nonEmpty.search1NN(queries, indices, distances));
-
 }
 
 TEST(VPTests, TestToString) {
