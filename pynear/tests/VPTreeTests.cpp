@@ -1,21 +1,22 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
+#include <BuiltinSerializers.hpp>
+#include <DistanceFunctions.hpp>
 #include <MathUtils.hpp>
-#include <VPTree.hpp>
 #include <SerializableVPTree.hpp>
 #include <SerializedStateObject.hpp>
-#include <BuiltinSerializers.hpp>
+#include <VPTree.hpp>
 
 #include <Eigen/Core>
 #include <chrono>
+#include <cmath>
+#include <exception>
 #include <iostream>
 #include <random>
 #include <sstream>
-#include <vector>
-#include <cmath>
-#include <exception>
 #include <stdint.h>
+#include <vector>
 
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -26,9 +27,9 @@
 using namespace testing;
 
 float distance(const Eigen::Vector3d &v1, const Eigen::Vector3d &v2) { return (v2 - v1).norm(); }
-float distanceVector3(const std::vector<float> &v1, const std::vector<float> &v2) { 
+float distanceVector3(const std::vector<float> &v1, const std::vector<float> &v2) {
     double d = 0;
-    for(int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 3; ++i) {
         d += (v2[i] - v1[i]) * (v2[i] - v1[i]);
     }
     return std::sqrt(d);
@@ -45,18 +46,6 @@ float distanceVector3(const std::vector<float> &v1, const std::vector<float> &v2
 /*     return  cnt; */
 /* } */
 
-int64_t dist_hamming(const std::vector<unsigned char> &p1, const std::vector<unsigned char> &p2) {
-
-    // assume v1 and v2 sizes are multiple of 8
-    // assume 32 bytes for now
-    int64_t result = 0;
-    const uint64_t *a = (reinterpret_cast<const uint64_t *>(&p1[0]));
-    const uint64_t *b = (reinterpret_cast<const uint64_t *>(&p2[0]));
-    for (int i = 0; i < p1.size() / sizeof(uint64_t); i++) {
-        result += _mm_popcnt_u64(a[i] ^ b[i]);
-    }
-    return result;
-}
 
 namespace vptree::tests {
 TEST(VPTests, TestHamming) {
@@ -133,7 +122,6 @@ TEST(VPTests, TestEmpty) {
     VPTree<Eigen::Vector3d, float, distance> nonEmpty;
     nonEmpty.set(queries);
     EXPECT_NO_THROW(nonEmpty.search1NN(queries, indices, distances));
-
 }
 
 TEST(VPTests, TestToString) {
@@ -286,17 +274,19 @@ TEST(VPTests, TestSerialization) {
 TEST(VPTests, TestSerializedStateObject) {
     SerializedStateObject state;
 
-    struct TestStruct
-    { int a; int b; };
+    struct TestStruct {
+        int a;
+        int b;
+    };
 
     SerializedStateObjectWriter writer(state);
     writer.write(1);
     writer.write<std::string>(std::string("my string"));
-    writer.write<TestStruct>({ 1, 2 });
+    writer.write<TestStruct>({1, 2});
 
     std::vector<int64_t> testVector;
     testVector.resize(201);
-    for(int i = 0; i < testVector.size(); ++i) {
+    for (int i = 0; i < testVector.size(); ++i) {
         testVector[i] = i;
     }
 
@@ -368,5 +358,38 @@ TEST(VPTests, TestSearch) {
     tree.search1NN(queries, indices, distances);
     end = std::chrono::steady_clock::now();
     diff = end - start;
+}
+
+TEST(VPTests, TestCornerCasesL1) {
+
+    std::vector<arrayf> points = {
+          {0.24747044, 0.10977995, 0.04395789, 0.37588218, 0.77715296, 0.38436773, 0.27868968, 0.44355425},
+          {0.40908694, 0.07170244, 0.76541245, 0.10503417, 0.48107386, 0.7900539, 0.93293387, 0.582928},
+          {0.34634387, 0.5111964, 0.69529665, 0.24239564, 0.14328131, 0.49494576, 0.81964535, 0.8323013},
+          {0.40923303, 0.9071538, 0.04779731, 0.4205647, 0.9884444, 0.6205023, 0.29096323, 0.29838845},
+          {0.7317226, 0.7195254, 0.15990016, 0.69135946, 0.8254121, 0.20821702, 0.90294975, 0.02925209}
+    };
+    std::vector<arrayf> queries = {
+        {0.5299074, 0.6855958, 0.42676213, 0.69523215, 0.4685414, 0.0975867, 0.8515448, 0.2583308}
+        /* {0.70882237 0.00969914 0.7337773  0.14389992 0.7006041  0.187069760.72513705 0.4052477 } */
+        /* {0.9641739  0.0330751  0.49499482 0.32284376 0.2969801  0.350194220.02012024 0.7615032 } */
+        /* {0.44070253 0.62186664 0.81927806 0.06221519 0.36935103 0.180103450.6288583  0.20059796} */
+        /* {0.3955885  0.7678838  0.83378315 0.69156003 0.90867287 0.78383080.84307    0.71617246} */
+        /* {0.5463595  0.15017477 0.51484144 0.46845767 0.46476486 0.5259280.83734906 0.9041701 } */
+        /* {0.80386406 0.55020994 0.24351802 0.7608507  0.00175726 0.592161830.1336592  0.28955624}, */
+        /* {0.5031839  0.09765117 0.4252744  0.9478887  0.02622282 0.354896220.00149701 0.01623238} */
+    };
+
+    std::vector<arrayf> expectedDistances = {{0.55482084, 0.9671766, 1.0687857},
+                                             {0.7633677, 0.9953769, 0.9990481},
+                                             {1.0608857, 1.160058, 0.9814076},
+                                             {1.1750504, 1.1985078, 1.2158847},
+                                             {1.1671909, 1.4311509, 1.4611306}};
+    std::vector<std::vector<int64_t>> expectedIndices = {{4, 2, 3}, {1, 2, 0}, {0, 2, 1}, {2, 1, 4}, {2, 1, 3}, {2, 1, 0}, {0, 3, 2}, {0, 4, 2}};
+
+    std::vector<vptree::VPTree<arrayf, float, dist_l1_f_avx2>::VPTreeSearchResultElement> results;
+    vptree::SerializableVPTree<arrayf, float, dist_l1_f_avx2, vptree::ndarraySerializer<float>, vptree::ndarrayDeserializer<float>> tree;
+    tree.set(points);
+    tree.searchKNN(queries, 3, results);
 }
 } // namespace vptree::tests

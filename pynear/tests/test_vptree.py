@@ -3,6 +3,8 @@
 # Copyright 2021 Pablo Carneiro Elias
 #
 
+import os
+import sys
 from collections import Counter
 from functools import partial
 from typing import Callable
@@ -13,6 +15,12 @@ import pytest
 
 import pynear
 
+seed = os.environ.get("PYNEAR_TEST_SEED", None)
+if seed is not None:
+    np.random.seed(int(seed))
+    print(f"using test seed: {seed}")
+
+np.set_printoptions(threshold=sys.maxsize)
 
 def hamming_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     r = (1 << np.arange(8))[:, None, None, None]
@@ -261,9 +269,11 @@ def test_query_larger_than_dataset(vptree_cls, exaustive_metric):
     num_points = 5
     dimension = 8
     data = np.random.rand(num_points, dimension).astype(dtype=np.float32)
+    print(f"data: {data}")
 
     num_queries = 8
     queries = np.random.rand(num_queries, dimension).astype(dtype=np.float32)
+    print(f"queries: {queries}")
 
     k = 3
 
