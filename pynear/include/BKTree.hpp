@@ -5,13 +5,13 @@
 typedef int64_t index_t;
 
 template <typename key_t, typename distance_t> class Metric {
-    public:
+public:
     static distance_t distance(const key_t &a, const key_t &b);
     static std::optional<distance_t> threshold_distance(const key_t &a, const key_t &b, distance_t threshold);
 };
 
 template <typename key_t, typename distance_t> class BKNode {
-    public:
+public:
     key_t key;
     index_t index;
     std::map<distance_t, BKNode<key_t, distance_t> *> leaves;
@@ -38,7 +38,7 @@ template <typename key_t, typename distance_t, typename metric> class BKTree {
     BKNode<key_t, distance_t> *root;
     size_t index;
 
-    public:
+public:
     BKTree() : root(nullptr), index(0) {}
 
     void add(key_t key) {

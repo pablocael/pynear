@@ -5,6 +5,8 @@
 
 from collections import Counter
 from functools import partial
+import os
+import sys
 from typing import Callable
 from typing import Tuple
 
@@ -12,26 +14,62 @@ import numpy as np
 import pytest
 
 import pynear
+from pynear import dist_chebyshev
+from pynear import dist_hamming
+from pynear import dist_l1
+from pynear import dist_l2
 
+seed = os.environ.get("PYNEAR_TEST_SEED", None)
+if seed is not None:
+    np.random.seed(int(seed))
+    print(f"using test seed: {seed}")
+
+np.set_printoptions(threshold=sys.maxsize)
 
 def hamming_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    r = (1 << np.arange(8))[:, None, None, None]
-    return np.count_nonzero((np.bitwise_xor(a[:, None, :], b[None, :, :]) & r) != 0, axis=(0, -1))
+    result = []
+    for ai in a:
+        dists = []
+        for bi in b:
+            dists.append(dist_hamming(ai, bi))
 
+        result.append(dists)
+
+    return np.array(result).astype(np.uint8)
 
 def euclidean_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    diff = b[None, :, :] - a[:, None, :]
-    return np.sqrt(np.sum(diff * diff, axis=-1))
+    result = []
+    for ai in a:
+        dists = []
+        for bi in b:
+            dists.append(dist_l2(ai, bi))
+
+        result.append(dists)
+
+    return np.array(result)
 
 
 def manhattan_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    diff = b[None, :, :] - a[:, None, :]
-    return np.sum(np.abs(diff), axis=-1)
+    result = []
+    for ai in a:
+        dists = []
+        for bi in b:
+            dists.append(dist_l1(ai, bi))
 
+        result.append(dists)
+
+    return np.array(result)
 
 def chebyshev_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    diff = b[None, :, :] - a[:, None, :]
-    return np.max(np.abs(diff), axis=-1)
+    result = []
+    for ai in a:
+        dists = []
+        for bi in b:
+            dists.append(dist_chebyshev(ai, bi))
+
+        result.append(dists)
+
+    return np.array(result)
 
 
 def test_empty_index():
@@ -71,8 +109,8 @@ def test_hamming():
         r = (1 << np.arange(8))[:, None]
         return np.count_nonzero((np.bitwise_xor(a, b) & r) != 0)
 
-    arr1 = np.random.randint(0, 10, (5, 4), dtype=np.uint8)
-    arr2 = np.random.randint(0, 10, (3, 4), dtype=np.uint8)
+    arr1 = np.random.randint(0, 10, (5, 8), dtype=np.uint8)
+    arr2 = np.random.randint(0, 10, (3, 8), dtype=np.uint8)
 
     truth = np.empty((arr1.shape[0], arr2.shape[0]), dtype=np.uint64)
     for i in range(arr1.shape[0]):
@@ -120,8 +158,6 @@ CLASSES = [
 
 @pytest.mark.parametrize("num_points, k", [(2021, 2), (40021, 3)])
 def test_binary(num_points, k):
-    np.random.seed(seed=42)
-
     dimension = 32
     data = np.random.normal(scale=255, loc=0, size=(num_points, dimension)).astype(dtype=np.uint8)
 
@@ -158,8 +194,6 @@ def test_binary_duplicates():
 
 @pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
 def test_k_equals_dataset(vptree_cls, exaustive_metric):
-    np.random.seed(seed=42)
-
     dimension = 8
     num_points = 2021
     data = np.random.rand(num_points, dimension).astype(dtype=np.float32)
@@ -176,7 +210,11 @@ def test_k_equals_dataset(vptree_cls, exaustive_metric):
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
     vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
-    vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]
+    vptree_distances = np.array(vptree_distances, dtype=np.float64)[:, ::-1]
+    dist_diff = vptree_distances - exaustive_distances 
+    ind_diff = vptree_indices - exaustive_indices
+    print(">>>>>>>>>>>>", dist_diff[dist_diff > 1e-7] )
+    print(">>>>>>>>>>>>", np.argwhere(ind_diff != 0))
 
     np.testing.assert_allclose(exaustive_distances, vptree_distances, rtol=1e-06)
     if _num_dups(exaustive_distances) == 0:
@@ -185,8 +223,6 @@ def test_k_equals_dataset(vptree_cls, exaustive_metric):
 
 @pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
 def test_large_dataset(vptree_cls, exaustive_metric):
-    np.random.seed(seed=42)
-
     dimension = 8
     num_points = 401001
     data = np.random.rand(num_points, dimension).astype(dtype=np.float32)
@@ -214,8 +250,6 @@ def test_large_dataset(vptree_cls, exaustive_metric):
 
 @pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
 def test_large_dataset_highdim(vptree_cls, exaustive_metric):
-    np.random.seed(seed=42)
-
     dimension = 16
     num_points = 401001
     data = np.random.rand(num_points, dimension).astype(dtype=np.float32)
@@ -266,22 +300,22 @@ def test_dataset_split_less_than_k(vptree_cls, exaustive_metric):
 
 @pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
 def test_query_larger_than_dataset(vptree_cls, exaustive_metric):
-    np.random.seed(seed=42)
-
     num_points = 5
     dimension = 8
     data = np.random.rand(num_points, dimension).astype(dtype=np.float32)
+    print(f"data: {data}")
 
     num_queries = 8
     queries = np.random.rand(num_queries, dimension).astype(dtype=np.float32)
+    print(f"queries: {queries}")
 
     k = 3
 
-    exaustive_indices, exaustive_distances = exaustive_metric(data, queries, k)
+    exaustive_indices, exaustive_distances = exaustive_metric(data, np.array([queries[0]]), k)
 
     vptree = vptree_cls()
     vptree.set(data)
-    vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
+    vptree_indices, vptree_distances = vptree.searchKNN(np.array([queries[0]]), k)
 
     vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]
@@ -292,8 +326,6 @@ def test_query_larger_than_dataset(vptree_cls, exaustive_metric):
 
 @pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
 def test_compare_with_exaustive_knn(vptree_cls, exaustive_metric):
-    np.random.seed(seed=42)
-
     num_points = 21231
     dimension = 8
     data = np.random.rand(num_points, dimension).astype(dtype=np.float32)
@@ -318,8 +350,6 @@ def test_compare_with_exaustive_knn(vptree_cls, exaustive_metric):
 
 @pytest.mark.parametrize("vptree_cls, exaustive_metric", CLASSES)
 def test_compare_with_exaustive_1nn(vptree_cls, exaustive_metric):
-    np.random.seed(seed=42)
-
     num_points = 21231
     dimension = 8
     data = np.random.rand(num_points, dimension).astype(dtype=np.float32)

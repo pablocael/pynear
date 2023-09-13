@@ -14,7 +14,7 @@ namespace py = pybind11;
 
 class BindingUtils {
 
-    public:
+public:
     template <class T, int... Dims> static py::array_t<T> bufferToNumpyNdArray(T *buffer) {
         /*
          *  :param buffer: this buffer will be destroyed automatically so this

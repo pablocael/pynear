@@ -62,7 +62,7 @@ def test_bktree_find_all(bktree_cls, dimensions):
 
     tree = bktree_cls()
     tree.set(data)
-    indices, distances, keys = tree.find_threshold(data, 255)
+    indices, distances, keys = tree.find_threshold(data, dimensions * 8)
 
     assert indices == [list(range(num_points))] * num_points
     assert distances == hamming_distance_pairwise(data, data).tolist()

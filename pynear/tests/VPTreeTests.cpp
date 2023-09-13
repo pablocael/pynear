@@ -1,11 +1,16 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
+#include <BuiltinSerializers.hpp>
+#include <DistanceFunctions.hpp>
 #include <MathUtils.hpp>
+#include <SerializableVPTree.hpp>
+#include <SerializedStateObject.hpp>
 #include <VPTree.hpp>
 
 #include <Eigen/Core>
 #include <chrono>
+#include <cmath>
 #include <exception>
 #include <iostream>
 #include <random>
@@ -22,6 +27,13 @@
 using namespace testing;
 
 float distance(const Eigen::Vector3d &v1, const Eigen::Vector3d &v2) { return (v2 - v1).norm(); }
+float distanceVector3(const std::vector<float> &v1, const std::vector<float> &v2) {
+    double d = 0;
+    for (int i = 0; i < 3; ++i) {
+        d += (v2[i] - v1[i]) * (v2[i] - v1[i]);
+    }
+    return std::sqrt(d);
+}
 
 /* inline uint_fast8_t popcnt_u128(__uint128_t n) */
 /* { */
@@ -34,18 +46,6 @@ float distance(const Eigen::Vector3d &v1, const Eigen::Vector3d &v2) { return (v
 /*     return  cnt; */
 /* } */
 
-int64_t dist_hamming(const std::vector<unsigned char> &p1, const std::vector<unsigned char> &p2) {
-
-    // assume v1 and v2 sizes are multiple of 8
-    // assume 32 bytes for now
-    int64_t result = 0;
-    const uint64_t *a = (reinterpret_cast<const uint64_t *>(&p1[0]));
-    const uint64_t *b = (reinterpret_cast<const uint64_t *>(&p2[0]));
-    for (int i = 0; i < p1.size() / sizeof(uint64_t); i++) {
-        result += _mm_popcnt_u64(a[i] ^ b[i]);
-    }
-    return result;
-}
 
 namespace vptree::tests {
 TEST(VPTests, TestHamming) {
@@ -144,7 +144,7 @@ TEST(VPTests, TestToString) {
     ss << tree;
 }
 
-TEST(VPTests, TestCopy) {
+TEST(VPTests, TestCopyVPTree) {
     std::default_random_engine generator;
     std::uniform_real_distribution<float> distribution(-10, 10);
 
@@ -185,29 +185,29 @@ TEST(VPTests, TestCopy) {
     }
 }
 
-TEST(VPTests, TestSerialization) {
-
+TEST(VPTests, TestCopySerializableVPTree) {
     std::default_random_engine generator;
     std::uniform_real_distribution<float> distribution(-10, 10);
 
     const unsigned int numPoints = 14001;
-    std::vector<Eigen::Vector3d> points;
+    std::vector<std::vector<float>> points;
     points.reserve(numPoints);
     points.resize(numPoints);
-    for (Eigen::Vector3d &point : points) {
+    for (auto &point : points) {
+        point.resize(3);
         point[0] = distribution(generator);
         point[1] = distribution(generator);
         point[2] = distribution(generator);
     }
 
-    VPTree<Eigen::Vector3d, float, distance> tree2;
-    VPTree<Eigen::Vector3d, float, distance> tree(points);
-    auto state = tree.serialize();
-    tree2.deserialize(state);
+    SerializableVPTree<std::vector<float>, float, distanceVector3, vptree::ndarraySerializer<float>, vptree::ndarrayDeserializer<float>> tree2;
+    SerializableVPTree<std::vector<float>, float, distanceVector3, vptree::ndarraySerializer<float>, vptree::ndarrayDeserializer<float>> tree(points);
+    tree2 = tree;
 
-    std::vector<Eigen::Vector3d> queries;
+    std::vector<std::vector<float>> queries;
     queries.resize(100);
-    for (Eigen::Vector3d &point : queries) {
+    for (auto &point : queries) {
+        point.resize(3);
         point[0] = distribution(generator);
         point[1] = distribution(generator);
         point[2] = distribution(generator);
@@ -225,6 +225,83 @@ TEST(VPTests, TestSerialization) {
         EXPECT_EQ(indices[i], indices2[i]) << "Vectors x and y differ at index " << i;
         EXPECT_EQ(distances[i], distances2[i]) << "Vectors x and y differ at distance " << i;
     }
+}
+
+TEST(VPTests, TestSerialization) {
+
+    std::default_random_engine generator;
+    std::uniform_real_distribution<float> distribution(-10, 10);
+
+    const unsigned int numPoints = 14001;
+    std::vector<std::vector<float>> points;
+    points.reserve(numPoints);
+    points.resize(numPoints);
+    for (auto &point : points) {
+        point.resize(3);
+        point[0] = distribution(generator);
+        point[1] = distribution(generator);
+        point[2] = distribution(generator);
+    }
+
+    SerializableVPTree<std::vector<float>, float, distanceVector3, vptree::ndarraySerializer<float>, vptree::ndarrayDeserializer<float>> tree2;
+    SerializableVPTree<std::vector<float>, float, distanceVector3, vptree::ndarraySerializer<float>, vptree::ndarrayDeserializer<float>> tree(points);
+    auto state = tree.serialize();
+    tree2.deserialize(state);
+
+    std::vector<std::vector<float>> queries;
+    queries.resize(100);
+    for (auto &point : queries) {
+        point.resize(3);
+        point[0] = distribution(generator);
+        point[1] = distribution(generator);
+        point[2] = distribution(generator);
+    }
+
+    std::vector<int64_t> indices;
+    std::vector<float> distances;
+    std::vector<int64_t> indices2;
+    std::vector<float> distances2;
+    tree.search1NN(queries, indices, distances);
+    tree2.search1NN(queries, indices2, distances2);
+
+    EXPECT_EQ(indices.size(), indices2.size());
+    for (int i = 0; i < indices.size(); ++i) {
+        EXPECT_EQ(indices[i], indices2[i]) << "Vectors x and y differ at index " << i;
+        EXPECT_EQ(distances[i], distances2[i]) << "Vectors x and y differ at distance " << i;
+    }
+}
+
+TEST(VPTests, TestSerializedStateObject) {
+    SerializedStateObject state;
+
+    struct TestStruct {
+        int a;
+        int b;
+    };
+
+    SerializedStateObjectWriter writer(state);
+    writer.write(1);
+    writer.write<std::string>(std::string("my string"));
+    writer.write<TestStruct>({1, 2});
+
+    std::vector<int64_t> testVector;
+    testVector.resize(201);
+    for (int i = 0; i < testVector.size(); ++i) {
+        testVector[i] = i;
+    }
+
+    writer.writeUserVector<int64_t, vptree::vectorSerializer>(testVector);
+
+    SerializedStateObjectReader reader(state);
+    EXPECT_EQ(reader.read<int>(), 1);
+    EXPECT_EQ(reader.read<std::string>(), "my string");
+
+    auto stct = reader.read<TestStruct>();
+    EXPECT_EQ(stct.a, 1);
+    EXPECT_EQ(stct.b, 2);
+
+    std::vector<int64_t> recoveredVector = reader.readUserVector<int64_t, vptree::vectorDeserializer>();
+    EXPECT_EQ(recoveredVector.size(), 201);
 }
 
 TEST(VPTests, TestCreation) {
@@ -282,4 +359,5 @@ TEST(VPTests, TestSearch) {
     end = std::chrono::steady_clock::now();
     diff = end - start;
 }
+
 } // namespace vptree::tests

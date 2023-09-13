@@ -12,6 +12,7 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <omp.h>
 #include <queue>
 #include <sstream>
@@ -19,43 +20,46 @@
 #include <utility>
 #include <vector>
 
-#include "ISerializable.hpp"
 #include "VPLevelPartition.hpp"
 
 namespace vptree {
 
-template <typename T, typename distance_type, distance_type (*distance)(const T &, const T &)> class VPTree : public ISerializable {
-    public:
-    struct VPTreeElement {
-
-        VPTreeElement() = default;
-        VPTreeElement(int64_t index, const T &value) {
-            originalIndex = index;
-            val = value;
-        }
-
-        int64_t originalIndex;
-        T val;
-    };
-
+template <typename T, typename distance_type, distance_type (*distance)(const T &, const T &)> class VPTree {
+    /*
+     * Template arguments:
+     * - T: a custom user type that will compose the VPTree element. Distance function must input this type.
+     * - distance_type: the numeric type for the distance value retrieved by distance function when
+     * - distance: a function pointer of a distance operator that will measure the distance between two objects
+     *   of type T.
+     *   measuring ddistances between two objects of type T.
+     */
+public:
     struct VPTreeSearchResultElement {
         std::vector<int64_t> indexes;
         std::vector<distance_type> distances;
     };
 
-    VPTree() {
-        _rootPartition = nullptr;
-        _examples.clear();
-    }
+    VPTree() {}
 
     VPTree(const VPTree<T, distance_type, distance> &other) {
-        auto other_state = other.serialize();
-        deserialize(other_state);
+        _examples = other._examples;
+        _indices = other._indices;
+        if (other._rootPartition != nullptr) {
+            _rootPartition = other._rootPartition->deepcopy();
+        }
     }
 
-    const VPTree<T, distance_type, distance> &operator=(const VPTree<T, distance_type, distance> &other) { this->deserialize(other.serialize()); }
+    const VPTree<T, distance_type, distance> &operator=(const VPTree<T, distance_type, distance> &other) {
+        _examples = other._examples;
+        _indices = other._indices;
+        if (other._rootPartition != nullptr) {
+            _rootPartition = other._rootPartition->deepcopy();
+        }
 
-    ~VPTree() { clear(); };
+        return *this;
+    }
+
+    virtual ~VPTree() { clear(); };
 
     void clear() {
         if (_rootPartition != nullptr) {
@@ -74,12 +78,20 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             return;
         }
 
-        _examples.reserve(array.size());
-        _examples.resize(array.size());
-        for (size_t i = 0; i < array.size(); ++i) {
-            _examples[i] = VPTreeElement(i, array[i]);
+        // copy without move
+        _examples = array;
+        build(_examples);
+    }
+
+    void set(std::vector<T> &&array) {
+        clear();
+
+        if (array.empty()) {
+            return;
         }
 
+        // copy with move
+        _examples = array;
         build(_examples);
     }
 
@@ -91,88 +103,6 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         }
 
         _rootPartition->print_state();
-    }
-
-    SerializedState serialize() const override {
-        if (_rootPartition == nullptr) {
-            return SerializedState();
-        }
-
-        size_t element_size = 0;
-        size_t num_elements_per_example = 0;
-        size_t total_size = (size_t)(3 * sizeof(size_t));
-
-        if (_examples.size() > 0) {
-
-            // total size is the _examples total size + the examples array size plus element size
-            // _examples[0] is an array of some type (variable)
-            num_elements_per_example = _examples[0].val.size();
-            element_size = sizeof(_examples[0].val[0]);
-            int64_t total_elements_size = num_elements_per_example * element_size;
-            total_size += _examples.size() * (sizeof(int64_t) + total_elements_size);
-        }
-
-        SerializedState state;
-        state.reserve(total_size);
-
-        for (const VPTreeElement &elem : _examples) {
-            state.push(elem.originalIndex);
-
-            for (size_t i = 0; i < num_elements_per_example; ++i) {
-                // since we dont know the sub element type of T (T is an array of something)
-                // we need to copy using memcopy and memory size
-                state.push_by_size(&elem.val[i], element_size);
-            }
-        }
-
-        state.push(_examples.size());
-        state.push(num_elements_per_example);
-        state.push(element_size);
-
-        if (state.size() != total_size) {
-            throw new std::out_of_range("invalid serialization state, offsets dont match!");
-        }
-
-        SerializedState partition_state = _rootPartition->serialize();
-        partition_state += state;
-        partition_state.buildChecksum();
-        return partition_state;
-    }
-
-    void deserialize(const SerializedState &state) override {
-        clear();
-        if (state.data.empty()) {
-            return;
-        }
-
-        if (!state.isValid()) {
-            throw new std::invalid_argument("invalid state - checksum mismatch");
-        }
-
-        SerializedState copy(state);
-
-        _rootPartition = new VPLevelPartition<distance_type>();
-
-        size_t elem_size = copy.pop<size_t>();
-        size_t num_elements_per_example = copy.pop<size_t>();
-        size_t num_examples = copy.pop<size_t>();
-
-        _examples.reserve(num_examples);
-        _examples.resize(num_examples);
-        for (int64_t i = num_examples - 1; i >= 0; --i) {
-
-            auto &example = _examples[i];
-            auto &val = example.val;
-            val.resize(num_elements_per_example);
-
-            for (int64_t j = num_elements_per_example - 1; j >= 0; --j) {
-                copy.pop_by_size(&val[j], elem_size);
-            }
-            int64_t originalIndex = copy.pop<int64_t>();
-            example.originalIndex = originalIndex;
-        }
-
-        _rootPartition->deserialize(copy);
     }
 
     void searchKNN(const std::vector<T> &queries, size_t k, std::vector<VPTreeSearchResultElement> &results) {
@@ -232,15 +162,13 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
 
         int64_t total_memory = 0;
         if (vptree._rootPartition != nullptr) {
-            total_memory =
-                vptree._rootPartition->numSubnodes() * sizeof(VPLevelPartition<distance_type>) + vptree._examples.size() * sizeof(VPTreeElement);
+            total_memory = vptree._rootPartition->numSubnodes() * sizeof(VPLevelPartition<distance_type>) + vptree._examples.size() * sizeof(T);
         }
         os << "Total Memory: " << total_memory << " bytes" << std::endl;
         os << "####################" << std::endl;
         os << "[+] Root Level:" << std::endl;
         if (vptree._rootPartition != nullptr) {
-            total_memory =
-                vptree._rootPartition->numSubnodes() * sizeof(VPLevelPartition<distance_type>) + vptree._examples.size() * sizeof(VPTreeElement);
+            total_memory = vptree._rootPartition->numSubnodes() * sizeof(VPLevelPartition<distance_type>) + vptree._examples.size() * sizeof(T);
             os << *vptree._rootPartition << std::endl;
         } else {
             os << "<empty>" << std::endl;
@@ -249,12 +177,17 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         return os;
     }
 
-    protected:
+protected:
     /*
      *  Builds a Vantage Point tree using each element of the given array as one coordinate buffer
      *  using the given metric distance.
      */
-    void build(const std::vector<VPTreeElement> &array) {
+    void build(const std::vector<T> &array) {
+
+        _indices.resize(_examples.size());
+
+        // initialize indices sequentially
+        std::iota(_indices.begin(), _indices.end(), 0);
 
         // Select vantage point
         std::vector<VPLevelPartition<distance_type> *> _toSplit;
@@ -279,16 +212,16 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             unsigned vpIndex = selectVantagePoint(start, end);
 
             // put vantage point as the first element within the examples list
-            std::swap(_examples[vpIndex], _examples[start]);
+            std::swap(_indices[vpIndex], _indices[start]);
 
             int64_t median = (end + start) / 2;
 
             // partition in order to keep all elements smaller than median in the left and larger in the right
-            std::nth_element(_examples.begin() + start + 1, _examples.begin() + median, _examples.begin() + end + 1,
-                             VPDistanceComparator(_examples[start]));
+            std::nth_element(_indices.begin() + start + 1, _indices.begin() + median, _indices.begin() + end + 1,
+                             VPArgDistanceComparator(this, start));
 
             /* // distance from vantage point (which is at start index) and the median element */
-            auto medianDistance = distance(_examples[start].val, _examples[median].val);
+            auto medianDistance = distance(_examples[_indices[start]], _examples[_indices[median]]);
             current->setRadius(medianDistance);
 
             // Schedule to build next levels
@@ -317,24 +250,6 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
         bool operator<(const VPTreeSearchElement &v) const { return dist < v.dist; }
     };
 
-    void exaustivePartitionSearch(VPLevelPartition<distance_type> *partition, const T &val, unsigned int k,
-                                  std::priority_queue<VPTreeSearchElement> &knnQueue, distance_type tau) {
-        for (int i = partition->start(); i <= partition->end(); ++i) {
-
-            auto dist = distance(val, _examples[i].val);
-            if (dist < tau || knnQueue.size() < k) {
-
-                if (knnQueue.size() == k) {
-                    knnQueue.pop();
-                }
-                int64_t indexToAdd = _examples[i].originalIndex;
-                knnQueue.push(VPTreeSearchElement(indexToAdd, dist));
-
-                tau = knnQueue.top().dist;
-            }
-        }
-    }
-
     void searchKNN(VPLevelPartition<distance_type> *partition, const T &val, unsigned int k, std::priority_queue<VPTreeSearchElement> &knnQueue) {
 
         auto tau = std::numeric_limits<distance_type>::max();
@@ -348,13 +263,13 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             auto [distToBorder, current] = toSearch.back();
             toSearch.pop_back();
 
-            auto dist = distance(val, _examples[current->start()].val);
+            auto dist = distance(val, _examples[_indices[current->start()]]);
             if (dist < tau || knnQueue.size() < k) {
 
                 if (knnQueue.size() == k) {
                     knnQueue.pop();
                 }
-                int64_t indexToAdd = _examples[current->start()].originalIndex;
+                int64_t indexToAdd = _indices[current->start()];
                 knnQueue.push(VPTreeSearchElement(indexToAdd, dist));
 
                 tau = knnQueue.top().dist;
@@ -439,10 +354,10 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
             auto [distToBorder, current] = toSearch.back();
             toSearch.pop_back();
 
-            auto dist = distance(val, _examples[current->start()].val);
+            auto dist = distance(val, _examples[_indices[current->start()]]);
             if (dist < resultDist) {
                 resultDist = dist;
-                resultIndex = _examples[current->start()].originalIndex;
+                resultIndex = _indices[current->start()];
             }
 
             if (distToBorder >= 0 && distToBorder > resultDist) {
@@ -505,16 +420,26 @@ template <typename T, typename distance_type, distance_type (*distance)(const T 
     /*
      * A vantage point distance comparator. Will check which from two points are closer to the reference vantage point.
      * This is used to find the median distance from vantage point in order to split the VPLevelPartition into two sets.
+     * The comparator will be used to partially sort index vector while keeping examples vector unchanged. This allows
+     * keeping original index information as the index vector will be partially sorted.
      */
-    struct VPDistanceComparator {
+    struct VPArgDistanceComparator {
 
-        const T &item;
-        VPDistanceComparator(const VPTreeElement &item) : item(item.val) {}
-        bool operator()(const VPTreeElement &a, const VPTreeElement &b) { return distance(item, a.val) < distance(item, b.val); }
+        int64_t referenceItemIndex;
+        VPTree *vptree;
+        VPArgDistanceComparator(VPTree *vptree, int64_t referenceItemIndex) : referenceItemIndex(referenceItemIndex), vptree(vptree) {}
+        bool operator()(int64_t a, int64_t b) {
+            const int64_t &refIndex = vptree->_indices[referenceItemIndex];
+            const auto &ref = vptree->_examples[refIndex];
+            return distance(ref, vptree->_examples[a]) < distance(ref, vptree->_examples[b]);
+        }
     };
 
-    protected:
-    std::vector<VPTreeElement> _examples;
+    friend struct VPArgDistanceComparator;
+
+protected:
+    std::vector<T> _examples;
+    std::vector<int64_t> _indices;
     VPLevelPartition<distance_type> *_rootPartition = nullptr;
 };
 

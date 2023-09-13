@@ -8,15 +8,18 @@
 #include <pybind11/stl.h>
 
 #include <cassert>
+#include <cstring>
 #include <iostream>
 #include <omp.h>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 #include <BKTree.hpp>
+#include <BuiltinSerializers.hpp>
 #include <DistanceFunctions.hpp>
 #include <ISerializable.hpp>
-#include <VPTree.hpp>
+#include <SerializableVPTree.hpp>
 
 namespace py = pybind11;
 
@@ -24,7 +27,7 @@ typedef float (*distance_func_f)(const arrayf &, const arrayf &);
 typedef int64_t (*distance_func_li)(const arrayli &, const arrayli &);
 
 template <distance_func_f distance> class VPTreeNumpyAdapter {
-    public:
+public:
     VPTreeNumpyAdapter() = default;
 
     void set(const ndarrayf &array) { tree.set(array); }
@@ -63,24 +66,24 @@ template <distance_func_f distance> class VPTreeNumpyAdapter {
     }
 
     static py::tuple get_state(const VPTreeNumpyAdapter<distance> &p) {
-        vptree::SerializedState state = p.tree.serialize();
-        py::tuple t = py::make_tuple(state.data, state.checksum);
+        vptree::SerializedStateObject state = p.tree.serialize();
+        py::tuple t = py::make_tuple(state.data(), state.checksum());
         return t;
     }
 
     static VPTreeNumpyAdapter<distance> set_state(py::tuple t) {
         VPTreeNumpyAdapter<distance> p;
         std::vector<uint8_t> state = t[0].cast<std::vector<uint8_t>>();
-        uint8_t checksum = t[1].cast<uint8_t>();
-        p.tree.deserialize(vptree::SerializedState(state, checksum));
+        uint32_t checksum = t[1].cast<uint32_t>();
+        p.tree.deserialize(vptree::SerializedStateObject(state, checksum));
         return p;
     }
 
-    vptree::VPTree<arrayf, float, distance> tree;
+    vptree::SerializableVPTree<arrayf, float, distance, vptree::ndarraySerializer<float>, vptree::ndarrayDeserializer<float>> tree;
 };
 
 template <distance_func_li distance> class VPTreeNumpyAdapterBinary {
-    public:
+public:
     VPTreeNumpyAdapterBinary() = default;
 
     void set(const ndarrayli &array) { tree.set(array); }
@@ -118,31 +121,31 @@ template <distance_func_li distance> class VPTreeNumpyAdapterBinary {
     }
 
     static py::tuple get_state(const VPTreeNumpyAdapterBinary<distance> &p) {
-        vptree::SerializedState state = p.tree.serialize();
-        py::tuple t = py::make_tuple(state.data, state.checksum);
+        vptree::SerializedStateObject state = p.tree.serialize();
+        py::tuple t = py::make_tuple(state.data(), state.checksum());
         return t;
     }
 
     static VPTreeNumpyAdapterBinary<distance> set_state(py::tuple t) {
         VPTreeNumpyAdapterBinary<distance> p;
         std::vector<uint8_t> state = t[0].cast<std::vector<uint8_t>>();
-        uint8_t checksum = t[1].cast<uint8_t>();
-        p.tree.deserialize(vptree::SerializedState(state, checksum));
+        uint32_t checksum = t[1].cast<uint32_t>();
+        p.tree.deserialize(vptree::SerializedStateObject(state, checksum));
         return p;
     }
 
-    vptree::VPTree<arrayli, int64_t, distance> tree;
+    vptree::SerializableVPTree<arrayli, int64_t, distance, vptree::ndarraySerializer<uint8_t>, vptree::ndarrayDeserializer<uint8_t>> tree;
 };
 
 template <distance_func_li distance_f> class HammingMetric : Metric<arrayli, int64_t> {
-    public:
+public:
     static int64_t distance(const arrayli &a, const arrayli &b) { return distance_f(a, b); }
 
     static std::optional<int64_t> threshold_distance(const arrayli &a, const arrayli &b, int64_t threshold) { return distance_f(a, b); }
 };
 
 template <distance_func_li distance> class BKTreeBinaryNumpyAdapter {
-    public:
+public:
     typedef arrayli key_t;
     typedef int64_t distance_t;
 
@@ -170,6 +173,14 @@ static const char *index_find_threshold = "Batch find all vectors below the dist
 static const char *index_values = "Return all stored vectors in arbitrary order";
 
 PYBIND11_MODULE(_pynear, m) {
+    m.def("dist_l2", dist_l2_f_avx2);
+    m.def("dist_l1", dist_l1_f_avx2);
+    m.def("dist_chebyshev", dist_chebyshev_f_avx2);
+    m.def("dist_hamming_64", dist_hamming_64);
+    m.def("dist_hamming_128", dist_hamming_128);
+    m.def("dist_hamming_256", dist_hamming_256);
+    m.def("dist_hamming_512", dist_hamming_512);
+
     py::class_<VPTreeNumpyAdapter<dist_l2_f_avx2>>(m, "VPTreeL2Index")
         .def(py::init<>())
         .def("set", &VPTreeNumpyAdapter<dist_l2_f_avx2>::set, index_set, py::arg("vectors"))
