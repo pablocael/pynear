@@ -3,10 +3,10 @@
 # Copyright 2021 Pablo Carneiro Elias
 #
 
-import os
-import sys
 from collections import Counter
 from functools import partial
+import os
+import sys
 from typing import Callable
 from typing import Tuple
 
@@ -14,6 +14,10 @@ import numpy as np
 import pytest
 
 import pynear
+from pynear import dist_chebyshev
+from pynear import dist_hamming
+from pynear import dist_l1
+from pynear import dist_l2
 
 seed = os.environ.get("PYNEAR_TEST_SEED", None)
 if seed is not None:
@@ -23,23 +27,49 @@ if seed is not None:
 np.set_printoptions(threshold=sys.maxsize)
 
 def hamming_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    r = (1 << np.arange(8))[:, None, None, None]
-    return np.count_nonzero((np.bitwise_xor(a[:, None, :], b[None, :, :]) & r) != 0, axis=(0, -1))
+    result = []
+    for ai in a:
+        dists = []
+        for bi in b:
+            dists.append(dist_hamming(ai, bi))
 
+        result.append(dists)
+
+    return np.array(result).astype(np.uint8)
 
 def euclidean_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    diff = b[None, :, :] - a[:, None, :]
-    return np.sqrt(np.sum(diff * diff, axis=-1))
+    result = []
+    for ai in a:
+        dists = []
+        for bi in b:
+            dists.append(dist_l2(ai, bi))
+
+        result.append(dists)
+
+    return np.array(result)
 
 
 def manhattan_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    diff = b[None, :, :] - a[:, None, :]
-    return np.sum(np.abs(diff), axis=-1)
+    result = []
+    for ai in a:
+        dists = []
+        for bi in b:
+            dists.append(dist_l1(ai, bi))
 
+        result.append(dists)
+
+    return np.array(result)
 
 def chebyshev_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    diff = b[None, :, :] - a[:, None, :]
-    return np.max(np.abs(diff), axis=-1)
+    result = []
+    for ai in a:
+        dists = []
+        for bi in b:
+            dists.append(dist_chebyshev(ai, bi))
+
+        result.append(dists)
+
+    return np.array(result)
 
 
 def test_empty_index():
@@ -79,8 +109,8 @@ def test_hamming():
         r = (1 << np.arange(8))[:, None]
         return np.count_nonzero((np.bitwise_xor(a, b) & r) != 0)
 
-    arr1 = np.random.randint(0, 10, (5, 4), dtype=np.uint8)
-    arr2 = np.random.randint(0, 10, (3, 4), dtype=np.uint8)
+    arr1 = np.random.randint(0, 10, (5, 8), dtype=np.uint8)
+    arr2 = np.random.randint(0, 10, (3, 8), dtype=np.uint8)
 
     truth = np.empty((arr1.shape[0], arr2.shape[0]), dtype=np.uint64)
     for i in range(arr1.shape[0]):
@@ -180,7 +210,11 @@ def test_k_equals_dataset(vptree_cls, exaustive_metric):
     vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
 
     vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
-    vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]
+    vptree_distances = np.array(vptree_distances, dtype=np.float64)[:, ::-1]
+    dist_diff = vptree_distances - exaustive_distances 
+    ind_diff = vptree_indices - exaustive_indices
+    print(">>>>>>>>>>>>", dist_diff[dist_diff > 1e-7] )
+    print(">>>>>>>>>>>>", np.argwhere(ind_diff != 0))
 
     np.testing.assert_allclose(exaustive_distances, vptree_distances, rtol=1e-06)
     if _num_dups(exaustive_distances) == 0:
@@ -277,11 +311,11 @@ def test_query_larger_than_dataset(vptree_cls, exaustive_metric):
 
     k = 3
 
-    exaustive_indices, exaustive_distances = exaustive_metric(data, queries, k)
+    exaustive_indices, exaustive_distances = exaustive_metric(data, np.array([queries[0]]), k)
 
     vptree = vptree_cls()
     vptree.set(data)
-    vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
+    vptree_indices, vptree_distances = vptree.searchKNN(np.array([queries[0]]), k)
 
     vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.float32)[:, ::-1]

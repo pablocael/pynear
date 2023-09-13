@@ -173,6 +173,14 @@ static const char *index_find_threshold = "Batch find all vectors below the dist
 static const char *index_values = "Return all stored vectors in arbitrary order";
 
 PYBIND11_MODULE(_pynear, m) {
+    m.def("dist_l2", dist_l2_f_avx2);
+    m.def("dist_l1", dist_l1_f_avx2);
+    m.def("dist_chebyshev", dist_chebyshev_f_avx2);
+    m.def("dist_hamming_64", dist_hamming_64);
+    m.def("dist_hamming_128", dist_hamming_128);
+    m.def("dist_hamming_256", dist_hamming_256);
+    m.def("dist_hamming_512", dist_hamming_512);
+
     py::class_<VPTreeNumpyAdapter<dist_l2_f_avx2>>(m, "VPTreeL2Index")
         .def(py::init<>())
         .def("set", &VPTreeNumpyAdapter<dist_l2_f_avx2>::set, index_set, py::arg("vectors"))
