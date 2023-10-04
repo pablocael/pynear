@@ -1,6 +1,6 @@
 # Introduction
 
-PyNear is a python library, internally built in C++, for efficient KNN search using metric distance function such as L2 distance (see VPTreeL2Index) or Hamming distances (VPTreeBinaryIndex) as well as other distance functions. It uses AVX2 instructions to optimize distance functions so to improve search performance.
+PyNear is a python library, internally built in C++, for efficient KNN search using metric distance function such as L2 distance (see VPTreeL2Index) or Hamming distances (VPTreeBinaryIndex and BKTreeBinaryIndex) as well as other distance functions. It uses AVX2 instructions to optimize distance functions so to improve search performance.
 
 PyNear aims providing different efficient algorithms for nearest neighbor search. One of the differentials of PyNear is the adoption of [Vantage Point Tree](./docs/vptrees.md) in order to mitigate course of dimensionality for high dimensional features (see VPTree* indices for more information in [docs](./docs/README.md)).
 
