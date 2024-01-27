@@ -19,6 +19,7 @@ def create_index_adapter(index_name: str):
         "AnnoyManhattan": AnnoyManhattanAdapter,
         "AnnoyHamming": AnnoyHammingAdapter,
         "SKLearnL2": SKLearnL2Adapter,
+        "BKTreeBinaryIndex": PyNearBKTreeAdapter,
         "VPTreeL2Index": pynear.VPTreeL2Index,
         "VPTreeL1Index": pynear.VPTreeL1Index,
         "VPTreeBinaryIndex": pynear.VPTreeBinaryIndex,
@@ -28,7 +29,7 @@ def create_index_adapter(index_name: str):
         raise ValueError(f"Index name {index_name} not supported")
 
     if index_name.startswith("VPTree"):
-        return PyNearAdapter(index_name)
+        return PyNearVPAdapter(index_name)
 
     return mapper[index_name]()
 
@@ -52,7 +53,7 @@ class IndexAdapter(ABC):
         pass
 
 
-class PyNearAdapter(IndexAdapter):
+class PyNearVPAdapter(IndexAdapter):
     def __init__(self, pyvp_index_name: str):
         self._index = None
         self._pyvp_index_name = pyvp_index_name
@@ -70,6 +71,17 @@ class PyNearAdapter(IndexAdapter):
     def _search_implementation(self, query, k: int):
         self._index.searchKNN(query, k)
 
+class PyNearBKTreeAdapter(IndexAdapter):
+    def __init__(self):
+        self._index = pynear.BKTreeBinaryIndex()
+        self._dimensions = 0
+
+    def build_index(self, data: np.ndarray):
+        self._index.set(data)
+        self._dimensions = data.shape[1]
+
+    def _search_implementation(self, query, k: int):
+        self._index.find_threshold(query, self._dimensions)
 
 class FaissIndexFlatL2Adapter(IndexAdapter):
     def __init__(self):

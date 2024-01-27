@@ -6,12 +6,12 @@ benchmark:
   - name: "Binary Index Comparison"
     k: [8]
     num_queries: [16]
-    dimensions: [32, 64, 256]
-    dataset_total_size: 1000000
+    dimensions: [32, 64, 128, 256]
+    dataset_total_size: 200000
     dataset_num_clusters: 50
     dataset_type: "uint8"
     index_types:
     - FaissIndexBinaryFlat
     - AnnoyHamming
     - VPTreeBinaryIndex
-
+    - BKTreeBinaryIndex
