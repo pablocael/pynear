@@ -36,6 +36,7 @@ setup(
     packages=find_packages(),
     author="Pablo Carneiro Elias",
     author_email="pablo.cael@gmail.com",
+    url="https://github.com/pablocael/pynear",
     description="An efficient implementation of Vantage Point Tree for Python 3",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -44,6 +45,6 @@ setup(
     install_requires=["numpy>=1.21.2"],
     package_dir={"pynear": "pynear"},
     extras_require={"test": ["pytest>=6.0"]},
-    python_requires=">=3.6",
+    python_requires=">=3.7",
     license_files=("LICENSE",),
 )
