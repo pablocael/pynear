@@ -71,6 +71,7 @@ class PyNearVPAdapter(IndexAdapter):
     def _search_implementation(self, query, k: int):
         self._index.searchKNN(query, k)
 
+
 class PyNearBKTreeAdapter(IndexAdapter):
     def __init__(self):
         self._index = pynear.BKTreeBinaryIndex()
@@ -82,6 +83,7 @@ class PyNearBKTreeAdapter(IndexAdapter):
 
     def _search_implementation(self, query, k: int):
         self._index.find_threshold(query, self._dimensions)
+
 
 class FaissIndexFlatL2Adapter(IndexAdapter):
     def __init__(self):

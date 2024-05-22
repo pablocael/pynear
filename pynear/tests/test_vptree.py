@@ -26,6 +26,7 @@ if seed is not None:
 
 np.set_printoptions(threshold=sys.maxsize)
 
+
 def hamming_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     result = []
     for ai in a:
@@ -36,6 +37,7 @@ def hamming_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         result.append(dists)
 
     return np.array(result).astype(np.uint8)
+
 
 def euclidean_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     result = []
@@ -59,6 +61,7 @@ def manhattan_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         result.append(dists)
 
     return np.array(result)
+
 
 def chebyshev_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     result = []
@@ -211,9 +214,9 @@ def test_k_equals_dataset(vptree_cls, exaustive_metric):
 
     vptree_indices = np.array(vptree_indices, dtype=np.uint64)[:, ::-1]
     vptree_distances = np.array(vptree_distances, dtype=np.float64)[:, ::-1]
-    dist_diff = vptree_distances - exaustive_distances 
+    dist_diff = vptree_distances - exaustive_distances
     ind_diff = vptree_indices - exaustive_indices
-    print(">>>>>>>>>>>>", dist_diff[dist_diff > 1e-7] )
+    print(">>>>>>>>>>>>", dist_diff[dist_diff > 1e-7])
     print(">>>>>>>>>>>>", np.argwhere(ind_diff != 0))
 
     np.testing.assert_allclose(exaustive_distances, vptree_distances, rtol=1e-06)
