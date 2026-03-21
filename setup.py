@@ -53,6 +53,6 @@ setup(
     install_requires=["numpy>=1.21.2"],
     package_dir={"pynear": "pynear"},
     extras_require={"test": ["pytest>=6.0"]},
-    python_requires=">=3.7",
+    python_requires=">=3.8",
     license_files=("LICENSE",),
 )
