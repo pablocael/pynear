@@ -1,58 +1,89 @@
-# Introduction
+# PyNear
 
-PyNear is a python library, internally built in C++, for efficient KNN search using metric distance function such as L2 distance (see VPTreeL2Index) or Hamming distances (VPTreeBinaryIndex and BKTreeBinaryIndex) as well as other distance functions. It uses AVX2 instructions to optimize search performance.
+[![PyPI version](https://img.shields.io/pypi/v/pynear)](https://pypi.org/project/pynear/)
+[![Python versions](https://img.shields.io/pypi/pyversions/pynear)](https://pypi.org/project/pynear/)
+[![CI](https://github.com/pablocael/pynear/actions/workflows/pythonpackage.yml/badge.svg)](https://github.com/pablocael/pynear/actions/workflows/pythonpackage.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-PyNear aims on providing different efficient algorithms for nearest neighbor search. One of the differentials of PyNear is the adoption of [Vantage Point Tree](./docs/vptrees.md) in order to mitigate (up to some point) the curse of dimensionality for high dimensional features (see VPTree* indices for more information in [docs](./docs/README.md)).
+PyNear is a Python library (C++ core) for fast, **exact** K-nearest-neighbor search using metric distance functions.
+It is built around [Vantage Point Trees](./docs/vptrees.md), which remain efficient at higher dimensionalities compared to kd-trees.
+SIMD acceleration (AVX2 on x86-64, portable fallbacks on arm64/Apple Silicon) is used for the hot distance paths.
 
+---
 
-# Installation
+## Installation
 
 ```console
 pip install pynear
 ```
 
-Performance can dramatically decrease if this library is compiled without support to Open MP and AVX.
+Requires Python 3.8+ and NumPy ≥ 1.21.2. Pre-built wheels are available for Linux, macOS (x86-64 and Apple Silicon), and Windows.
 
-# Requirement
+---
 
-This library needs OpenMP support to be built and installed. The whole compilation proccess occur automatically by performing the installation step above.
+## Quick start
 
-# Features
-
-For more features and all available index types, refer to [docs](./docs/README.md).
-
-## Pickle serialization
-
-vptree indices are pickle serializable:
 ```python
 import numpy as np
 import pynear
 
-np.random.seed(seed=42)
+# Build index
+data = np.random.rand(100_000, 32).astype(np.float32)
+index = pynear.VPTreeL2Index()
+index.set(data)
 
-num_points = 20000
-dimension = 32
-num_queries = 2
-data = np.random.rand(num_points, dimension).astype(dtype=np.uint8)
+# Search — returns (indices, distances) for each query
+queries = np.random.rand(10, 32).astype(np.float32)
+indices, distances = index.searchKNN(queries, k=5)
 
-queries = np.random.rand(num_queries, dimension).astype(dtype=np.uint8)
-
-vptree = pynear.VPTreeBinaryIndex()
-vptree.set(data)
-
-data = pickle.dumps(vptree)
-recovered = pickle.loads(data)
-```
-## String serialization
-
-Sometimes to check state of tree is interesting to be able to print the whole tree including information about the size and balancing.
-By using `to_string()` method one can print the whole tree to string. **Be aware that this method is really slow and should not be used for any performance demanding tasks**.
-
-```
-print(vptree.to_string())
+# Nearest-neighbour shortcut (slightly faster than searchKNN with k=1)
+nn_indices, nn_distances = index.search1NN(queries)
 ```
 
-Output:
+For all available index types and detailed usage see [docs](./docs/README.md).
+
+---
+
+## Features
+
+### Available indices
+
+| Index | Distance | Data type | Notes |
+|---|---|---|---|
+| `VPTreeL2Index` | L2 (Euclidean) | `float32` | SIMD-accelerated |
+| `VPTreeL1Index` | L1 (Manhattan) | `float32` | SIMD-accelerated |
+| `VPTreeChebyshevIndex` | L∞ (Chebyshev) | `float32` | SIMD-accelerated |
+| `VPTreeBinaryIndex` | Hamming | `uint8` | Exact, hardware popcount |
+| `BKTreeBinaryIndex` | Hamming | `uint8` | Threshold search |
+
+All VPTree indices support `searchKNN(queries, k)` and `search1NN(queries)`.
+`BKTreeBinaryIndex` supports `find_threshold(queries, threshold)` for range queries.
+
+### Pickle serialization
+
+All VPTree indices are pickle-serializable, so they can be saved to disk and reloaded without rebuilding:
+
+```python
+import pickle
+import numpy as np
+import pynear
+
+data = np.random.rand(20_000, 32).astype(np.float32)
+index = pynear.VPTreeL2Index()
+index.set(data)
+
+blob = pickle.dumps(index)
+index2 = pickle.loads(blob)
+```
+
+### Tree inspection
+
+```python
+print(index.to_string())
+```
+
+Output (truncated):
+
 ```
 ####################
 # [VPTree state]
@@ -63,80 +94,56 @@ Total Memory: 8000 bytes
  Depth: 0
  Height: 14
  Num Sub Nodes: 100
- Index Start: 0
- Index End:   99
- Left Subtree Height: 12
- Right Subtree Height: 12
- [+] Left children:
-.... Depth: 1
-.... Height: 12
-.... Num Sub Nodes: 49
-.... Index Start: 1
-.... Index End:   49
-.... Left Subtree Height: 10
-.... Right Subtree Height: 10
-.... [+] Left children:
-........ Depth: 2
-........ Height: 10
-........ Num Sub Nodes: 24
-........ Index Start: 2
-........ Index End:   25
-........ Left Subtree Height: 8
-........ Right Subtree Height: 8
-........ [+] Left children:
-............ Depth: 3
-............ Height: 8
-............ Num Sub Nodes: 11
-............ Index Start: 3
-............ Index End:   13
-............ Left Subtree Height: 6
-............ Right Subtree Height: 6
-............ [+] Left children:
-
 ...
 ```
-Notice that this output can be very large.
 
+> **Note**: `to_string()` traverses the whole tree and is slow — use it for debugging only.
 
+---
 
-# Benchmarks
+## Benchmarks
 
-To visualize, customize or regenerate the benchmarks as well as to see benchmark results, see [benchmarks](./pynear/benchmark/README.md) session.
+See the [benchmark README](./pynear/benchmark/README.md) for charts comparing PyNear against scikit-learn, Faiss, and Annoy across different dimensionalities, dataset sizes, and index types.
 
-# Development
+To run a quick standalone benchmark:
 
-# Building and installing localy
-
+```console
+python bench_run.py
 ```
+
+---
+
+## Development
+
+### Building and installing locally
+
+```console
 pip install .
 ```
 
+### Running Python tests
 
-## Running Python Tests
-
-```
+```console
 make test
 ```
 
-## Debugging and Running C++ Code on Unix
+### Debugging C++ code on Unix
 
-For debugging and running C++ code independently from python module, CMake config files are provided in pynear/CMakeLists.txt.
-For building and running C++ tests run:
+CMake build files are provided for building and running C++ tests independently:
 
-```
+```console
 make cpp-test
-
 ```
 
-Since tests are built in Debug mode (default CMakeLists build mode), one can debug tests with gdb using built test binary:
+Tests are built in Debug mode by default, so you can debug with GDB:
 
-```
+```console
 gdb ./build/tests/vptree-tests
 ```
 
-## Debugging and Running C++ Code on Windows
+### Debugging C++ code on Windows
 
-Install CMake (for example `py -m pip install cmake`) and pybind11 (`py -m pip install pybind11`).
+Install CMake (`py -m pip install cmake`) and pybind11 (`py -m pip install pybind11`), then:
 
 ```batch
 mkdir build
@@ -144,15 +151,18 @@ cd build
 cmake ..\pynear
 ```
 
-You may have to specify some arguments like the correct generator `-G "Visual Studio 15 2017 Win64"`
-or paths for Python `-DPYTHON_EXECUTABLE="C:\Program Files\Python38\python.exe"`
-and pybind11 `-Dpybind11_DIR="C:\Program Files\Python38\Lib\site-packages\pybind11\share\cmake\pybind11"`
-for CMake to work correctly.
+You may need to pass extra arguments, for example:
 
-Build generated files using Visual Studio (or whichever generator you chose) and run `vptree-tests.exe`.
-
-## Formatting code
-
+```batch
+cmake ..\pynear -G "Visual Studio 17 2022" -A x64 ^
+  -DPYTHON_EXECUTABLE="C:\Program Files\Python312\python.exe" ^
+  -Dpybind11_DIR="C:\Program Files\Python312\Lib\site-packages\pybind11\share\cmake\pybind11"
 ```
+
+Build and run `vptree-tests.exe` from the generated solution.
+
+### Formatting code
+
+```console
 make fmt
 ```

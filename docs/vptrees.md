@@ -1,24 +1,30 @@
-## How Vantage Point Trees work
+## How Vantage Point Trees Work
 
-VP-Trees are binary trees that successively divide spaces in order to perform different types of tasks, such as Nearest Neighbor Search. It differs from kd-Trees in the sense that they always partition the whole space, instead of individual dimensional axes, using a specific metric function and a selected "Vantage Point" that will be used as reference to allow splitting the dataset. For more details on how it works please access the following references:
+VP-Trees are binary trees that successively partition a metric space to enable efficient nearest-neighbor search.
+They differ from kd-trees in that they always partition the **whole space** using a metric distance function and a selected "vantage point" as reference, rather than splitting individual dimensional axes.
 
-- https://en.wikipedia.org/wiki/Vantage-point_tree
-- https://fribbels.github.io/vptree/writeup
-- [Probabilistic analysis of vantage point trees](https://www.vmsta.org/journal/VMSTA/article/219/file/pdf)
+For more details:
+- [Wikipedia: Vantage-point tree](https://en.wikipedia.org/wiki/Vantage-point_tree)
+- [VP-Tree writeup by fribbels](https://fribbels.github.io/vptree/writeup)
+- [Probabilistic analysis of vantage point trees (VMSTA journal)](https://www.vmsta.org/journal/VMSTA/article/219/file/pdf)
 
-### Theoretical advantage of Vantage Points Trees compared to Kd-Trees
+### Theoretical advantages over kd-Trees
 
-- Intrinsic Dimensionality: VP-trees perform well in data with high intrinsic dimensionality, where the effective dimensionality is high. In contrast, kd-trees are efficient in low-dimensional spaces but their performance degrades quickly as the number of dimensions increases. This is often referred to as the "curse of dimensionality".
+- **Intrinsic dimensionality**: VP-trees perform well when the effective dimensionality of the data is high. kd-trees degrade quickly as the number of dimensions increases — the so-called "curse of dimensionality".
 
-- No Assumption about Axis-Alignment: Unlike kd-trees, which make a specific assumption about axis-alignment, VP-trees do not make such assumptions. This makes VP-trees potentially more robust to different kinds of data, especially when there is no natural way to align the axes with respect to the data.
+- **No axis-alignment assumption**: kd-trees split along coordinate axes, which can be suboptimal when there is no natural alignment between the axes and the data distribution. VP-trees make no such assumption.
 
-- Metric Spaces: VP-trees can handle general metric spaces (any space where a distance function is defined that satisfies the triangle inequality), not just Euclidean spaces. This makes them more adaptable to different problem settings where the distance metric might not be the standard Euclidean distance.
+- **General metric spaces**: VP-trees work with any distance function that satisfies the triangle inequality, not just Euclidean distance. This makes them adaptable to Hamming distance, Manhattan distance, or custom application-specific metrics.
 
-- Handling Categorical Data: VP-trees, due to their use of arbitrary distance functions, can handle categorical data more naturally than kd-trees. While there are workarounds to use kd-trees with categorical data, they often require substantial tweaking and may not perform optimally. For categorical data, another reference structure is the [BK-Tree](https://en.wikipedia.org/wiki/BK-tree), which is very efficient when comes to low dimensional data.
+- **Categorical and binary data**: Because VP-trees use arbitrary distance functions, they handle binary and categorical data naturally. For binary data with low intrinsic dimensionality, a [BK-Tree](https://en.wikipedia.org/wiki/BK-tree) is another efficient alternative for range queries.
 
-- Balanced Tree Structure: VP-trees inherently try to create a balanced tree structure, which is beneficial for efficient searching. kd-trees can become unbalanced in certain situations, particularly with non-uniform data, leading to inefficient search operations.
+- **Balanced structure**: VP-trees partition the dataset at each level using the median distance, which tends to produce a balanced tree and consistent search performance even with non-uniform data.
 
-Different mplementation approaches such as using [SIMD](https://en.wikipedia.org/wiki/Single_instruction,_multiple_data) and [AVX](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions) instructions affect final performance in high dimensions. For instance, [Faiss Library](https://github.com/facebookresearch/faiss) performs very efficiently in very high dimensions, where searches become near linear and exhaustive, due to highly optimized code.
- 
-PyNear adopts AVX2 instructions to optimize some of the indices such as VPTreeL2Index and VPTreeBinaryIndex.
+### Implementation and performance
 
+Different implementation choices significantly affect performance at higher dimensionalities.
+PyNear uses SIMD intrinsics (AVX2 on x86-64) to accelerate the hot distance computation paths for L2, L1, Chebyshev, and Hamming distances.
+On arm64 (Apple Silicon and similar), portable scalar fallbacks are used automatically — no source changes required.
+
+For very high-dimensional spaces where search becomes nearly exhaustive, libraries like [Faiss](https://github.com/facebookresearch/faiss) with highly optimized BLAS kernels may outperform tree-based approaches.
+PyNear targets the exact-search regime where tree pruning still provides a significant speedup.

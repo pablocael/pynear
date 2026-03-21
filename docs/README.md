@@ -2,93 +2,109 @@
 
 ## Available Indices
 
-PyNear has several available indexes that will use different distance functions or algorithms to perform the search.
-Available indices are:
+PyNear provides several index types that use different distance functions or algorithms.
 
-### Threshold based KNN Indices:
+### K-Nearest-Neighbor Indices
 
-| Index Name                     | Description                                                                                                                                                                                                                                       |
-|--------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| pynear.BKTreeBinaryIndex     | Uses AVX2 optimized Hamming distance function and [BKTree](https://en.wikipedia.org/wiki/BK-tree) algorithm to perform exact searches within a threshold distance.                                                                                                                                         |
+| Index | Distance | Input dtype | Notes |
+|---|---|---|---|
+| `pynear.VPTreeL2Index` | L2 (Euclidean) | `float32` | SIMD-accelerated on x86-64 |
+| `pynear.VPTreeL1Index` | L1 (Manhattan) | `float32` | SIMD-accelerated on x86-64 |
+| `pynear.VPTreeChebyshevIndex` | L∞ (Chebyshev) | `float32` | SIMD-accelerated on x86-64 |
+| `pynear.VPTreeBinaryIndex` | Hamming | `uint8` | Hardware popcount; any byte-aligned dimension |
 
-### Non Threshold based KNN Indices:
+All VPTree indices support:
+- `set(data)` — build the index from a 2-D NumPy array
+- `searchKNN(queries, k)` — return the k nearest neighbours for each query
+- `search1NN(queries)` — return the single nearest neighbour (faster than `searchKNN` with `k=1`)
+- `to_string()` — print tree structure (slow, for debugging only)
 
-| Index Name                     | Description                                                                                                                                                                                                                                       |
-|--------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| pynear.VPTreeL2Index         | Uses AVX2 optimized L2 (euclidean norm) distance function and VPTree algorithm to perform exact searches.                                                                                                                                         |
-| pynear.VPTreeL1Index         | Uses L1 (manhattan) distance function and VPTree algorithm to perform exact searches.                                                                                                                                                             |
-| pynear.VPTreeBinaryIndex     | Uses AVX2 optimized Hamming distance function and VPTree algorithm to perform exact searches. Supports 16, 32, 64, 128 and 256 bit dimensional vectors only.                                                                                                                                                     |
-| pynear.VPTreeChebyshevIndex  | Uses [Chebyshev](https://en.wikipedia.org/wiki/Chebyshev_distance) distance function and VPTree algorithm to perform exact searches. |
+### Threshold-Based Indices
 
+| Index | Distance | Input dtype | Notes |
+|---|---|---|---|
+| `pynear.BKTreeBinaryIndex` | Hamming | `uint8` | Range queries within a distance threshold |
 
-## Usage example
+---
 
-### Creating the index
+## Usage Examples
 
-All indices need to be initialized with `set()` method before being used. This will copy the data and build the index.
-
-
-Examples.
-
-
-#### pynear.VPTreeBinaryIndex
+### `pynear.VPTreeL2Index`
 
 ```python
-np.random.seed(seed=42)
+import numpy as np
+import pynear
 
-dimension = 32 # 32 bytes are 256 bit dimensional vectos
-num_points = 2021
-data = np.random.normal(scale=255, loc=0, size=(num_points, dimension)).astype(dtype=np.uint8)
+dimension = 32
+num_points = 10_000
+data = np.random.rand(num_points, dimension).astype(np.float32)
 
 num_queries = 8
-queries = np.random.normal(scale=255, loc=0, size=(num_queries, dimension)).astype(dtype=np.uint8)
+queries = np.random.rand(num_queries, dimension).astype(np.float32)
 
-k = 2
+k = 5
 
-vptree = pynear.VPTreeBinaryIndex()
-vptree.set(data)
-vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
+index = pynear.VPTreeL2Index()
+index.set(data)
+
+# searchKNN returns a tuple of (indices, distances)
+# each is a list of lists, one entry per query
+indices, distances = index.searchKNN(queries, k)
+
+# search1NN returns (indices, distances) as flat lists, one entry per query
+nn_indices, nn_distances = index.search1NN(queries)
 ```
 
-#### pynear.BKTreeBinaryIndex
+Usage is analogous for `VPTreeL1Index` and `VPTreeChebyshevIndex`.
+
+---
+
+### `pynear.VPTreeBinaryIndex`
+
+Binary vectors are stored as `uint8` arrays where each byte holds 8 bits.
+A `dimension` of 32 bytes represents a 256-bit descriptor.
 
 ```python
-np.random.seed(seed=42)
+import numpy as np
+import pynear
 
-dimension = 32 # 32 bytes are 256 bit dimensional vectos
-num_points = 2021
-data = np.random.normal(scale=255, loc=0, size=(num_points, dimension)).astype(dtype=np.uint8)
+dimension = 32   # bytes → 256-bit vectors
+num_points = 10_000
+data = np.random.randint(0, 256, size=(num_points, dimension), dtype=np.uint8)
 
 num_queries = 8
-queries = np.random.normal(scale=255, loc=0, size=(num_queries, dimension)).astype(dtype=np.uint8)
+queries = np.random.randint(0, 256, size=(num_queries, dimension), dtype=np.uint8)
 
-vptree = pynear.BKTreeBinaryIndex()
-vptree.set(data)
+k = 5
 
-# To search using maximum threshold use dimension * 8 (the maximum distance) or set any other threshold
-indices, distances, keys = tree.find_threshold(data, dimensions * 8)
+index = pynear.VPTreeBinaryIndex()
+index.set(data)
+
+indices, distances = index.searchKNN(queries, k)
 ```
 
-For convenience, apart from `searchKNN` function, vptree also provides `search1NN` for searching the closest nearest neighbor.
+---
 
-#### pynear.VPTreeL2Index
+### `pynear.BKTreeBinaryIndex`
+
+`BKTreeBinaryIndex` is designed for **range queries**: it returns all points whose Hamming distance to each query is at most `threshold`.
 
 ```python
-np.random.seed(seed=42)
+import numpy as np
+import pynear
 
-dimension = 8
-num_points = 2021
-data = np.random.rand(num_points, dimension).astype(dtype=np.float32)
+dimension = 32   # bytes → 256-bit vectors
+num_points = 10_000
+data = np.random.randint(0, 256, size=(num_points, dimension), dtype=np.uint8)
 
-num_queries = 8
-queries = np.random.rand(num_queries, dimension).astype(dtype=np.float32)
+num_queries = 4
+queries = np.random.randint(0, 256, size=(num_queries, dimension), dtype=np.uint8)
 
-k = num_points
+index = pynear.BKTreeBinaryIndex()
+index.set(data)
 
-vptree = pynear.VPTreeL2Index()
-vptree.set(data)
-vptree_indices, vptree_distances = vptree.searchKNN(queries, k)
+# find_threshold returns (indices, distances, keys) for each query
+# threshold = dimension * 8 finds all matches (max possible Hamming distance)
+threshold = dimension * 8
+indices, distances, keys = index.find_threshold(queries, threshold)
 ```
-
-Usage is analog for all other index types.
-
