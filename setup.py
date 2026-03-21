@@ -1,3 +1,5 @@
+import os
+import platform
 import sys
 
 from pybind11.setup_helpers import Pybind11Extension
@@ -8,7 +10,13 @@ if sys.platform == "win32":
     extra_compile_args = ["/Wall", "/arch:AVX", "/openmp"]  # /LTCG unrecognized here
     extra_link_args = ["/LTCG"]  # /openmp unrecognized here
 elif sys.platform == "darwin":
-    extra_compile_args = ["-flto", "-Wall", "-march=native", "-mavx", "-fopenmp"]
+    # ARCHFLAGS is set by cibuildwheel when cross-compiling (e.g. arm64 host -> x86_64 target).
+    # When set, avoid -march=native (which would tune for the host, not the target).
+    archflags = os.environ.get("ARCHFLAGS", "")
+    is_x86_64 = "x86_64" in archflags or (not archflags and platform.machine() == "x86_64")
+    march = [] if archflags else ["-march=native"]
+    avx = ["-mavx"] if is_x86_64 else []
+    extra_compile_args = ["-flto", "-Wall"] + march + avx + ["-fopenmp"]
     extra_link_args = ["-fopenmp", "-lomp"]
 else:
     extra_compile_args = ["-flto", "-Wall", "-march=native", "-mavx", "-fopenmp"]

@@ -2,18 +2,28 @@
 
 #include <vector>
 
+// x86-only intrinsic headers
 #if defined(_MSC_VER)
 #include <intrin.h>
-#else
+#elif defined(__x86_64__) || defined(_M_X64)
 #include <nmmintrin.h>
+#include <immintrin.h>
 #endif
 
 #include <algorithm>
 #include <cassert>
 #include <cmath>
-#include <immintrin.h>
 #include <stdint.h>
 #include <stdio.h>
+
+// Portable population count — maps to hardware popcount on every supported arch
+#if defined(_MSC_VER)
+#define PYNEAR_POPCNT64(x) static_cast<int64_t>(__popcnt64(x))
+#define PYNEAR_POPCNT32(x) static_cast<int32_t>(__popcnt(x))
+#else
+#define PYNEAR_POPCNT64(x) static_cast<int64_t>(__builtin_popcountll(x))
+#define PYNEAR_POPCNT32(x) static_cast<int32_t>(__builtin_popcount(x))
+#endif
 
 struct FlatSpan {
     const float* ptr;
@@ -48,7 +58,7 @@ int64_t hamming_u64(const arrayli &p1, const arrayli &p2) {
     size_t i;
     int64_t h = 0;
     for (i = 0; i < nwords; i++)
-        h += _mm_popcnt_u64(bs1[i] ^ bs2[i]);
+        h += PYNEAR_POPCNT64(bs1[i] ^ bs2[i]);
     return h;
 }
 
@@ -57,7 +67,7 @@ template <size_t nbits> int64_t hamming_u64(const uint64_t *bs1, const uint64_t 
     size_t i;
     int64_t h = 0;
     for (i = 0; i < nwords; i++)
-        h += _mm_popcnt_u64(bs1[i] ^ bs2[i]);
+        h += PYNEAR_POPCNT64(bs1[i] ^ bs2[i]);
     return h;
 }
 
@@ -73,7 +83,7 @@ int32_t hamming_u32(const arrayli &p1, const arrayli &p2) {
     size_t i;
     int32_t h = 0;
     for (i = 0; i < nwords; i++)
-        h += _mm_popcnt_u32(bs1[i] ^ bs2[i]);
+        h += PYNEAR_POPCNT32(bs1[i] ^ bs2[i]);
     return h;
 }
 
@@ -82,7 +92,7 @@ template <size_t nbits> int32_t hamming_u32(const uint32_t *bs1, const uint32_t 
     size_t i;
     int32_t h = 0;
     for (i = 0; i < nwords; i++)
-        h += _mm_popcnt_u32(bs1[i] ^ bs2[i]);
+        h += PYNEAR_POPCNT32(bs1[i] ^ bs2[i]);
     return h;
 }
 
@@ -98,7 +108,7 @@ int16_t hamming_u16(const arrayli &p1, const arrayli &p2) {
     size_t i;
     int16_t h = 0;
     for (i = 0; i < nwords; i++)
-        h += _mm_popcnt_u32(bs1[i] ^ bs2[i]);
+        h += PYNEAR_POPCNT32(bs1[i] ^ bs2[i]);
     return h;
 }
 
@@ -107,7 +117,7 @@ template <size_t nbits> int16_t hamming_u16(const uint16_t *bs1, const uint16_t 
     size_t i;
     int16_t h = 0;
     for (i = 0; i < nwords; i++)
-        h += _mm_popcnt_u32(bs1[i] ^ bs2[i]);
+        h += PYNEAR_POPCNT32(bs1[i] ^ bs2[i]);
     return h;
 }
 
@@ -122,7 +132,7 @@ int8_t hamming_u8(const arrayli &p1, const arrayli &p2) {
     size_t i;
     int8_t h = 0;
     for (i = 0; i < nwords; i++)
-        h += _mm_popcnt_u32(bs1[i] ^ bs2[i]);
+        h += PYNEAR_POPCNT32(bs1[i] ^ bs2[i]);
     return h;
 }
 
@@ -131,9 +141,88 @@ template <size_t nbits> int8_t hamming_u8(const uint8_t *bs1, const uint8_t *bs2
     size_t i;
     int8_t h = 0;
     for (i = 0; i < nwords; i++)
-        h += _mm_popcnt_u32(bs1[i] ^ bs2[i]);
+        h += PYNEAR_POPCNT32(bs1[i] ^ bs2[i]);
     return h;
 }
+
+/* specialized (optimized) hamming functions — portable, no AVX needed */
+template <> inline int8_t hamming_u8<8>(const uint8_t *pa, const uint8_t *pb) { return PYNEAR_POPCNT32(pa[0] ^ pb[0]); }
+
+template <> inline int16_t hamming_u16<16>(const uint16_t *pa, const uint16_t *pb) { return PYNEAR_POPCNT32(pa[0] ^ pb[0]); }
+
+template <> inline int32_t hamming_u32<32>(const uint32_t *pa, const uint32_t *pb) { return PYNEAR_POPCNT32(pa[0] ^ pb[0]); }
+
+template <> inline int64_t hamming_u64<64>(const uint64_t *pa, const uint64_t *pb) { return PYNEAR_POPCNT64(pa[0] ^ pb[0]); }
+
+template <> inline int64_t hamming_u64<128>(const uint64_t *pa, const uint64_t *pb) {
+    return PYNEAR_POPCNT64(pa[0] ^ pb[0]) + PYNEAR_POPCNT64(pa[1] ^ pb[1]);
+}
+
+template <> inline int64_t hamming_u64<256>(const uint64_t *pa, const uint64_t *pb) {
+    return PYNEAR_POPCNT64(pa[0] ^ pb[0]) + PYNEAR_POPCNT64(pa[1] ^ pb[1]) +
+           PYNEAR_POPCNT64(pa[2] ^ pb[2]) + PYNEAR_POPCNT64(pa[3] ^ pb[3]);
+}
+
+template <> inline int64_t hamming_u64<512>(const uint64_t *pa, const uint64_t *pb) {
+    return PYNEAR_POPCNT64(pa[0] ^ pb[0]) + PYNEAR_POPCNT64(pa[1] ^ pb[1]) + PYNEAR_POPCNT64(pa[2] ^ pb[2]) + PYNEAR_POPCNT64(pa[3] ^ pb[3]) +
+           PYNEAR_POPCNT64(pa[4] ^ pb[4]) + PYNEAR_POPCNT64(pa[5] ^ pb[5]) + PYNEAR_POPCNT64(pa[6] ^ pb[6]) + PYNEAR_POPCNT64(pa[7] ^ pb[7]);
+}
+
+/* Scalar distance functions — always compiled, referenced by AVX #else fallbacks */
+
+double dist_l2_d(const arrayd &p1, const arrayd &p2) {
+
+    double result = 0;
+    size_t i = p1.size();
+    while (i--) {
+        double d = (p1[i] - p2[i]);
+        result += d * d;
+    }
+
+    return std::sqrt(result);
+}
+
+float dist_l2_f(const arrayf &p1, const arrayf &p2) {
+
+    float result = 0.;
+    size_t i = p1.size();
+    while (i--) {
+        float d = (p1[i] - p2[i]);
+        result += d * d;
+    }
+
+    return std::sqrt(result);
+}
+
+float dist_l1_f(const arrayf &p1, const arrayf &p2) {
+    /* L1 metric, also called Manhattan or taxicab metric */
+
+    float result = 0.;
+    size_t i = p1.size();
+    while (i--) {
+        result += std::fabs(p1[i] - p2[i]);
+    }
+
+    return result;
+}
+
+float dist_chebyshev_f(const arrayf &p1, const arrayf &p2) {
+    /* Chebyshev distance metric, also called maximum metric or L_inf metric */
+
+    float result = 0.;
+    size_t i = p1.size();
+    while (i--) {
+        float distance = std::fabs(p1[i] - p2[i]);
+        if (distance > result) {
+            result = distance;
+        }
+    }
+
+    return result;
+}
+
+/* AVX/AVX2 accelerated distance functions */
+#if defined(__AVX__) || defined(__AVX2__)
 
 inline double sum4(__m256d v) {
     __m128d vlow = _mm256_castpd256_pd128(v);
@@ -142,29 +231,6 @@ inline double sum4(__m256d v) {
 
     __m128d high64 = _mm_unpackhi_pd(vlow, vlow);
     return _mm_cvtsd_f64(_mm_add_sd(vlow, high64)); // reduce to scalar
-}
-
-/* specialized (optimized) functions */
-template <> int8_t hamming_u8<8>(const uint8_t *pa, const uint8_t *pb) { return _mm_popcnt_u32(pa[0] ^ pb[0]); }
-
-template <> int16_t hamming_u16<16>(const uint16_t *pa, const uint16_t *pb) { return _mm_popcnt_u32(pa[0] ^ pb[0]); }
-
-template <> int32_t hamming_u32<32>(const uint32_t *pa, const uint32_t *pb) { return _mm_popcnt_u32(pa[0] ^ pb[0]); }
-
-template <> int64_t hamming_u64<64>(const uint64_t *pa, const uint64_t *pb) { return _mm_popcnt_u64(pa[0] ^ pb[0]); }
-
-template <> int64_t hamming_u64<128>(const uint64_t *pa, const uint64_t *pb) {
-    return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]);
-}
-
-template <> int64_t hamming_u64<256>(const uint64_t *pa, const uint64_t *pb) {
-    return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]) +
-           _mm_popcnt_u64(pa[2] ^ pb[2]) + _mm_popcnt_u64(pa[3] ^ pb[3]);
-}
-
-template <> int64_t hamming_u64<512>(const uint64_t *pa, const uint64_t *pb) {
-    return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]) + _mm_popcnt_u64(pa[2] ^ pb[2]) + _mm_popcnt_u64(pa[3] ^ pb[3]) +
-           _mm_popcnt_u64(pa[4] ^ pb[4]) + _mm_popcnt_u64(pa[5] ^ pb[5]) + _mm_popcnt_u64(pa[6] ^ pb[6]) + _mm_popcnt_u64(pa[7] ^ pb[7]);
 }
 
 inline float sum8(__m256 x) {
@@ -278,42 +344,6 @@ float dist_l2_f_avx2(const arrayf &p1, const arrayf &p2) {
     return std::sqrt(result);
 }
 
-double dist_l2_d(const arrayd &p1, const arrayd &p2) {
-
-    double result = 0;
-    size_t i = p1.size();
-    while (i--) {
-        double d = (p1[i] - p2[i]);
-        result += d * d;
-    }
-
-    return std::sqrt(result);
-}
-
-float dist_l2_f(const arrayf &p1, const arrayf &p2) {
-
-    float result = 0.;
-    size_t i = p1.size();
-    while (i--) {
-        float d = (p1[i] - p2[i]);
-        result += d * d;
-    }
-
-    return std::sqrt(result);
-}
-
-float dist_l1_f(const arrayf &p1, const arrayf &p2) {
-    /* L1 metric, also called Manhattan or taxicab metric */
-
-    float result = 0.;
-    size_t i = p1.size();
-    while (i--) {
-        result += std::fabs(p1[i] - p2[i]);
-    }
-
-    return result;
-}
-
 float dist_l1_f_avx2(const arrayf &p1, const arrayf &p2) {
     /* SIMD L1 metric, also called Manhattan or taxicab metric */
 
@@ -349,21 +379,6 @@ float dist_l1_f_avx2(const arrayf &p1, const arrayf &p2) {
     }
 
     return total_sum;
-}
-
-float dist_chebyshev_f(const arrayf &p1, const arrayf &p2) {
-    /* Chebyshev distance metric, also called maximum metric or L_inf metric */
-
-    float result = 0.;
-    size_t i = p1.size();
-    while (i--) {
-        float distance = std::fabs(p1[i] - p2[i]);
-        if (distance > result) {
-            result = distance;
-        }
-    }
-
-    return result;
 }
 
 float dist_chebyshev_f_avx2(const arrayf &p1, const arrayf &p2) {
@@ -403,6 +418,15 @@ float dist_chebyshev_f_avx2(const arrayf &p1, const arrayf &p2) {
 
     return max_distance;
 }
+
+#else // !(__AVX__ || __AVX2__) — scalar fallbacks for non-x86 platforms (e.g. arm64)
+
+double dist_l2_d_avx2(const arrayd &p1, const arrayd &p2) { return dist_l2_d(p1, p2); }
+float  dist_l2_f_avx2(const arrayf &p1, const arrayf &p2) { return dist_l2_f(p1, p2); }
+float  dist_l1_f_avx2(const arrayf &p1, const arrayf &p2) { return dist_l1_f(p1, p2); }
+float  dist_chebyshev_f_avx2(const arrayf &p1, const arrayf &p2) { return dist_chebyshev_f(p1, p2); }
+
+#endif // __AVX__
 
 int64_t dist_hamming(const arrayli &p1, const arrayli &p2) {
     size_t size = p1.size();
