@@ -1,0 +1,64 @@
+benchmark:
+  cases:
+  - name: "PyNear L2 Indexes Comparison"
+    k: [2, 4, 8]
+    num_queries: [8]
+    dimensions: [2, 3, 4, 5, 6, 7, 8, 16]
+    dataset_total_size: 500000
+    dataset_num_clusters: 50
+    dataset_type: "float32"
+    index_types:
+    - VPTreeL2Index
+    - VPTreeChebyshevIndex
+    - VPTreeL1Index
+
+  - name: "L2 Comparison Low Dimensionality"
+    k: [8]
+    num_queries: [16]
+    dimensions: [2, 3, 4, 5, 6, 7, 8, 16]
+    dataset_total_size: 500000
+    dataset_num_clusters: 50
+    dataset_type: "float32"
+    index_types:
+    - FaissIndexFlatL2
+    - VPTreeL2Index
+    - AnnoyL2
+    - SKLearnL2
+
+  - name: "L2 Comparison High Dimensionality"
+    k: [8]
+    num_queries: [16]
+    dimensions: [32, 64, 128, 256, 512]
+    dataset_total_size: 500000
+    dataset_num_clusters: 50
+    dataset_type: "float32"
+    index_types:
+    - FaissIndexFlatL2
+    - VPTreeL2Index
+    - AnnoyL2
+    - SKLearnL2
+
+  - name: "Manhattan Index Comparison"
+    k: [8]
+    num_queries: [16]
+    dimensions: [2, 3, 4, 5, 6, 7, 8, 16]
+    dataset_total_size: 500000
+    dataset_num_clusters: 50
+    dataset_type: "float32"
+    index_types:
+    - VPTreeL1Index
+    - AnnoyManhattan
+    - FaissIndexFlatL2
+
+  - name: "Binary Index Comparison"
+    k: [8]
+    num_queries: [16]
+    dimensions: [32, 64, 128, 256]
+    dataset_total_size: 200000
+    dataset_num_clusters: 50
+    dataset_type: "uint8"
+    index_types:
+    - FaissIndexBinaryFlat
+    - AnnoyHamming
+    - VPTreeBinaryIndex
+    - BKTreeBinaryIndex

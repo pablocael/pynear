@@ -1,7 +1,7 @@
 # Comparison Benchmarks
 
 Several benchmarks were generated to compare performance between PyNear and other python libraries.
-All benchmarks were generated using 12th Gen Intel(R) Core(TM) i9-12900, 24 cores.
+All benchmarks were generated using Intel(R) Core(TM) Ultra 9 285K, 24 cores.
 
 In the below benchmarks, other libraries such as Annoy, Faiss and SKLearn are used. Annoy is inexact search (approximate) so it is somehow unfair comparison, but being extremelly efficient is an interesting baseline.
 

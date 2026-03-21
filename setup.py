@@ -14,10 +14,23 @@ elif sys.platform == "darwin":
     # When set, avoid -march=native (which would tune for the host, not the target).
     archflags = os.environ.get("ARCHFLAGS", "")
     is_x86_64 = "x86_64" in archflags or (not archflags and platform.machine() == "x86_64")
+    is_cross_compiling = bool(archflags)
     march = [] if archflags else ["-march=native"]
     avx = ["-mavx"] if is_x86_64 else []
-    extra_compile_args = ["-flto", "-Wall"] + march + avx + ["-fopenmp"]
-    extra_link_args = ["-fopenmp", "-lomp"]
+    # When cross-compiling (ARCHFLAGS set), Homebrew LLVM is arm64-only:
+    #   - its libomp.dylib cannot satisfy x86_64 link requests
+    #   - its LTO bitcode (LLVM 22) is incompatible with the Apple linker's LTO reader (LLVM 15)
+    # So disable both -flto and OpenMP for cross-compilation builds.
+    if is_cross_compiling:
+        lto = []
+        omp_compile = []
+        omp_link = []
+    else:
+        lto = ["-flto"]
+        omp_compile = ["-fopenmp"]
+        omp_link = ["-fopenmp", "-lomp"]
+    extra_compile_args = lto + ["-Wall"] + march + avx + omp_compile
+    extra_link_args = omp_link
 else:
     extra_compile_args = ["-flto", "-Wall", "-march=native", "-mavx", "-fopenmp"]
     extra_link_args = ["-fopenmp", "-lgomp"]
