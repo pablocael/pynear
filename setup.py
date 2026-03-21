@@ -16,7 +16,9 @@ elif sys.platform == "darwin":
     is_x86_64 = "x86_64" in archflags or (not archflags and platform.machine() == "x86_64")
     is_cross_compiling = bool(archflags)
     march = [] if archflags else ["-march=native"]
-    avx = ["-mavx"] if is_x86_64 else []
+    # When cross-compiling for x86_64 on Apple Silicon (Rosetta 2), AVX is not supported
+    # by Rosetta 2 (only up to SSE4.2), so -mavx would cause "Illegal instruction" at import.
+    avx = ["-mavx"] if (is_x86_64 and not is_cross_compiling) else []
     # When cross-compiling (ARCHFLAGS set), Homebrew LLVM is arm64-only:
     #   - its libomp.dylib cannot satisfy x86_64 link requests
     #   - its LTO bitcode (LLVM 22) is incompatible with the Apple linker's LTO reader (LLVM 15)
