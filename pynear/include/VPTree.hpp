@@ -16,10 +16,12 @@
 #include <omp.h>
 #include <queue>
 #include <sstream>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include "DistanceFunctions.hpp"
 #include "VPLevelPartition.hpp"
 
 namespace vptree {
@@ -42,67 +44,96 @@ public:
     VPTree() {}
 
     VPTree(const VPTree<T, distance_type, distance> &other) {
-        _examples = other._examples;
         _indices = other._indices;
-        if (other._rootPartition != nullptr) {
-            _rootPartition = other._rootPartition->deepcopy();
+        _nodePool = other._nodePool;
+        _rootIdx = other._rootIdx;
+        _dim = other._dim;
+        if constexpr (std::is_same_v<T, FlatSpan>) {
+            _flat_backing = other._flat_backing;
+            _examples.resize(other._examples.size());
+            for (size_t i = 0; i < _examples.size(); i++)
+                _examples[i] = FlatSpan{_flat_backing.data() + i * _dim, _dim};
+        } else {
+            _examples = other._examples;
         }
     }
 
     const VPTree<T, distance_type, distance> &operator=(const VPTree<T, distance_type, distance> &other) {
-        _examples = other._examples;
+        if (this == &other) return *this;
         _indices = other._indices;
-        if (other._rootPartition != nullptr) {
-            _rootPartition = other._rootPartition->deepcopy();
+        _nodePool = other._nodePool;
+        _rootIdx = other._rootIdx;
+        _dim = other._dim;
+        if constexpr (std::is_same_v<T, FlatSpan>) {
+            _flat_backing = other._flat_backing;
+            _examples.resize(other._examples.size());
+            for (size_t i = 0; i < _examples.size(); i++)
+                _examples[i] = FlatSpan{_flat_backing.data() + i * _dim, _dim};
+        } else {
+            _examples = other._examples;
         }
-
         return *this;
     }
 
     virtual ~VPTree() { clear(); };
 
     void clear() {
-        if (_rootPartition != nullptr) {
-            delete _rootPartition;
-        }
-        _rootPartition = nullptr;
+        _rootIdx = -1;
+        _nodePool.clear();
         _examples.clear();
+        _flat_backing.clear();
+        _dim = 0;
     }
 
     VPTree(const std::vector<T> &array) { set(array); }
 
     void set(const std::vector<T> &array) {
         clear();
+        if (array.empty()) return;
 
-        if (array.empty()) {
-            return;
+        if constexpr (std::is_same_v<T, FlatSpan>) {
+            _dim = array[0].sz;
+            size_t n = array.size();
+            _flat_backing.resize(n * _dim);
+            for (size_t i = 0; i < n; i++)
+                std::memcpy(_flat_backing.data() + i * _dim, array[i].ptr, _dim * sizeof(float));
+            _examples.resize(n);
+            for (size_t i = 0; i < n; i++)
+                _examples[i] = FlatSpan{_flat_backing.data() + i * _dim, _dim};
+        } else {
+            _examples = array;
         }
-
-        // copy without move
-        _examples = array;
         build(_examples);
     }
 
     void set(std::vector<T> &&array) {
         clear();
+        if (array.empty()) return;
 
-        if (array.empty()) {
-            return;
+        if constexpr (std::is_same_v<T, FlatSpan>) {
+            // For FlatSpan, data is owned externally — copy into flat backing
+            _dim = array[0].sz;
+            size_t n = array.size();
+            _flat_backing.resize(n * _dim);
+            for (size_t i = 0; i < n; i++)
+                std::memcpy(_flat_backing.data() + i * _dim, array[i].ptr, _dim * sizeof(float));
+            _examples.resize(n);
+            for (size_t i = 0; i < n; i++)
+                _examples[i] = FlatSpan{_flat_backing.data() + i * _dim, _dim};
+        } else {
+            _examples = std::move(array);
         }
-
-        // copy with move
-        _examples = array;
         build(_examples);
     }
 
-    bool isEmpty() { return _rootPartition == nullptr; }
+    bool isEmpty() { return _rootIdx == -1; }
 
     void print_state() {
-        if (_rootPartition == nullptr) {
+        if (_rootIdx == -1) {
             return;
         }
 
-        _rootPartition->print_state();
+        rec_print_state<distance_type>(std::cout, _nodePool, _rootIdx, 0);
     }
 
     void searchKNN(const std::vector<T> &queries, size_t k, std::vector<VPTreeSearchResultElement> &results) {
@@ -115,13 +146,13 @@ public:
         results.resize(queries.size());
 
 #if (ENABLE_OMP_PARALLEL)
-#pragma omp parallel for schedule(static, 1) if (queries.size() > 1)
+#pragma omp parallel for schedule(dynamic) if (queries.size() > 1)
 #endif
         // i should be size_t, however msvc requires signed integral loop variables (except with -openmp:llvm)
         for (int i = 0; i < static_cast<int>(queries.size()); ++i) {
             const T &query = queries[i];
             std::priority_queue<VPTreeSearchElement> knnQueue;
-            searchKNN(_rootPartition, query, k, knnQueue);
+            searchKNN(_rootIdx, query, k, knnQueue);
 
             // we must always return k elements for each search unless there is no k elements
             assert(knnQueue.size() == std::min<size_t>(_examples.size(), k));
@@ -142,17 +173,41 @@ public:
         distances.resize(queries.size());
 
 #if (ENABLE_OMP_PARALLEL)
-#pragma omp parallel for schedule(static, 1) if (queries.size() > 1)
+#pragma omp parallel for schedule(dynamic) if (queries.size() > 1)
 #endif
         // i should be size_t, see above
         for (int i = 0; i < static_cast<int>(queries.size()); ++i) {
             const T &query = queries[i];
             distance_type dist = 0;
             int64_t index = -1;
-            search1NN(_rootPartition, query, index, dist);
+            search1NN(_rootIdx, query, index, dist);
             distances[i] = dist;
             indices[i] = index;
         }
+    }
+
+    const std::vector<float>& flatBacking() const { return _flat_backing; }
+    size_t flatDim() const { return _dim; }
+    const std::vector<int64_t>& indexPermutation() const { return _indices; }
+    const std::vector<VPLevelPartition<distance_type>>& partitionPool() const { return _nodePool; }
+    int32_t rootPartitionIdx() const { return _rootIdx; }
+
+    void initFromSerialized(std::vector<float> flat, size_t dim,
+                            std::vector<int64_t> indices,
+                            std::vector<VPLevelPartition<distance_type>> pool,
+                            int32_t root_idx) {
+        clear();
+        _flat_backing = std::move(flat);
+        _dim = dim;
+        size_t n = (dim > 0) ? _flat_backing.size() / dim : 0;
+        _examples.resize(n);
+        if constexpr (std::is_same_v<T, FlatSpan>) {
+            for (size_t i = 0; i < n; i++)
+                _examples[i] = FlatSpan{_flat_backing.data() + i * dim, dim};
+        }
+        _indices = std::move(indices);
+        _nodePool = std::move(pool);
+        _rootIdx = root_idx;
     }
 
     friend std::ostream &operator<<(std::ostream &os, const VPTree<T, distance_type, distance> &vptree) {
@@ -161,15 +216,16 @@ public:
         os << "Num Data Points: " << vptree._examples.size() << std::endl;
 
         int64_t total_memory = 0;
-        if (vptree._rootPartition != nullptr) {
-            total_memory = vptree._rootPartition->numSubnodes() * sizeof(VPLevelPartition<distance_type>) + vptree._examples.size() * sizeof(T);
+        if (vptree._rootIdx != -1) {
+            total_memory = vptree._nodePool[vptree._rootIdx].numSubnodes(vptree._nodePool) * sizeof(VPLevelPartition<distance_type>) + vptree._examples.size() * sizeof(T);
         }
         os << "Total Memory: " << total_memory << " bytes" << std::endl;
         os << "####################" << std::endl;
         os << "[+] Root Level:" << std::endl;
-        if (vptree._rootPartition != nullptr) {
-            total_memory = vptree._rootPartition->numSubnodes() * sizeof(VPLevelPartition<distance_type>) + vptree._examples.size() * sizeof(T);
-            os << *vptree._rootPartition << std::endl;
+        if (vptree._rootIdx != -1) {
+            total_memory = vptree._nodePool[vptree._rootIdx].numSubnodes(vptree._nodePool) * sizeof(VPLevelPartition<distance_type>) + vptree._examples.size() * sizeof(T);
+            rec_print_state<distance_type>(os, vptree._nodePool, vptree._rootIdx, 0);
+            os << std::endl;
         } else {
             os << "<empty>" << std::endl;
         }
@@ -190,19 +246,25 @@ protected:
         std::iota(_indices.begin(), _indices.end(), 0);
 
         // Select vantage point
-        std::vector<VPLevelPartition<distance_type> *> _toSplit;
+        std::vector<int32_t> _toSplit;
+        // Pre-allocated scratch buffer: (distance, example_index) pairs for nth_element.
+        // Reused across all build iterations to avoid repeated heap allocations.
+        std::vector<std::pair<distance_type, int64_t>> distPairs;
+        distPairs.reserve(_examples.size());
 
-        auto *root = new VPLevelPartition<distance_type>(0, 0, _examples.size() - 1);
-        _toSplit.push_back(root);
-        _rootPartition = root;
+        _nodePool.clear();
+        _nodePool.reserve(_examples.size());
+        _nodePool.push_back(VPLevelPartition<distance_type>(0, 0, _examples.size() - 1));
+        _rootIdx = 0;
+        _toSplit.push_back(_rootIdx);
 
         while (!_toSplit.empty()) {
 
-            VPLevelPartition<distance_type> *current = _toSplit.back();
+            int32_t currentIdx = _toSplit.back();
             _toSplit.pop_back();
 
-            int64_t start = current->start();
-            int64_t end = current->end();
+            int64_t start = _nodePool[currentIdx].start();
+            int64_t end = _nodePool[currentIdx].end();
 
             if (start == end) {
                 // stop dividing if there is only one point inside
@@ -216,29 +278,51 @@ protected:
 
             int64_t median = (end + start) / 2;
 
-            // partition in order to keep all elements smaller than median in the left and larger in the right
-            std::nth_element(_indices.begin() + start + 1, _indices.begin() + median, _indices.begin() + end + 1,
-                             VPArgDistanceComparator(this, start));
+            // Pre-compute all distances from the VP once, storing (dist, example_idx) pairs.
+            // nth_element then sorts the pairs by distance (O(1) comparisons, no hashing).
+            // This reduces distance calls from O(n log n) to O(n) per build level.
+            const int64_t range_size = end - start;
+            const int64_t medianInPairs = median - start - 1;
 
-            /* // distance from vantage point (which is at start index) and the median element */
-            auto medianDistance = distance(_examples[_indices[start]], _examples[_indices[median]]);
-            current->setRadius(medianDistance);
+            // When end == start+1 there is exactly one non-VP element and median == start,
+            // giving medianInPairs == -1. No partitioning is needed: radius = 0 and the
+            // single element goes straight to the right child.
+            distance_type medianDistance = 0;
+            if (medianInPairs >= 0) {
+                distPairs.resize(range_size);
+                const auto &vp = _examples[_indices[start]];
+                for (int64_t ci = 0; ci < range_size; ci++) {
+                    const int64_t exIdx = _indices[start + 1 + ci];
+                    distPairs[ci] = {distance(vp, _examples[exIdx]), exIdx};
+                }
+
+                std::nth_element(distPairs.begin(), distPairs.begin() + medianInPairs, distPairs.begin() + range_size,
+                                 [](const auto &a, const auto &b) { return a.first < b.first; });
+
+                // Write the partitioned example indices back to _indices
+                for (int64_t ci = 0; ci < range_size; ci++)
+                    _indices[start + 1 + ci] = distPairs[ci].second;
+
+                medianDistance = distPairs[medianInPairs].first;
+            }
+            _nodePool[currentIdx].setRadius(medianDistance);
 
             // Schedule to build next levels
             // Left is every one within the median distance radius
-            VPLevelPartition<distance_type> *left = nullptr;
+            int32_t left_idx = -1, right_idx = -1;
             if (start + 1 <= median) {
-                left = new VPLevelPartition<distance_type>(0, start + 1, median);
-                _toSplit.push_back(left);
+                _nodePool.push_back(VPLevelPartition<distance_type>(0, start + 1, median));
+                left_idx = _nodePool.size() - 1;
+                _toSplit.push_back(left_idx);
             }
 
-            VPLevelPartition<distance_type> *right = nullptr;
             if (median + 1 <= end) {
-                right = new VPLevelPartition<distance_type>(0, median + 1, end);
-                _toSplit.push_back(right);
+                _nodePool.push_back(VPLevelPartition<distance_type>(0, median + 1, end));
+                right_idx = _nodePool.size() - 1;
+                _toSplit.push_back(right_idx);
             }
 
-            current->setChild(left, right);
+            _nodePool[currentIdx].setChildIdx(left_idx, right_idx);
         }
     }
 
@@ -250,26 +334,30 @@ protected:
         bool operator<(const VPTreeSearchElement &v) const { return dist < v.dist; }
     };
 
-    void searchKNN(VPLevelPartition<distance_type> *partition, const T &val, unsigned int k, std::priority_queue<VPTreeSearchElement> &knnQueue) {
+    void searchKNN(int32_t partitionIdx, const T &val, unsigned int k, std::priority_queue<VPTreeSearchElement> &knnQueue) {
 
         auto tau = std::numeric_limits<distance_type>::max();
 
         // stores the distance to the partition border at the time of the storage. Since tau value will change
         // whiling performing the DFS search from on level, the storage distance will be checked again when about
         // to dive into that partition. It might not be necessary to dig into the partition anymore if tau decreased.
-        std::vector<std::tuple<distance_type, VPLevelPartition<distance_type> *>> toSearch = {{-1, partition}};
+        thread_local std::vector<std::tuple<distance_type, int32_t>> toSearch;
+        toSearch.clear();
+        toSearch.push_back({(distance_type)-1, partitionIdx});
 
         while (!toSearch.empty()) {
-            auto [distToBorder, current] = toSearch.back();
+            auto [distToBorder, currentIdx] = toSearch.back();
             toSearch.pop_back();
 
-            auto dist = distance(val, _examples[_indices[current->start()]]);
+            const VPLevelPartition<distance_type> &current = _nodePool[currentIdx];
+
+            auto dist = distance(val, _examples[_indices[current.start()]]);
             if (dist < tau || knnQueue.size() < k) {
 
                 if (knnQueue.size() == k) {
                     knnQueue.pop();
                 }
-                int64_t indexToAdd = _indices[current->start()];
+                int64_t indexToAdd = _indices[current.start()];
                 knnQueue.push(VPTreeSearchElement(indexToAdd, dist));
 
                 tau = knnQueue.top().dist;
@@ -282,7 +370,10 @@ protected:
             }
 
             size_t neighborsSoFar = knnQueue.size();
-            if (dist > current->radius()) {
+            int32_t left_idx = current.left_idx();
+            int32_t right_idx = current.right_idx();
+
+            if (dist > current.radius()) {
                 // must search outside
 
                 /*
@@ -298,66 +389,70 @@ protected:
                     The exact same logic is applied to the inside case in the else statement.
 
                 */
-                if (current->left() != nullptr) {
+                if (left_idx >= 0) {
 
-                    size_t rightPartitionSize = (current->right() != nullptr) ? current->right()->size() : 0;
+                    size_t rightPartitionSize = (right_idx >= 0) ? _nodePool[right_idx].size() : 0;
                     bool notEnoughPointsOutside = rightPartitionSize < (k - neighborsSoFar);
-                    auto toBorder = dist - current->radius();
+                    auto toBorder = dist - current.radius();
 
                     // we might not have enough point outside to reject the inside partition, so we might need to search
                     // for both
                     if (notEnoughPointsOutside) {
-                        toSearch.push_back({-1, current->left()});
+                        toSearch.push_back({(distance_type)-1, left_idx});
                     } else if (toBorder <= tau) {
-                        toSearch.push_back({toBorder, current->left()});
+                        toSearch.push_back({toBorder, left_idx});
                     }
                 }
 
                 // now schedule outside
-                if (current->right() != nullptr) {
-                    toSearch.push_back({-1, current->right()});
+                if (right_idx >= 0) {
+                    toSearch.push_back({(distance_type)-1, right_idx});
                 }
             } else {
                 // must search inside
                 // logic is analogous to the outside case
 
-                if (current->right() != nullptr) {
+                if (right_idx >= 0) {
 
-                    size_t leftPartitionSize = (current->left() != nullptr) ? current->left()->size() : 0;
+                    size_t leftPartitionSize = (left_idx >= 0) ? _nodePool[left_idx].size() : 0;
                     bool notEnoughPointsInside = leftPartitionSize < (k - neighborsSoFar);
-                    auto toBorder = current->radius() - dist;
+                    auto toBorder = current.radius() - dist;
 
                     if (notEnoughPointsInside) {
-                        toSearch.push_back({-1, current->right()});
+                        toSearch.push_back({(distance_type)-1, right_idx});
                     } else if (toBorder <= tau) {
-                        toSearch.push_back({toBorder, current->right()});
+                        toSearch.push_back({toBorder, right_idx});
                     }
                 }
 
                 // now schedule inside
-                if (current->left() != nullptr) {
-                    toSearch.push_back({-1, current->left()});
+                if (left_idx >= 0) {
+                    toSearch.push_back({(distance_type)-1, left_idx});
                 }
             }
         }
     }
 
-    void search1NN(VPLevelPartition<distance_type> *partition, const T &val, int64_t &resultIndex, distance_type &resultDist) {
+    void search1NN(int32_t partitionIdx, const T &val, int64_t &resultIndex, distance_type &resultDist) {
 
         resultDist = std::numeric_limits<distance_type>::max();
         resultIndex = -1;
 
-        std::vector<std::tuple<distance_type, VPLevelPartition<distance_type> *>> toSearch = {{-1, partition}};
+        thread_local std::vector<std::tuple<distance_type, int32_t>> toSearch;
+        toSearch.clear();
+        toSearch.push_back({(distance_type)-1, partitionIdx});
 
         while (!toSearch.empty()) {
 
-            auto [distToBorder, current] = toSearch.back();
+            auto [distToBorder, currentIdx] = toSearch.back();
             toSearch.pop_back();
 
-            auto dist = distance(val, _examples[_indices[current->start()]]);
+            const VPLevelPartition<distance_type> &current = _nodePool[currentIdx];
+
+            auto dist = distance(val, _examples[_indices[current.start()]]);
             if (dist < resultDist) {
                 resultDist = dist;
-                resultIndex = _indices[current->start()];
+                resultIndex = _indices[current.start()];
             }
 
             if (distToBorder >= 0 && distToBorder > resultDist) {
@@ -366,27 +461,30 @@ protected:
                 continue;
             }
 
-            if (dist > current->radius()) {
+            int32_t left_idx = current.left_idx();
+            int32_t right_idx = current.right_idx();
+
+            if (dist > current.radius()) {
                 // may need to search inside as well
-                auto toBorder = dist - current->radius();
-                if (toBorder < resultDist && current->left() != nullptr) {
-                    toSearch.push_back({toBorder, current->left()});
+                auto toBorder = dist - current.radius();
+                if (toBorder < resultDist && left_idx >= 0) {
+                    toSearch.push_back({toBorder, left_idx});
                 }
 
                 // must search outside
-                if (current->right() != nullptr) {
-                    toSearch.push_back({-1, current->right()});
+                if (right_idx >= 0) {
+                    toSearch.push_back({(distance_type)-1, right_idx});
                 }
             } else {
-                auto toBorder = current->radius() - dist;
+                auto toBorder = current.radius() - dist;
                 // may need to search outside as well
-                if (toBorder < resultDist && current->right() != nullptr) {
-                    toSearch.push_back({toBorder, current->right()});
+                if (toBorder < resultDist && right_idx >= 0) {
+                    toSearch.push_back({toBorder, right_idx});
                 }
 
                 // must search inside
-                if (current->left() != nullptr) {
-                    toSearch.push_back({-1, current->left()});
+                if (left_idx >= 0) {
+                    toSearch.push_back({(distance_type)-1, left_idx});
                 }
             }
         }
@@ -417,30 +515,14 @@ protected:
             knnQueue.pop();
         }
     }
-    /*
-     * A vantage point distance comparator. Will check which from two points are closer to the reference vantage point.
-     * This is used to find the median distance from vantage point in order to split the VPLevelPartition into two sets.
-     * The comparator will be used to partially sort index vector while keeping examples vector unchanged. This allows
-     * keeping original index information as the index vector will be partially sorted.
-     */
-    struct VPArgDistanceComparator {
-
-        int64_t referenceItemIndex;
-        VPTree *vptree;
-        VPArgDistanceComparator(VPTree *vptree, int64_t referenceItemIndex) : referenceItemIndex(referenceItemIndex), vptree(vptree) {}
-        bool operator()(int64_t a, int64_t b) {
-            const int64_t &refIndex = vptree->_indices[referenceItemIndex];
-            const auto &ref = vptree->_examples[refIndex];
-            return distance(ref, vptree->_examples[a]) < distance(ref, vptree->_examples[b]);
-        }
-    };
-
-    friend struct VPArgDistanceComparator;
 
 protected:
     std::vector<T> _examples;
     std::vector<int64_t> _indices;
-    VPLevelPartition<distance_type> *_rootPartition = nullptr;
+    std::vector<VPLevelPartition<distance_type>> _nodePool;
+    int32_t _rootIdx = -1;
+    std::vector<float> _flat_backing;
+    size_t _dim = 0;
 };
 
 } // namespace vptree

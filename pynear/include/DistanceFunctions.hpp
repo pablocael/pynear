@@ -1,3 +1,5 @@
+#pragma once
+
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -13,8 +15,16 @@
 #include <stdint.h>
 #include <stdio.h>
 
+struct FlatSpan {
+    const float* ptr;
+    size_t sz;
+    size_t size() const { return sz; }
+    float operator[](size_t i) const { return ptr[i]; }
+    const float* data() const { return ptr; }
+};
+
 using arrayd = std::vector<double>;
-using arrayf = std::vector<float>;
+using arrayf = FlatSpan;
 using arrayli = std::vector<uint8_t>;
 using ndarrayd = std::vector<arrayd>;
 using ndarrayf = std::vector<arrayf>;
@@ -144,16 +154,12 @@ template <> int32_t hamming_u32<32>(const uint32_t *pa, const uint32_t *pb) { re
 template <> int64_t hamming_u64<64>(const uint64_t *pa, const uint64_t *pb) { return _mm_popcnt_u64(pa[0] ^ pb[0]); }
 
 template <> int64_t hamming_u64<128>(const uint64_t *pa, const uint64_t *pb) {
-
-    __m256d result = _mm256_set_pd(_mm_popcnt_u64(pa[0] ^ pb[0]), _mm_popcnt_u64(pa[1] ^ pb[1]), 0, 0);
-    return (int64_t)sum4(result);
+    return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]);
 }
 
 template <> int64_t hamming_u64<256>(const uint64_t *pa, const uint64_t *pb) {
-
-    __m256d result =
-        _mm256_set_pd(_mm_popcnt_u64(pa[0] ^ pb[0]), _mm_popcnt_u64(pa[1] ^ pb[1]), _mm_popcnt_u64(pa[2] ^ pb[2]), _mm_popcnt_u64(pa[3] ^ pb[3]));
-    return (int64_t)sum4(result);
+    return _mm_popcnt_u64(pa[0] ^ pb[0]) + _mm_popcnt_u64(pa[1] ^ pb[1]) +
+           _mm_popcnt_u64(pa[2] ^ pb[2]) + _mm_popcnt_u64(pa[3] ^ pb[3]);
 }
 
 template <> int64_t hamming_u64<512>(const uint64_t *pa, const uint64_t *pb) {
@@ -189,8 +195,8 @@ double dist_l2_d_avx2(const arrayd &p1, const arrayd &p2) {
     __m256d result = _mm256_set_pd(0, 0, 0, 0);
 
     while (i--) {
-        __m256d x = _mm256_load_pd(&p1[4 * i]);
-        __m256d y = _mm256_load_pd(&p2[4 * i]);
+        __m256d x = _mm256_loadu_pd(&p1[4 * i]);
+        __m256d y = _mm256_loadu_pd(&p2[4 * i]);
 
         /* Compute the difference between the two vectors */
         __m256d diff = _mm256_sub_pd(x, y);
@@ -202,7 +208,15 @@ double dist_l2_d_avx2(const arrayd &p1, const arrayd &p2) {
     }
 
     double out = sum4(result);
-    return std::sqrt(out);
+
+    // Handle remainder elements (when size % 4 != 0)
+    size_t processed = (p1.size() / 4) * 4;
+    double remain = 0.0;
+    for (size_t r = processed; r < p1.size(); r++) {
+        double d = p1[r] - p2[r];
+        remain += d * d;
+    }
+    return std::sqrt(out + remain);
 }
 
 // reads 0 <= d < 4 floats as __m128
@@ -225,8 +239,8 @@ float dist_l2_f_avx2(const arrayf &p1, const arrayf &p2) {
     unsigned int d = p1.size();
     __m256 msum1 = _mm256_setzero_ps();
 
-    const float *x = &(p1[0]);
-    const float *y = &(p2[0]);
+    const float *x = p1.data();
+    const float *y = p2.data();
 
     while (d >= 8) {
         __m256 mx = _mm256_loadu_ps(x);
@@ -303,21 +317,22 @@ float dist_l1_f(const arrayf &p1, const arrayf &p2) {
 float dist_l1_f_avx2(const arrayf &p1, const arrayf &p2) {
     /* SIMD L1 metric, also called Manhattan or taxicab metric */
 
-    const float *vec1 = &(p1[0]);
-    const float *vec2 = &(p2[0]);
+    const float *vec1 = p1.data();
+    const float *vec2 = p2.data();
     size_t size = p1.size();
 
     const size_t blocksize = 8;
     size_t i = 0;
 
     __m256 sum = _mm256_setzero_ps();
+    const __m256 abs_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
 
     for (; i + blocksize <= size; i += blocksize) {
         __m256 v1 = _mm256_loadu_ps(&vec1[i]);
         __m256 v2 = _mm256_loadu_ps(&vec2[i]);
 
         __m256 diff = _mm256_sub_ps(v1, v2);
-        sum = _mm256_add_ps(sum, _mm256_and_ps(diff, _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF))));
+        sum = _mm256_add_ps(sum, _mm256_and_ps(diff, abs_mask));
     }
 
     ALIGN_AS(32) float result[8];
@@ -354,20 +369,21 @@ float dist_chebyshev_f(const arrayf &p1, const arrayf &p2) {
 float dist_chebyshev_f_avx2(const arrayf &p1, const arrayf &p2) {
     /* SIMD Chebyshev distance metric, also called maximum metric or L_inf metric */
 
-    const float *vec1 = &(p1[0]);
-    const float *vec2 = &(p2[0]);
+    const float *vec1 = p1.data();
+    const float *vec2 = p2.data();
     size_t size = p1.size();
 
     const size_t blocksize = 8;
     size_t i = 0;
 
     __m256 max_diff = _mm256_setzero_ps();
+    const __m256 abs_mask_cheb = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
 
     for (; i + blocksize <= size; i += blocksize) {
         __m256 v1 = _mm256_loadu_ps(&vec1[i]);
         __m256 v2 = _mm256_loadu_ps(&vec2[i]);
         __m256 diff = _mm256_sub_ps(v1, v2);
-        diff = _mm256_and_ps(diff, _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF))); // Absolute value
+        diff = _mm256_and_ps(diff, abs_mask_cheb); // Absolute value
         max_diff = _mm256_max_ps(max_diff, diff);
     }
 

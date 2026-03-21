@@ -30,56 +30,115 @@ template <distance_func_f distance> class VPTreeNumpyAdapter {
 public:
     VPTreeNumpyAdapter() = default;
 
-    void set(const ndarrayf &array) { tree.set(array); }
+    void set(py::array_t<float, py::array::c_style | py::array::forcecast> arr) {
+        auto buf = arr.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("set() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        const float* ptr = static_cast<const float*>(buf.ptr);
+        std::vector<arrayf> spans(n);
+        for (size_t i = 0; i < n; i++)
+            spans[i] = FlatSpan{ptr + i * d, d};
+        tree.set(spans);
+    }
 
-    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<float>>> searchKNN(const ndarrayf &queries, size_t k) {
+    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<float>>>
+    searchKNN(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k) {
+        auto buf = queries.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("searchKNN() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        const float* ptr = static_cast<const float*>(buf.ptr);
+        std::vector<arrayf> spans(n);
+        for (size_t i = 0; i < n; i++)
+            spans[i] = FlatSpan{ptr + i * d, d};
 
         std::vector<typename vptree::VPTree<arrayf, float, distance>::VPTreeSearchResultElement> results;
-        tree.searchKNN(queries, k, results);
+        tree.searchKNN(spans, k, results);
 
-        std::vector<std::vector<int64_t>> indexes;
-        std::vector<std::vector<float>> distances;
-        indexes.resize(results.size());
-        distances.resize(results.size());
-        for (size_t i = 0; i < results.size(); ++i) {
+        std::vector<std::vector<int64_t>> indexes(results.size());
+        std::vector<std::vector<float>> distances(results.size());
+        for (size_t i = 0; i < results.size(); i++) {
             indexes[i] = std::move(results[i].indexes);
             distances[i] = std::move(results[i].distances);
         }
-
         return std::make_tuple(indexes, distances);
     }
 
-    std::tuple<std::vector<int64_t>, std::vector<float>> search1NN(const ndarrayf &queries) {
+    std::tuple<std::vector<int64_t>, std::vector<float>>
+    search1NN(py::array_t<float, py::array::c_style | py::array::forcecast> queries) {
+        auto buf = queries.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("search1NN() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        const float* ptr = static_cast<const float*>(buf.ptr);
+        std::vector<arrayf> spans(n);
+        for (size_t i = 0; i < n; i++)
+            spans[i] = FlatSpan{ptr + i * d, d};
 
         std::vector<int64_t> indices;
         std::vector<float> distances;
-        tree.search1NN(queries, indices, distances);
-
+        tree.search1NN(spans, indices, distances);
         return std::make_tuple(std::move(indices), std::move(distances));
     }
 
     std::string to_string() {
         std::stringstream stream;
         stream << tree;
-
         return stream.str();
     }
 
-    static py::tuple get_state(const VPTreeNumpyAdapter<distance> &p) {
-        vptree::SerializedStateObject state = p.tree.serialize();
-        py::tuple t = py::make_tuple(state.data(), state.checksum());
-        return t;
+    static py::tuple get_state(const VPTreeNumpyAdapter<distance>& p) {
+        const auto& flat = p.tree.flatBacking();
+        size_t dim = p.tree.flatDim();
+        const auto& indices = p.tree.indexPermutation();
+        const auto& pool = p.tree.partitionPool();
+        int32_t root_idx = p.tree.rootPartitionIdx();
+
+        py::bytes flat_bytes(reinterpret_cast<const char*>(flat.data()),
+                             flat.size() * sizeof(float));
+        py::bytes idx_bytes(reinterpret_cast<const char*>(indices.data()),
+                            indices.size() * sizeof(int64_t));
+        py::bytes pool_bytes(reinterpret_cast<const char*>(pool.data()),
+                             pool.size() * sizeof(pool[0]));
+
+        return py::make_tuple(flat_bytes, (uint64_t)dim, idx_bytes, pool_bytes, root_idx);
     }
 
     static VPTreeNumpyAdapter<distance> set_state(py::tuple t) {
         VPTreeNumpyAdapter<distance> p;
-        std::vector<uint8_t> state = t[0].cast<std::vector<uint8_t>>();
-        uint32_t checksum = t[1].cast<uint32_t>();
-        p.tree.deserialize(vptree::SerializedStateObject(state, checksum));
+
+        auto flat_bytes  = t[0].cast<py::bytes>();
+        uint64_t dim     = t[1].cast<uint64_t>();
+        auto idx_bytes   = t[2].cast<py::bytes>();
+        auto pool_bytes  = t[3].cast<py::bytes>();
+        int32_t root_idx = t[4].cast<int32_t>();
+
+        // Flat backing
+        std::string flat_str(flat_bytes);
+        std::vector<float> flat(flat_str.size() / sizeof(float));
+        std::memcpy(flat.data(), flat_str.data(), flat_str.size());
+
+        // Indices
+        std::string idx_str(idx_bytes);
+        std::vector<int64_t> indices(idx_str.size() / sizeof(int64_t));
+        std::memcpy(indices.data(), idx_str.data(), idx_str.size());
+
+        // Node pool
+        using NodeT = vptree::VPLevelPartition<float>;
+        std::string pool_str(pool_bytes);
+        std::vector<NodeT> pool(pool_str.size() / sizeof(NodeT));
+        std::memcpy(pool.data(), pool_str.data(), pool_str.size());
+
+        p.tree.initFromSerialized(std::move(flat), (size_t)dim,
+                                  std::move(indices), std::move(pool), root_idx);
         return p;
     }
 
-    vptree::SerializableVPTree<arrayf, float, distance, vptree::ndarraySerializer<float>, vptree::ndarrayDeserializer<float>> tree;
+    vptree::VPTree<arrayf, float, distance> tree;
 };
 
 template <distance_func_li distance> class VPTreeNumpyAdapterBinary {
@@ -172,10 +231,34 @@ static const char *index_string = "Return a debug string representation of the t
 static const char *index_find_threshold = "Batch find all vectors below the distance threshold";
 static const char *index_values = "Return all stored vectors in arbitrary order";
 
+static float py_dist_l2(py::array_t<float, py::array::c_style | py::array::forcecast> a,
+                        py::array_t<float, py::array::c_style | py::array::forcecast> b) {
+    auto ba = a.request(); auto bb = b.request();
+    FlatSpan sa{static_cast<const float*>(ba.ptr), (size_t)ba.size};
+    FlatSpan sb{static_cast<const float*>(bb.ptr), (size_t)bb.size};
+    return dist_l2_f_avx2(sa, sb);
+}
+
+static float py_dist_l1(py::array_t<float, py::array::c_style | py::array::forcecast> a,
+                        py::array_t<float, py::array::c_style | py::array::forcecast> b) {
+    auto ba = a.request(); auto bb = b.request();
+    FlatSpan sa{static_cast<const float*>(ba.ptr), (size_t)ba.size};
+    FlatSpan sb{static_cast<const float*>(bb.ptr), (size_t)bb.size};
+    return dist_l1_f_avx2(sa, sb);
+}
+
+static float py_dist_chebyshev(py::array_t<float, py::array::c_style | py::array::forcecast> a,
+                               py::array_t<float, py::array::c_style | py::array::forcecast> b) {
+    auto ba = a.request(); auto bb = b.request();
+    FlatSpan sa{static_cast<const float*>(ba.ptr), (size_t)ba.size};
+    FlatSpan sb{static_cast<const float*>(bb.ptr), (size_t)bb.size};
+    return dist_chebyshev_f_avx2(sa, sb);
+}
+
 PYBIND11_MODULE(_pynear, m) {
-    m.def("dist_l2", dist_l2_f_avx2);
-    m.def("dist_l1", dist_l1_f_avx2);
-    m.def("dist_chebyshev", dist_chebyshev_f_avx2);
+    m.def("dist_l2", py_dist_l2);
+    m.def("dist_l1", py_dist_l1);
+    m.def("dist_chebyshev", py_dist_chebyshev);
     m.def("dist_hamming_64", dist_hamming_64);
     m.def("dist_hamming_128", dist_hamming_128);
     m.def("dist_hamming_256", dist_hamming_256);

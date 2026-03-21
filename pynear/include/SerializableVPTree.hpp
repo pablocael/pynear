@@ -50,7 +50,7 @@ public:
     SerializedStateObject serialize() const override {
 
         SerializedStateObject state;
-        if (this->_rootPartition == nullptr) {
+        if (this->_rootIdx == -1) {
             return state;
         }
 
@@ -86,54 +86,62 @@ public:
 
     void serializeLevelPartitions(SerializedStateObjectWriter &writer) const {
 
-        std::vector<const VPLevelPartition<distance_type> *> flattenTreeState;
-        flattenTreePartitions(this->_rootPartition, flattenTreeState);
-
-        // reverse the tree state since we will write it in a stack for serializing
-        for (const VPLevelPartition<distance_type> *elem : flattenTreeState) {
-            if (elem == nullptr) {
-                writer.write((float)(0));
-                writer.write((int64_t)(-1));
-                writer.write((int64_t)(-1));
-                continue;
-            }
-
-            writer.write((float)(elem->radius()));
-            writer.write((int64_t)(elem->start()));
-            writer.write((int64_t)(elem->end()));
-        }
+        // Flatten the tree using indices into the pool via preorder traversal
+        std::vector<int32_t> stack;
+        // We'll do a preorder traversal using the pool and indices
+        // We serialize: for each node visited in preorder, write radius/start/end
+        // For null children, we write a sentinel (-1 indexEnd)
+        flattenAndWritePartitions(writer, this->_rootIdx);
     }
 
-    void deserializeLevelPartitions(SerializedStateObjectReader &reader) { this->_rootPartition = rebuildFromState(reader); }
-
-    void flattenTreePartitions(const VPLevelPartition<distance_type> *root,
-                               std::vector<const VPLevelPartition<distance_type> *> &flattenTreeState) const {
-        // visit partitions tree in preorder write all values.
-        // implement pre order using a vector as a stack
-        flattenTreeState.push_back(root);
-        if (root != nullptr) {
-            flattenTreePartitions(root->left(), flattenTreeState);
-            flattenTreePartitions(root->right(), flattenTreeState);
+    void flattenAndWritePartitions(SerializedStateObjectWriter &writer, int32_t idx) const {
+        if (idx < 0) {
+            // write sentinel null node
+            writer.write((float)(0));
+            writer.write((int64_t)(-1));
+            writer.write((int64_t)(-1));
+            return;
         }
+
+        const VPLevelPartition<distance_type> &node = this->_nodePool[idx];
+        writer.write((float)(node.radius()));
+        writer.write((int64_t)(node.start()));
+        writer.write((int64_t)(node.end()));
+
+        flattenAndWritePartitions(writer, node.left_idx());
+        flattenAndWritePartitions(writer, node.right_idx());
     }
 
-    VPLevelPartition<distance_type> *rebuildFromState(SerializedStateObjectReader &reader) {
+    void deserializeLevelPartitions(SerializedStateObjectReader &reader) {
+        this->_nodePool.clear();
+        this->_rootIdx = rebuildFromState(reader);
+    }
+
+    int32_t rebuildFromState(SerializedStateObjectReader &reader) {
         if (reader.isEmpty()) {
-            return nullptr;
+            return -1;
         }
 
         float radius = reader.read<float>();
         int64_t indexStart = reader.read<int64_t>();
         int64_t indexEnd = reader.read<int64_t>();
         if (indexEnd == -1) {
-            return nullptr;
+            return -1;
         }
 
-        VPLevelPartition<distance_type> *root = new VPLevelPartition<distance_type>(radius, indexStart, indexEnd);
-        VPLevelPartition<distance_type> *left = rebuildFromState(reader);
-        VPLevelPartition<distance_type> *right = rebuildFromState(reader);
-        root->setChild(left, right);
-        return root;
+        // Push node to pool, get its index
+        this->_nodePool.push_back(VPLevelPartition<distance_type>(radius, indexStart, indexEnd));
+        int32_t nodeIdx = static_cast<int32_t>(this->_nodePool.size() - 1);
+
+        // IMPORTANT: rebuild children BEFORE using nodeIdx to index into pool,
+        // because push_back may reallocate. We save idx and re-index after.
+        int32_t left_idx = rebuildFromState(reader);
+        int32_t right_idx = rebuildFromState(reader);
+
+        // After recursion, re-access by saved index (pool may have reallocated)
+        this->_nodePool[nodeIdx].setChildIdx(left_idx, right_idx);
+
+        return nodeIdx;
     }
 };
 
