@@ -363,9 +363,9 @@ protected:
                 tau = knnQueue.top().dist;
             }
 
-            if (distToBorder >= 0 && distToBorder > tau) {
+            if (distToBorder >= 0 && distToBorder > tau && knnQueue.size() >= k) {
 
-                // distance to this partition border change and its not necessary to search within it anymore
+                // distance to this partition border changed and its not necessary to search within it anymore
                 continue;
             }
 
@@ -399,7 +399,7 @@ protected:
                     // for both
                     if (notEnoughPointsOutside) {
                         toSearch.push_back({(distance_type)-1, left_idx});
-                    } else if (toBorder <= tau) {
+                    } else if (knnQueue.size() < k || toBorder <= tau) {
                         toSearch.push_back({toBorder, left_idx});
                     }
                 }
@@ -420,7 +420,7 @@ protected:
 
                     if (notEnoughPointsInside) {
                         toSearch.push_back({(distance_type)-1, right_idx});
-                    } else if (toBorder <= tau) {
+                    } else if (knnQueue.size() < k || toBorder <= tau) {
                         toSearch.push_back({toBorder, right_idx});
                     }
                 }
