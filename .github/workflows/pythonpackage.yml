@@ -4,11 +4,8 @@ on:
   push:
     branches:
     - '**'
-    tags-ignore:
-    - '**'
-  release:
-    types:
-    - published
+    tags:
+    - 'v*'
 
 jobs:
   build-wheels:
@@ -58,8 +55,25 @@ jobs:
         name: sdist
         path: ./dist/*.tar.gz
 
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        path: dist
+        merge-multiple: true
+    - name: Create GitHub release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: dist/*
+        generate_release_notes: true
+
   upload-pypi:
-    if: github.event_name == 'release' && github.event.action == 'published'
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-wheels, build-sdist]
     runs-on: ubuntu-latest
     permissions:
