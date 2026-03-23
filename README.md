@@ -9,7 +9,7 @@
 
 <video src="https://github.com/user-attachments/assets/4e07e82d-f3a0-4d47-9d34-a5ea4f752e14" autoplay muted loop width="100%"></video>
 
-PyNear is a Python library with a C++ core for exact KNN search over metric
+PyNear is a Python library with a C++ core for exact and/or approximate (fasxt) KNN search over metric
 spaces.  It is built around [Vantage Point Trees](./docs/vptrees.md), a metric
 tree that scales well to higher dimensionalities where kd-trees degrade, and
 uses SIMD intrinsics (AVX2 on x86-64, portable fallbacks on arm64/Apple
