@@ -1,0 +1,3 @@
+pynear
+PySide6
+numpy

@@ -5,9 +5,31 @@
 [![CI](https://github.com/pablocael/pynear/actions/workflows/pythonpackage.yml/badge.svg)](https://github.com/pablocael/pynear/actions/workflows/pythonpackage.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-PyNear is a Python library (C++ core) for fast, **exact** K-nearest-neighbor search using metric distance functions.
-It is built around [Vantage Point Trees](./docs/vptrees.md), which remain efficient at higher dimensionalities compared to kd-trees.
-SIMD acceleration (AVX2 on x86-64, portable fallbacks on arm64/Apple Silicon) is used for the hot distance paths.
+**Fast, exact K-nearest-neighbour search for Python — no approximations, no compromises.**
+
+<video src="docs/video/demo1.mp4" autoplay muted loop width="100%"></video>
+
+PyNear is a Python library with a C++ core for exact KNN search over metric
+spaces.  It is built around [Vantage Point Trees](./docs/vptrees.md), a metric
+tree that scales well to higher dimensionalities where kd-trees degrade, and
+uses SIMD intrinsics (AVX2 on x86-64, portable fallbacks on arm64/Apple
+Silicon) to accelerate the hot distance computation paths.
+
+### Why PyNear?
+
+| | PyNear | Faiss | Annoy | scikit-learn |
+|---|---|---|---|---|
+| **Exact results** | ✅ always | ✅ flat index | ❌ approximate | ✅ |
+| **Metric agnostic** | ✅ L2, L1, L∞, Hamming | L2 / inner product | L2 / cosine / Hamming | L2 / others |
+| **Low-dim sweet spot** | ✅ | ❌ | ❌ | ❌ |
+| **Binary / Hamming** | ✅ hardware popcount | ✅ | ✅ | ❌ |
+| **Threshold / range search** | ✅ BKTree | ❌ | ❌ | ❌ |
+| **Pickle serialisation** | ✅ | ❌ | ✅ | ✅ |
+| **Zero native dependencies** | ✅ | ❌ GPU/BLAS | ❌ | ❌ |
+
+PyNear is a strong fit when you need **exact** answers, work in **low-to-mid
+dimensionality** (2-D to ~512-D), care about **multiple distance metrics**, or
+need **range/threshold queries** on binary descriptors (e.g. ORB, BRIEF).
 
 ---
 
@@ -17,7 +39,8 @@ SIMD acceleration (AVX2 on x86-64, portable fallbacks on arm64/Apple Silicon) is
 pip install pynear
 ```
 
-Requires Python 3.8+ and NumPy ≥ 1.21.2. Pre-built wheels are available for Linux, macOS (x86-64 and Apple Silicon), and Windows.
+Requires Python 3.8+ and NumPy ≥ 1.21.2.  Pre-built wheels are available for
+Linux, macOS (x86-64 and Apple Silicon), and Windows — no compiler needed.
 
 ---
 
@@ -27,20 +50,20 @@ Requires Python 3.8+ and NumPy ≥ 1.21.2. Pre-built wheels are available for Li
 import numpy as np
 import pynear
 
-# Build index
+# Build index from 100 000 vectors of dimension 32
 data = np.random.rand(100_000, 32).astype(np.float32)
 index = pynear.VPTreeL2Index()
 index.set(data)
 
-# Search — returns (indices, distances) for each query
+# KNN search — returns (indices, distances) per query, sorted nearest-first
 queries = np.random.rand(10, 32).astype(np.float32)
 indices, distances = index.searchKNN(queries, k=5)
 
-# Nearest-neighbour shortcut (slightly faster than searchKNN with k=1)
+# 1-NN shortcut (slightly faster than searchKNN with k=1)
 nn_indices, nn_distances = index.search1NN(queries)
 ```
 
-For all available index types and detailed usage see [docs](./docs/README.md).
+For all index types and advanced usage see [docs/README.md](./docs/README.md).
 
 ---
 
@@ -54,19 +77,18 @@ For all available index types and detailed usage see [docs](./docs/README.md).
 | `VPTreeL1Index` | L1 (Manhattan) | `float32` | SIMD-accelerated |
 | `VPTreeChebyshevIndex` | L∞ (Chebyshev) | `float32` | SIMD-accelerated |
 | `VPTreeBinaryIndex` | Hamming | `uint8` | Exact, hardware popcount |
-| `BKTreeBinaryIndex` | Hamming | `uint8` | Threshold search |
+| `BKTreeBinaryIndex` | Hamming | `uint8` | Threshold / range search |
 
 All VPTree indices support `searchKNN(queries, k)` and `search1NN(queries)`.
 `BKTreeBinaryIndex` supports `find_threshold(queries, threshold)` for range queries.
 
-### Pickle serialization
+### Pickle serialisation
 
-All VPTree indices are pickle-serializable, so they can be saved to disk and reloaded without rebuilding:
+All VPTree indices are pickle-serialisable — save a built index to disk and
+reload it without rebuilding:
 
 ```python
-import pickle
-import numpy as np
-import pynear
+import pickle, numpy as np, pynear
 
 data = np.random.rand(20_000, 32).astype(np.float32)
 index = pynear.VPTreeL2Index()
@@ -82,8 +104,6 @@ index2 = pickle.loads(blob)
 print(index.to_string())
 ```
 
-Output (truncated):
-
 ```
 ####################
 # [VPTree state]
@@ -97,13 +117,34 @@ Total Memory: 8000 bytes
 ...
 ```
 
-> **Note**: `to_string()` traverses the whole tree and is slow — use it for debugging only.
+> **Note**: `to_string()` traverses the whole tree — use it for debugging only.
+
+---
+
+## Demos
+
+Two interactive desktop demos ship in `demo/` and run with a single command:
+
+```console
+pip install PySide6
+python demo/point_cloud.py    # KNN Explorer — hover over 1M points to find neighbours
+python demo/voronoi.py    # Voronoi diagram — drag seed points, watch cells reshape live
+```
+
+- **KNN Explorer** — scatter up to 1 million 2-D points and hover to see k nearest
+  neighbours highlighted in real time.  Supports zoom, pan, and configurable point size.
+- **Voronoi Diagram** — every canvas pixel is coloured by its nearest seed point.
+  Add, drag, and remove seeds; the diagram redraws live using pynear's batch 1-NN.
+
+See [docs/demos.md](./docs/demos.md) for full details.
 
 ---
 
 ## Benchmarks
 
-See the [benchmark README](./pynear/benchmark/README.md) for charts comparing PyNear against scikit-learn, Faiss, and Annoy across different dimensionalities, dataset sizes, and index types.
+See the [benchmark README](./pynear/benchmark/README.md) for charts comparing
+PyNear against scikit-learn, Faiss, and Annoy across different dimensionalities,
+dataset sizes, and distance metrics.
 
 To run a quick standalone benchmark:
 
@@ -121,7 +162,7 @@ python bench_run.py
 pip install .
 ```
 
-### Running Python tests
+### Running tests
 
 ```console
 make test
