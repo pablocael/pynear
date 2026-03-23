@@ -16,7 +16,7 @@ pip install pynear PySide6
 python demo/point_cloud.py
 ```
 
-<video src="video/demo1.mp4" controls muted loop width="100%"></video>
+<video src="https://github.com/user-attachments/assets/4e07e82d-f3a0-4d47-9d34-a5ea4f752e14" controls muted loop width="100%"></video>
 
 ### What it shows
 
@@ -66,7 +66,7 @@ latency in milliseconds.
 python demo/voronoi.py
 ```
 
-<video src="video/demo2.mp4" controls muted loop width="100%"></video>
+<video src="https://github.com/user-attachments/assets/36f05839-2afc-4839-be66-5df58362e0fe" controls muted loop width="100%"></video>
 
 ### What it shows
 
