@@ -161,7 +161,9 @@ See [docs/demos.md](./docs/demos.md) for full details.
 
 See the [benchmark README](./pynear/benchmark/README.md) for charts comparing
 PyNear against scikit-learn, Faiss, and Annoy across different dimensionalities,
-dataset sizes, and distance metrics.
+dataset sizes, and distance metrics — including an
+[approximate search comparison](./pynear/benchmark/README.md#approximate-l2-search--high-dimensionality-vpforest-vs-faiss-ivf)
+of VPForestL2Index vs Faiss IndexIVFFlat at 128-D to 1024-D.
 
 To run a quick standalone benchmark:
 

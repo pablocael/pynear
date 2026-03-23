@@ -10,30 +10,6 @@ from sklearn.neighbors import NearestNeighbors
 import pynear
 
 
-def create_index_adapter(index_name: str):
-    # Supported 3rd party indices are: FaissIndexFlatL2, FaissIndexBinaryFlat, AnnoyL2, AnnoyManhattan, AnnoyHamming, SKLearnL2
-    mapper = {
-        "FaissIndexFlatL2": FaissIndexFlatL2Adapter,
-        "FaissIndexBinaryFlat": FaissIndexBinaryFlatAdapter,
-        "AnnoyL2": AnnoyL2Adapter,
-        "AnnoyManhattan": AnnoyManhattanAdapter,
-        "AnnoyHamming": AnnoyHammingAdapter,
-        "SKLearnL2": SKLearnL2Adapter,
-        "BKTreeBinaryIndex": PyNearBKTreeAdapter,
-        "VPTreeL2Index": pynear.VPTreeL2Index,
-        "VPTreeL1Index": pynear.VPTreeL1Index,
-        "VPTreeBinaryIndex": pynear.VPTreeBinaryIndex,
-        "VPTreeChebyshevIndex": pynear.VPTreeChebyshevIndex,
-    }
-    if index_name not in mapper:
-        raise ValueError(f"Index name {index_name} not supported")
-
-    if index_name.startswith("VPTree"):
-        return PyNearVPAdapter(index_name)
-
-    return mapper[index_name]()
-
-
 # Supported 3rd party indices are: FaissIndexFlatL2, FaissIndexBinaryFlat, AnnoyL2, AnnoyManhattan, AnnoyHamming, SKLearnL2
 class IndexAdapter(ABC):
     @abstractmethod
@@ -158,6 +134,52 @@ class AnnoyHammingAdapter(IndexAdapter):
             self._index.get_nns_by_vector(v, k)
 
 
+class VPForestL2Adapter(IndexAdapter):
+    """Approximate L2 index using VPForestL2Index (IVF-style with VPTrees)."""
+
+    def __init__(self, n_probe: int = 10):
+        self._n_probe = n_probe
+        self._index = None
+
+    def build_index(self, data: np.ndarray):
+        n_clusters = max(10, int(np.sqrt(len(data))))
+        self._index = pynear.VPForestL2Index(
+            n_clusters=n_clusters,
+            n_probe=min(self._n_probe, n_clusters),
+        )
+        self._index.set(data)
+
+    def _search_implementation(self, query, k: int):
+        self._index.searchKNN(query, k)
+
+    def search(self, query: np.ndarray, k: int):
+        return self._index.searchKNN(query, k)
+
+
+class FaissIVFAdapter(IndexAdapter):
+    """Approximate L2 index using Faiss IndexIVFFlat (standard IVF baseline)."""
+
+    def __init__(self, n_probe: int = 10):
+        self._n_probe = n_probe
+        self._index = None
+
+    def build_index(self, data: np.ndarray):
+        d = data.shape[1]
+        n_clusters = max(10, int(np.sqrt(len(data))))
+        quantizer = faiss.IndexFlatL2(d)
+        self._index = faiss.IndexIVFFlat(quantizer, d, n_clusters, faiss.METRIC_L2)
+        self._index.train(data)
+        self._index.add(data)
+        self._index.nprobe = min(self._n_probe, n_clusters)
+
+    def _search_implementation(self, query, k: int):
+        self._index.search(query, k)
+
+    def search(self, query: np.ndarray, k: int):
+        distances, indices = self._index.search(query, k)
+        return indices.tolist(), distances.tolist()
+
+
 class SKLearnL2Adapter(IndexAdapter):
     def __init__(self):
         self._index = None
@@ -182,3 +204,40 @@ class SKLearnL2Adapter(IndexAdapter):
         s = time.time()
         self._index.kneighbors(query)
         return time.time() - s
+
+
+def create_index_adapter(index_name: str):
+    """
+    Factory for index adapters.
+
+    Supported names:
+      VPTreeL2Index, VPTreeL1Index, VPTreeBinaryIndex, VPTreeChebyshevIndex
+      VPForestL2Index, VPForestL2Index_nprobeN   (approximate, n_probe=N)
+      FaissIndexFlatL2, FaissIndexBinaryFlat
+      FaissIVFL2, FaissIVFL2_nprobeN             (approximate, n_probe=N)
+      AnnoyL2, AnnoyManhattan, AnnoyHamming
+      SKLearnL2, BKTreeBinaryIndex
+    """
+    if index_name.startswith("VPForestL2Index"):
+        n_probe = int(index_name.split("_nprobe")[1]) if "_nprobe" in index_name else 10
+        return VPForestL2Adapter(n_probe=n_probe)
+
+    if index_name.startswith("FaissIVFL2"):
+        n_probe = int(index_name.split("_nprobe")[1]) if "_nprobe" in index_name else 10
+        return FaissIVFAdapter(n_probe=n_probe)
+
+    if index_name.startswith("VPTree"):
+        return PyNearVPAdapter(index_name)
+
+    mapper = {
+        "FaissIndexFlatL2": FaissIndexFlatL2Adapter,
+        "FaissIndexBinaryFlat": FaissIndexBinaryFlatAdapter,
+        "AnnoyL2": AnnoyL2Adapter,
+        "AnnoyManhattan": AnnoyManhattanAdapter,
+        "AnnoyHamming": AnnoyHammingAdapter,
+        "SKLearnL2": SKLearnL2Adapter,
+        "BKTreeBinaryIndex": PyNearBKTreeAdapter,
+    }
+    if index_name not in mapper:
+        raise ValueError(f"Index name '{index_name}' not supported")
+    return mapper[index_name]()

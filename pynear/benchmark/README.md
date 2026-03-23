@@ -5,6 +5,50 @@ All benchmarks were generated using Intel(R) Core(TM) Ultra 9 285K, 24 cores.
 
 In the below benchmarks, other libraries such as Annoy, Faiss and SKLearn are used. Annoy is inexact search (approximate) so it is somehow unfair comparison, but being extremelly efficient is an interesting baseline.
 
+---
+
+# Approximate L2 Search — High Dimensionality (VPForest vs Faiss IVF)
+
+These benchmarks compare PyNear's **VPForestL2Index** against **Faiss IndexIVFFlat** — both
+IVF-style approximate indices — across 128-D to 1024-D with 50 000 data points.
+`n_probe` is swept from 1 to 80 (out of ~224 clusters) to show the recall vs speed Pareto curve.
+`FaissIndexFlatL2` (exact brute-force) is included as a reference baseline.
+
+## Recall@10 vs Query Latency
+
+Each point on the curve is one `n_probe` setting; the annotation shows its value.
+Move right along a curve to gain recall at the cost of latency.
+
+![Recall vs Time](../../docs/img/approximate-l2-high-dimensionality/recall_vs_time.png)
+
+**Key observations:**
+- At **128-D – 512-D** both indices reach 100% recall at `n_probe=5`, with Faiss IVF having lower raw latency due to its BLAS-optimised inner-cluster scan.
+- At **1024-D** FaissIVF reaches 100% recall at `n_probe=10` (~1 ms); VPForest needs `n_probe=20` (~21 ms) because VP-tree traversal overhead grows with dimension.
+- VPForest has **zero native dependencies** (no BLAS/GPU) and shares the same API as the exact VPTree indices, making it easy to swap in when Faiss is unavailable.
+
+## Query Latency vs Dimensionality (n_probe ≈ 20)
+
+![Time vs Dimensionality](../../docs/img/approximate-l2-high-dimensionality/time_vs_dim.png)
+
+## Recall@10 vs Dimensionality (n_probe ≈ 20)
+
+![Recall vs Dimensionality](../../docs/img/approximate-l2-high-dimensionality/recall_vs_dim.png)
+
+**Summary table** — `n_probe=20`, `N=50 000`, `k=10`, `nq=32`:
+
+| Dim | VPForest time | FaissIVF time | VPForest recall | FaissIVF recall |
+|-----|--------------|--------------|----------------|----------------|
+| 128 | 4.0 ms | 0.2 ms | 1.00 | 1.00 |
+| 256 | 6.0 ms | 0.6 ms | 1.00 | 1.00 |
+| 512 | 10.8 ms | 1.2 ms | 1.00 | 1.00 |
+| 1024 | 21.2 ms | 1.2 ms | 1.00 | 1.00 |
+
+> **When to prefer VPForest over Faiss IVF:** no BLAS dependency, pure-Python install,
+> need exact search via `n_probe=n_clusters`, or working in lower dimensions where VP-tree
+> pruning amortises the per-cluster overhead.
+
+---
+
 # Binary Index Comparison
 
 For binary indices, only 32, 64, 128 and 256 bit dimensions were added since they are the most popular dimension for binary descriptors.
@@ -72,15 +116,20 @@ benchmark:
 
 ```
 
-Supported 3rd party indices are:
-- FaissIndexFlatL2
-- FaissIndexBinaryFlat
-- AnnoyL2
-- AnnoyManhattan
-- AnnoyHamming
-- SKLearnL2
+Supported index names:
 
- This allow comparing VPTree indices to be tested with third party indices as well any combination of indices.
+**Exact:**
+- `VPTreeL2Index`, `VPTreeL1Index`, `VPTreeBinaryIndex`, `VPTreeChebyshevIndex`
+- `BKTreeBinaryIndex`
+- `FaissIndexFlatL2`, `FaissIndexBinaryFlat`
+- `AnnoyL2`, `AnnoyManhattan`, `AnnoyHamming`
+- `SKLearnL2`
+
+**Approximate (IVF-style):**
+- `VPForestL2Index` — PyNear IVF with VPTrees; add `_nprobeN` suffix to set n_probe (e.g. `VPForestL2Index_nprobe20`)
+- `FaissIVFL2` — Faiss IndexIVFFlat baseline; add `_nprobeN` suffix (e.g. `FaissIVFL2_nprobe20`)
+
+This allows comparing any combination of exact and approximate indices.
 
 Output results are generated in `results` folder grouped in subfolders with benchmark cases name.
 For generating benchmarks from `yaml` descriptor, see the example command below:
