@@ -2,9 +2,13 @@
 
 ## Available Indices
 
-PyNear provides several index types that use different distance functions or algorithms.
+PyNear provides two families of indices: **exact** (VPTree / BKTree) and
+**approximate** (VPForest).
 
-### K-Nearest-Neighbor Indices
+### Exact KNN Indices
+
+Results are always correct — every returned neighbour is truly among the k
+closest points in the dataset.
 
 | Index | Distance | Input dtype | Notes |
 |---|---|---|---|
@@ -18,6 +22,26 @@ All VPTree indices support:
 - `searchKNN(queries, k)` — return the k nearest neighbours for each query
 - `search1NN(queries)` — return the single nearest neighbour (faster than `searchKNN` with `k=1`)
 - `to_string()` — print tree structure (slow, for debugging only)
+
+### Approximate KNN Indices (VPForest)
+
+VPForest indices partition data into clusters and build one VPTree per
+cluster.  Each query probes only the `n_probe` nearest clusters, trading a
+small, configurable recall loss for a large speed gain.  This is the right
+choice for **high-dimensional data** (512-D / 1024-D image or text
+embeddings) where a single VPTree would explore most of the dataset anyway.
+
+| Index | Distance | Input dtype | Notes |
+|---|---|---|---|
+| `pynear.VPForestL2Index` | L2 (Euclidean) | `float32` | IVF-style; tunable recall vs speed |
+| `pynear.VPForestL1Index` | L1 (Manhattan) | `float32` | IVF-style; tunable recall vs speed |
+| `pynear.VPForestChebyshevIndex` | L∞ (Chebyshev) | `float32` | IVF-style; tunable recall vs speed |
+
+VPForest indices share the same `set` / `searchKNN` / `search1NN` API as
+VPTree indices.  Setting `n_probe == n_clusters` makes the search exact.
+
+See [Approximate search and recall](./approximate.md) for a full guide on
+choosing `n_clusters`, measuring recall, and tuning `n_probe`.
 
 ### Threshold-Based Indices
 
@@ -82,6 +106,36 @@ index.set(data)
 
 indices, distances = index.searchKNN(queries, k)
 ```
+
+---
+
+### `pynear.VPForestL2Index`
+
+```python
+import numpy as np
+import pynear
+
+# 100 000 image embeddings, 1024-D (e.g. CLIP, ResNet)
+num_points = 100_000
+dimension = 1024
+data = np.random.rand(num_points, dimension).astype(np.float32)
+
+# Rule of thumb: n_clusters ≈ sqrt(N), n_probe controls recall vs speed
+index = pynear.VPForestL2Index(n_clusters=316, n_probe=20)
+index.set(data)  # clusters data with K-Means, builds one VPTree per cluster
+
+queries = np.random.rand(10, dimension).astype(np.float32)
+indices, distances = index.searchKNN(queries, k=5)
+```
+
+Set `n_probe = n_clusters` for exact results at the cost of speed:
+
+```python
+index = pynear.VPForestL2Index(n_clusters=316, n_probe=316)  # exact
+```
+
+See [Approximate search and recall](./approximate.md) for how to measure
+and tune recall for your dataset.
 
 ---
 

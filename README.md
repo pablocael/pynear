@@ -19,17 +19,20 @@ Silicon) to accelerate the hot distance computation paths.
 
 | | PyNear | Faiss | Annoy | scikit-learn |
 |---|---|---|---|---|
-| **Exact results** | ✅ always | ✅ flat index | ❌ approximate | ✅ |
+| **Exact results** | ✅ VPTree always | ✅ flat index | ❌ approximate | ✅ |
+| **Approximate (fast, tunable)** | ✅ VPForest | ✅ IVF | ✅ | ❌ |
 | **Metric agnostic** | ✅ L2, L1, L∞, Hamming | L2 / inner product | L2 / cosine / Hamming | L2 / others |
 | **Low-dim sweet spot** | ✅ | ❌ | ❌ | ❌ |
+| **High-dim (512-D – 1024-D)** | ✅ VPForest | ✅ | ✅ | ❌ |
 | **Binary / Hamming** | ✅ hardware popcount | ✅ | ✅ | ❌ |
 | **Threshold / range search** | ✅ BKTree | ❌ | ❌ | ❌ |
 | **Pickle serialisation** | ✅ | ❌ | ✅ | ✅ |
 | **Zero native dependencies** | ✅ | ❌ GPU/BLAS | ❌ | ❌ |
 
-PyNear is a strong fit when you need **exact** answers, work in **low-to-mid
-dimensionality** (2-D to ~512-D), care about **multiple distance metrics**, or
-need **range/threshold queries** on binary descriptors (e.g. ORB, BRIEF).
+PyNear covers the full spectrum: use **VPTree** indices when you need
+guaranteed exact answers (2-D to ~256-D), or **VPForest** when you need fast
+approximate search on high-dimensional data (512-D to 1024-D) with a
+configurable recall target.
 
 ---
 
@@ -71,20 +74,34 @@ For all index types and advanced usage see [docs/README.md](./docs/README.md).
 
 ### Available indices
 
+**Exact indices** — always return the true k nearest neighbours:
+
 | Index | Distance | Data type | Notes |
 |---|---|---|---|
 | `VPTreeL2Index` | L2 (Euclidean) | `float32` | SIMD-accelerated |
 | `VPTreeL1Index` | L1 (Manhattan) | `float32` | SIMD-accelerated |
 | `VPTreeChebyshevIndex` | L∞ (Chebyshev) | `float32` | SIMD-accelerated |
-| `VPTreeBinaryIndex` | Hamming | `uint8` | Exact, hardware popcount |
+| `VPTreeBinaryIndex` | Hamming | `uint8` | Hardware popcount |
 | `BKTreeBinaryIndex` | Hamming | `uint8` | Threshold / range search |
 
-All VPTree indices support `searchKNN(queries, k)` and `search1NN(queries)`.
+**Approximate indices** — partition data into clusters, search `n_probe` of them per query; tunable recall vs speed:
+
+| Index | Distance | Data type | Notes |
+|---|---|---|---|
+| `VPForestL2Index` | L2 (Euclidean) | `float32` | Best for 512-D – 1024-D embeddings |
+| `VPForestL1Index` | L1 (Manhattan) | `float32` | |
+| `VPForestChebyshevIndex` | L∞ (Chebyshev) | `float32` | |
+
+All VPTree and VPForest indices support `searchKNN(queries, k)` and `search1NN(queries)`.
 `BKTreeBinaryIndex` supports `find_threshold(queries, threshold)` for range queries.
+Set `n_probe = n_clusters` on any VPForest index to make it exact.
+
+See [docs/approximate.md](./docs/approximate.md) for a full guide on measuring
+recall and tuning `n_probe` for your dataset.
 
 ### Pickle serialisation
 
-All VPTree indices are pickle-serialisable — save a built index to disk and
+All VPTree and VPForest indices are pickle-serialisable — save a built index to disk and
 reload it without rebuilding:
 
 ```python
