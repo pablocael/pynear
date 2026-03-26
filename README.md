@@ -34,6 +34,28 @@ guaranteed exact answers (2-D to ~256-D), or **VPForest** when you need fast
 approximate search on high-dimensional data (512-D to 1024-D) with a
 configurable recall target.
 
+#### For layman
+
+ K-Nearest Neighbours (KNN) is simply the idea of finding the k most similar items to a given query in a collection.
+
+  Think of it like asking: "given this song I like, what are the 5 most similar songs in my library?" The algorithm measures the "distance" between items
+  (how different they are) and returns the closest ones.
+
+  The two key parameters are:
+  - k — how many neighbours to return (e.g. the 5 most similar)
+  - distance metric — how "similarity" is measured (e.g. Euclidean, Manhattan, Hamming)
+
+  Everything else — VP-Trees, SIMD, approximate search — is just engineering to make that search fast at scale.
+
+##### Main applications of KNN search 
+
+  1. Image retrieval — finding visually similar images by searching nearest neighbours in an embedding space (e.g. face recognition, reverse image
+  search).
+  2. Recommendation systems — suggesting similar items (products, songs, articles) by finding the closest user or item embeddings.
+  3. Anomaly detection — flagging data points whose nearest neighbours are unusually distant as potential outliers or fraud cases.
+  4. Semantic search — retrieving documents or passages whose dense vector representations are closest to a query embedding (e.g. RAG pipelines).
+
+
 ---
 
 ## Installation
