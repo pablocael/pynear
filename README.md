@@ -34,7 +34,7 @@ guaranteed exact answers (2-D to ~256-D), or **VPForest** when you need fast
 approximate search on high-dimensional data (512-D to 1024-D) with a
 configurable recall target.
 
-#### For layman
+#### For the Layman
 
  K-Nearest Neighbours (KNN) is simply the idea of finding the k most similar items to a given query in a collection.
 
@@ -54,6 +54,10 @@ configurable recall target.
   2. Recommendation systems — suggesting similar items (products, songs, articles) by finding the closest user or item embeddings.
   3. Anomaly detection — flagging data points whose nearest neighbours are unusually distant as potential outliers or fraud cases.
   4. Semantic search — retrieving documents or passages whose dense vector representations are closest to a query embedding (e.g. RAG pipelines).
+  5. Broad-phase collision detection — quickly finding candidate object pairs that might be colliding by looking up the nearest neighbours of each object's
+   bounding volume, before running the expensive narrow-phase test.
+  6. Soft body / cloth simulation — finding the nearest mesh vertices or particles to resolve contact constraints and self-collision.
+  7. Particle systems (SPH, fluid sim) — each particle needs to know its neighbours within a radius to compute pressure and density forces.
 
 
 ---
