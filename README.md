@@ -26,7 +26,7 @@ Silicon) to accelerate the hot distance computation paths.
 | **High-dim (512-D – 1024-D)** | ✅ VPForest | ✅ | ✅ | ❌ |
 | **Binary / Hamming** | ✅ hardware popcount | ✅ | ✅ | ❌ |
 | **Threshold / range search** | ✅ BKTree | ❌ | ❌ | ❌ |
-| **Pickle serialisation** | ✅ | ❌ | ✅ | ✅ |
+| **Pickle serialization** | ✅ | ❌ | ✅ | ✅ |
 | **Zero native dependencies** | ✅ | ❌ GPU/BLAS | ❌ | ❌ |
 
 PyNear covers the full spectrum: use **VPTree** indices when you need
