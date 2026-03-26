@@ -164,3 +164,14 @@ cython_debug/
 
 # editor backup files
 *.bak
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.fls
+*.fdb_latexmk
+*.synctex.gz
