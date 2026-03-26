@@ -28,3 +28,36 @@ On arm64 (Apple Silicon and similar), portable scalar fallbacks are used automat
 
 For very high-dimensional spaces where search becomes nearly exhaustive, libraries like [Faiss](https://github.com/facebookresearch/faiss) with highly optimized BLAS kernels may outperform tree-based approaches.
 PyNear targets the exact-search regime where tree pruning still provides a significant speedup.
+
+### Limitations and future work
+
+#### Static index — no dynamic updates
+
+PyNear indices are **static**: the entire tree must be rebuilt from scratch
+by calling `set(data)` whenever the underlying dataset changes.  There is no
+support for incremental insertion, deletion, or point movement.
+
+This is an important constraint for workloads where data evolves continuously,
+such as:
+
+- **Real-time physics simulation** — collision detection and neighbour queries
+  in particle systems (SPH, cloth, soft bodies) require spatial indices that
+  reflect the current positions of every particle after each integration step.
+  Rebuilding a VP-Tree every frame is prohibitively expensive; production
+  physics engines therefore use structures designed for dynamic updates, such
+  as dynamic BVHs (DBVH), spatial hashing, or incremental kd-trees.
+- **Online learning / streaming data** — datasets that grow continuously with
+  new observations cannot be efficiently maintained with a static index.
+- **Robotics and SLAM** — map point clouds that are refined incrementally as
+  new sensor data arrives.
+
+**Workarounds with the current API:**
+- For slowly-changing datasets, a full rebuild can be amortised by batching
+  updates and rebuilding at a reduced frequency (e.g. every N frames).
+- For mixed read/write workloads, a two-level structure (a static VP-Tree for
+  the bulk of the data plus a small linear scan over the recent delta) can
+  keep query latency acceptable.
+
+**Future work:** Dynamic VP-Tree variants that support $O(\log n)$ insertions
+and deletions have been studied in the literature and represent a natural
+extension for PyNear.  Contributions in this direction are welcome.

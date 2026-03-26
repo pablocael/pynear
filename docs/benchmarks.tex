@@ -660,6 +660,23 @@ vectorisation, investigating product-quantisation-based inner-cluster
 compression to reduce the latency of high-dimensional VPForest probes, and
 evaluating performance on non-clustered (adversarial) data distributions.
 
+\paragraph{Static index limitation.}
+A notable architectural constraint of the current implementation is that all
+PyNear indices are \emph{static}: the full tree must be reconstructed via
+\texttt{set(data)} whenever the underlying dataset is modified.  No
+incremental insertion, deletion, or in-place point update is supported.
+This precludes direct use in workloads where the dataset evolves continuously,
+most notably real-time physics simulation.  In particle-based simulation
+systems (SPH fluids, cloth, soft-body dynamics), nearest-neighbour queries
+must reflect the current particle positions after every integration step;
+rebuilding a VP-Tree at each frame is prohibitively expensive.  Production
+physics engines address this with structures designed for dynamic updates:
+dynamic Bounding Volume Hierarchies (DBVH), incremental kd-trees, or spatial
+hashing with temporal coherence.  Dynamic VP-Tree variants that support
+$O(\log n)$ insertions and deletions have been studied in the
+literature~\cite{yianilos1993data} and represent a natural direction for
+future development of PyNear.
+
 % =============================================================================
 \begin{thebibliography}{9}
 
