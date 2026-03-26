@@ -125,6 +125,58 @@ Set `n_probe = n_clusters` on any VPForest index to make it exact.
 See [docs/approximate.md](./docs/approximate.md) for a full guide on measuring
 recall and tuning `n_probe` for your dataset.
 
+#### Why approximate search? The curse of dimensionality
+
+Tree-based exact search relies on pruning: a branch is discarded when its
+closest possible point is provably farther than the current best candidate.
+This pruning becomes ineffective as dimensionality grows — a phenomenon rooted
+in a fundamental geometric property of high-dimensional spaces.
+
+**Volume concentration near the boundary.**
+Consider $N$ points drawn uniformly at random inside an $n$-dimensional ball
+of radius $R$. A point at distance $r$ from the origin is closer to the
+boundary than to the origin whenever $R - r < r$, i.e. $r > R/2$.
+The fraction of the ball's volume satisfying this condition is:
+
+$$F(n) = \frac{V_n(R) - V_n\!\left(\tfrac{R}{2}\right)}{V_n(R)} = 1 - \left(\frac{1}{2}\right)^{\!n}$$
+
+where $V_n(r) = \dfrac{\pi^{n/2}}{\Gamma\!\left(\tfrac{n}{2}+1\right)} r^n$ is
+the volume of an $n$-ball of radius $r$. Because $V_n$ scales as $r^n$, the
+ratio simplifies cleanly to $1 - 2^{-n}$, independent of $R$.
+
+**Median distance from the origin.**
+The median distance $r_m$ is the radius such that exactly half the volume lies
+within it:
+
+$$\frac{V_n(r_m)}{V_n(R)} = \frac{1}{2}
+\;\Longrightarrow\;
+\left(\frac{r_m}{R}\right)^n = \frac{1}{2}
+\;\Longrightarrow\;
+r_m = R \cdot 2^{-1/n}$$
+
+As $n \to \infty$, $r_m \to R$: the typical point is arbitrarily close to
+the surface of the ball.
+
+**Numerical illustration:**
+
+| Dimensionality $n$ | Points closer to border than origin $F(n)$ | Median distance $r_m / R$ |
+|:------------------:|:-------------------------------------------:|:-------------------------:|
+| 1                  | 50.0 %                                      | 0.500                     |
+| 2                  | 75.0 %                                      | 0.707                     |
+| 5                  | 96.9 %                                      | 0.871                     |
+| 10                 | 99.9 %                                      | 0.933                     |
+| 100                | ≈ 100 %                                     | 0.993                     |
+
+**Consequence for KNN trees.**
+When $n$ is large, nearly all points are concentrated in a thin shell near
+the boundary, and the distances between any two points become almost equal.
+With no contrast in distances, a tree has nothing to prune — every branch
+must be explored — and search degrades to exhaustive linear scan, $O(N)$.
+This is the fundamental reason why exact tree search offers diminishing
+returns beyond $d \approx 256$, and why approximate methods such as
+**VPForest** (probing only a fraction of clusters) or Faiss IVF are
+necessary at high dimensionalities.
+
 ### Pickle serialisation
 
 All VPTree and VPForest indices are pickle-serialisable — save a built index to disk and
