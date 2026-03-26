@@ -5,7 +5,7 @@
 [![CI](https://github.com/pablocael/pynear/actions/workflows/pythonpackage.yml/badge.svg)](https://github.com/pablocael/pynear/actions/workflows/pythonpackage.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Fast, exact K-nearest-neighbour search for Python — no approximations, no compromises.**
+**Fast, exact K-nearest-neighbour search for Python**
 
 <video src="https://github.com/user-attachments/assets/4e07e82d-f3a0-4d47-9d34-a5ea4f752e14" autoplay muted loop width="100%"></video>
 
