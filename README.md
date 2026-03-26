@@ -138,9 +138,9 @@ of radius $R$. A point at distance $r$ from the origin is closer to the
 boundary than to the origin whenever $R - r < r$, i.e. $r > R/2$.
 The fraction of the ball's volume satisfying this condition is:
 
-$$F(n) = \frac{V_n(R) - V_n\!\left(\tfrac{R}{2}\right)}{V_n(R)} = 1 - \left(\frac{1}{2}\right)^{\!n}$$
+$$F(n) = \frac{V_n(R) - V_n\left(\tfrac{R}{2}\right)}{V_n(R)} = 1 - \left(\frac{1}{2}\right)^{n}$$
 
-where $V_n(r) = \dfrac{\pi^{n/2}}{\Gamma\!\left(\tfrac{n}{2}+1\right)} r^n$ is
+where $V_n(r) = \dfrac{\pi^{n/2}}{\Gamma\left(\tfrac{n}{2}+1\right)} r^n$ is
 the volume of an $n$-ball of radius $r$. Because $V_n$ scales as $r^n$, the
 ratio simplifies cleanly to $1 - 2^{-n}$, independent of $R$.
 
