@@ -14,6 +14,9 @@ spaces.  It is built around [Vantage Point Trees](./docs/vptrees.md), a metric
 tree that scales well to higher dimensionalities where kd-trees degrade, and
 uses SIMD intrinsics (AVX2 on x86-64, portable fallbacks on arm64/Apple
 Silicon) to accelerate the hot distance computation paths.
+Already using scikit-learn's KNN? PyNear ships **drop-in adapter classes** that
+implement the same `fit` / `predict` / `score` / `kneighbors` API —
+[migrate in one line](#migrating-from-scikit-learn).
 
 ### Why PyNear?
 
@@ -28,6 +31,7 @@ Silicon) to accelerate the hot distance computation paths.
 | **Threshold / range search** | ✅ BKTree | ❌ | ❌ | ❌ |
 | **Pickle serialization** | ✅ | ❌ | ✅ | ✅ |
 | **Zero native dependencies** | ✅ | ❌ GPU/BLAS | ❌ | ❌ |
+| **scikit-learn compatible API** | ✅ drop-in adapters | ❌ | ❌ | — |
 
 PyNear covers the full spectrum: use **VPTree** indices when you need
 guaranteed exact answers (2-D to ~256-D), or **VPForest** when you need fast
@@ -93,6 +97,62 @@ nn_indices, nn_distances = index.search1NN(queries)
 ```
 
 For all index types and advanced usage see [docs/README.md](./docs/README.md).
+
+---
+
+## Migrating from scikit-learn
+
+PyNear provides adapter classes that implement the same interface as
+`sklearn.neighbors.NearestNeighbors`, `KNeighborsClassifier`, and
+`KNeighborsRegressor`.  Changing the import is all that is required in most
+cases:
+
+```python
+# Before
+from sklearn.neighbors import KNeighborsClassifier
+clf = KNeighborsClassifier(n_neighbors=5, metric='euclidean')
+
+# After — identical API, backed by a VP-Tree
+from pynear.sklearn_adapter import PyNearKNeighborsClassifier
+clf = PyNearKNeighborsClassifier(n_neighbors=5, metric='euclidean')
+```
+
+All three adapters follow the standard scikit-learn workflow:
+
+```python
+from pynear.sklearn_adapter import (
+    PyNearNearestNeighbors,
+    PyNearKNeighborsClassifier,
+    PyNearKNeighborsRegressor,
+)
+
+# Unsupervised neighbour lookup
+nn = PyNearNearestNeighbors(n_neighbors=5, metric='euclidean')
+nn.fit(X_train)
+distances, indices = nn.kneighbors(X_query)
+
+# Classification
+clf = PyNearKNeighborsClassifier(n_neighbors=5, weights='distance')
+clf.fit(X_train, y_train)
+clf.predict(X_test)          # class labels
+clf.predict_proba(X_test)    # per-class probabilities
+clf.score(X_test, y_test)    # accuracy
+
+# Regression
+reg = PyNearKNeighborsRegressor(n_neighbors=5, weights='uniform')
+reg.fit(X_train, y_train)
+reg.predict(X_test)          # predicted values
+reg.score(X_test, y_test)    # R²
+```
+
+**Supported metrics:** `euclidean` / `l2`, `manhattan` / `l1`, `chebyshev` / `linf`, `hamming`
+
+**Supported weights:** `uniform`, `distance` (inverse-distance-weighted)
+
+> **Note:** Input arrays are cast to `float32` (or `uint8` for Hamming) before
+> indexing.  scikit-learn uses `float64` internally, so very small numerical
+> differences may appear at the precision boundary, but nearest-neighbour
+> results are identical for all practical datasets.
 
 ---
 
