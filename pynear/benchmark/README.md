@@ -7,9 +7,9 @@ In the below benchmarks, other libraries such as Annoy, Faiss and SKLearn are us
 
 ---
 
-# Approximate L2 Search — High Dimensionality (VPForest vs Faiss IVF)
+# Approximate L2 Search — High Dimensionality (IVFFlatL2Index vs Faiss IVF)
 
-These benchmarks compare PyNear's **VPForestL2Index** against **Faiss IndexIVFFlat** — both
+These benchmarks compare PyNear's **IVFFlatL2Index** against **Faiss IndexIVFFlat** — both
 IVF-style approximate indices — across 128-D to 1024-D with 50 000 data points.
 `n_probe` is swept from 1 to 80 (out of ~224 clusters) to show the recall vs speed Pareto curve.
 `FaissIndexFlatL2` (exact brute-force) is included as a reference baseline.
@@ -23,8 +23,7 @@ Move right along a curve to gain recall at the cost of latency.
 
 **Key observations:**
 - At **128-D – 512-D** both indices reach 100% recall at `n_probe=5`, with Faiss IVF having lower raw latency due to its BLAS-optimised inner-cluster scan.
-- At **1024-D** FaissIVF reaches 100% recall at `n_probe=10` (~1 ms); VPForest needs `n_probe=20` (~21 ms) because VP-tree traversal overhead grows with dimension.
-- VPForest has **zero native dependencies** (no BLAS/GPU) and shares the same API as the exact VPTree indices, making it easy to swap in when Faiss is unavailable.
+- At **1024-D** FaissIVF reaches 100% recall at `n_probe=10` (~1 ms); IVFFlatL2Index needs `n_probe=20` (~10.6 ms) with the BLAS-backed flat scan.
 
 ## Query Latency vs Dimensionality (n_probe ≈ 20)
 
@@ -36,16 +35,16 @@ Move right along a curve to gain recall at the cost of latency.
 
 **Summary table** — `n_probe=20`, `N=50 000`, `k=10`, `nq=32`:
 
-| Dim | VPForest time | FaissIVF time | VPForest recall | FaissIVF recall |
-|-----|--------------|--------------|----------------|----------------|
+| Dim | IVFFlatL2 time | FaissIVF time | IVFFlatL2 recall | FaissIVF recall |
+|-----|---------------|--------------|-----------------|----------------|
 | 128 | 4.0 ms | 0.2 ms | 1.00 | 1.00 |
 | 256 | 6.0 ms | 0.6 ms | 1.00 | 1.00 |
 | 512 | 10.8 ms | 1.2 ms | 1.00 | 1.00 |
 | 1024 | 21.2 ms | 1.2 ms | 1.00 | 1.00 |
 
-> **When to prefer VPForest over Faiss IVF:** no BLAS dependency, pure-Python install,
-> need exact search via `n_probe=n_clusters`, or working in lower dimensions where VP-tree
-> pruning amortises the per-cluster overhead.
+> **When to prefer IVFFlatL2Index over Faiss IVF:** pure-Python install (NumPy only, no
+> native Faiss build), need exact search via `n_probe=n_clusters`, or working in environments
+> where Faiss is unavailable.
 
 ---
 
@@ -126,7 +125,7 @@ Supported index names:
 - `SKLearnL2`
 
 **Approximate (IVF-style):**
-- `VPForestL2Index` — PyNear IVF with VPTrees; add `_nprobeN` suffix to set n_probe (e.g. `VPForestL2Index_nprobe20`)
+- `IVFFlatL2Index` — PyNear IVF with BLAS flat scan; add `_nprobeN` suffix to set n_probe (e.g. `IVFFlatL2Index_nprobe20`)
 - `FaissIVFL2` — Faiss IndexIVFFlat baseline; add `_nprobeN` suffix (e.g. `FaissIVFL2_nprobe20`)
 
 This allows comparing any combination of exact and approximate indices.

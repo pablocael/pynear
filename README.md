@@ -23,18 +23,18 @@ implement the same `fit` / `predict` / `score` / `kneighbors` API —
 | | PyNear | Faiss | Annoy | scikit-learn |
 |---|---|---|---|---|
 | **Exact results** | ✅ VPTree always | ✅ flat index | ❌ approximate | ✅ |
-| **Approximate (fast, tunable)** | ✅ VPForest | ✅ IVF | ✅ | ❌ |
+| **Approximate (fast, tunable)** | ✅ IVFFlatL2Index | ✅ IVF | ✅ | ❌ |
 | **Metric agnostic** | ✅ L2, L1, L∞, Hamming | L2 / inner product | L2 / cosine / Hamming | L2 / others |
 | **Low-dim sweet spot** | ✅ | ❌ | ❌ | ❌ |
-| **High-dim (512-D – 1024-D)** | ✅ VPForest | ✅ | ✅ | ❌ |
+| **High-dim (512-D – 1024-D)** | ✅ IVFFlatL2Index | ✅ | ✅ | ❌ |
 | **Binary / Hamming** | ✅ hardware popcount | ✅ | ✅ | ❌ |
 | **Threshold / range search** | ✅ BKTree | ❌ | ❌ | ❌ |
 | **Pickle serialization** | ✅ | ❌ | ✅ | ✅ |
-| **Zero native dependencies** | ✅ | ❌ GPU/BLAS | ❌ | ❌ |
+| **No extra native deps** | ✅ NumPy only | ❌ compiled lib + optional GPU | ❌ | ❌ |
 | **scikit-learn compatible API** | ✅ drop-in adapters | ❌ | ❌ | — |
 
 PyNear covers the full spectrum: use **VPTree** indices when you need
-guaranteed exact answers (2-D to ~256-D), or **VPForest** when you need fast
+guaranteed exact answers (2-D to ~256-D), or **IVFFlatL2Index** when you need fast
 approximate search on high-dimensional data (512-D to 1024-D) with a
 configurable recall target.
 
@@ -174,13 +174,11 @@ reg.score(X_test, y_test)    # R²
 
 | Index | Distance | Data type | Notes |
 |---|---|---|---|
-| `VPForestL2Index` | L2 (Euclidean) | `float32` | Best for 512-D – 1024-D embeddings |
-| `VPForestL1Index` | L1 (Manhattan) | `float32` | |
-| `VPForestChebyshevIndex` | L∞ (Chebyshev) | `float32` | |
+| `IVFFlatL2Index` | L2 (Euclidean) | `float32` | BLAS SGEMV inner scan; best for 512-D – 1024-D |
 
-All VPTree and VPForest indices support `searchKNN(queries, k)` and `search1NN(queries)`.
+All VPTree and IVFFlat indices support `searchKNN(queries, k)` and `search1NN(queries)`.
 `BKTreeBinaryIndex` supports `find_threshold(queries, threshold)` for range queries.
-Set `n_probe = n_clusters` on any VPForest index to make it exact.
+Set `n_probe = n_clusters` on `IVFFlatL2Index` to make it exact.
 
 See [docs/approximate.md](./docs/approximate.md) for a full guide on measuring
 recall and tuning `n_probe` for your dataset.
@@ -234,12 +232,12 @@ With no contrast in distances, a tree has nothing to prune — every branch
 must be explored — and search degrades to exhaustive linear scan, $O(N)$.
 This is the fundamental reason why exact tree search offers diminishing
 returns beyond $d \approx 256$, and why approximate methods such as
-**VPForest** (probing only a fraction of clusters) or Faiss IVF are
+**IVFFlatL2Index** (probing only a fraction of clusters) or Faiss IVF are
 necessary at high dimensionalities.
 
 ### Pickle serialisation
 
-All VPTree and VPForest indices are pickle-serialisable — save a built index to disk and
+All VPTree and IVFFlat indices are pickle-serialisable — save a built index to disk and
 reload it without rebuilding:
 
 ```python
@@ -303,7 +301,7 @@ A formal evaluation of PyNear against Faiss, scikit-learn, and Annoy across
 Euclidean, Manhattan, and Hamming distance metrics, dimensionalities from
 2-D to 1024-D, and both exact and approximate search modes. Includes
 TikZ-rendered latency charts and a recall–latency Pareto analysis of
-VPForestL2Index vs Faiss IndexIVFFlat.
+IVFFlatL2Index vs Faiss IndexIVFFlat.
 
 To run a quick standalone benchmark:
 

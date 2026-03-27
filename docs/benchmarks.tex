@@ -26,7 +26,7 @@
 \definecolor{colBlue}   {HTML}{1F77B4}   % Annoy
 \definecolor{colOrange} {HTML}{FF7F0E}   % Faiss / VPTreeL1
 \definecolor{colGreen}  {HTML}{2CA02C}   % scikit-learn / VPTreeL2
-\definecolor{colRed}    {HTML}{D62728}   % PyNear VPTree / VPForest
+\definecolor{colRed}    {HTML}{D62728}   % PyNear VPTree / IVFFlat
 \definecolor{colPurple} {HTML}{9467BD}   % BKTree
 \definecolor{colBrown}  {HTML}{8C564B}   % spare
 
@@ -80,7 +80,7 @@ We present a systematic empirical evaluation of \emph{PyNear}, a Python
 library implementing exact and approximate $k$-nearest-neighbour
 ($k$-NN) search via Vantage-Point Trees (VP-Trees) and VP-Forests
 with SIMD-accelerated distance kernels.  Version 2.1 introduces a
-BLAS-backed inner-cluster flat scan for \texttt{VPForestL2Index}
+BLAS-backed inner-cluster flat scan for \texttt{IVFFlatL2Index}
 using the NumPy SGEMV identity
 $\|q-x\|^2 = \|q\|^2 + \|x\|^2 - 2\,q^\top X$,
 replacing the previous per-cluster VP-Tree traversal.
@@ -93,7 +93,7 @@ $d = 2$ to $d = 1024$.  In the exact-search regime,
 \texttt{VPTreeL2Index} achieves query latencies $2\text{--}58\times$
 lower than scikit-learn's kd-tree at low to moderate dimensionalities
 ($d \le 128$).  In the high-dimensionality approximate regime
-($d = 128\text{--}1024$), the BLAS-optimised \texttt{VPForestL2Index}
+($d = 128\text{--}1024$), the BLAS-optimised \texttt{IVFFlatL2Index}
 achieves competitive latency (2.9–10.6 ms for 16 queries), and
 outperforms Faiss \texttt{IndexIVFFlat} at $d=128$.  All experiments
 were conducted on an Intel\textsuperscript{\textregistered}
@@ -120,12 +120,12 @@ tree that avoids the curse-of-dimensionality limitations of classical
 kd-trees by exploiting the triangle inequality rather than axis-aligned
 partitioning.  SIMD intrinsics (AVX2 on x86-64) further accelerate the
 hot distance computation paths.  The library exposes a uniform Python API for
-both exact \texttt{VPTree*} indices and the approximate \texttt{VPForest*}
+both exact \texttt{VPTree*} indices and the approximate \texttt{IVFFlat*}
 family, which implements an inverted file (IVF) scheme over Voronoi cells
 with a configurable probe budget.
 
 Version 2.1 replaces the per-cluster VP-Tree traversal inside
-\texttt{VPForest*} with a vectorised flat scan using NumPy's BLAS-backed
+\texttt{IVFFlat*} with a vectorised flat scan using NumPy's BLAS-backed
 matrix--vector product (SGEMV).  For $\ell_2$, the identity
 $\|q - x\|^2 = \|q\|^2 + \|x\|^2 - 2\,q^\top X$ reduces inner-cluster
 distance computation to a single SGEMV call, with per-cluster squared norms
@@ -491,7 +491,7 @@ semantically appropriate distance without sacrificing computational efficiency.
 \section{Approximate-Search Benchmarks}
 \label{sec:approx}
 
-PyNear's \texttt{VPForestL2Index} partitions the data into Voronoi cells via
+PyNear's \texttt{IVFFlatL2Index} partitions the data into Voronoi cells via
 K-Means and at query time probes only $n_{\mathrm{probe}}$ of them, trading
 recall for speed.  Version 2.1 replaces the per-cluster VP-Tree traversal
 with a flat BLAS scan using the NumPy SGEMV identity:
@@ -500,7 +500,7 @@ with a flat BLAS scan using the NumPy SGEMV identity:
 \]
 where $q^\top X$ is a BLAS SGEMV call $(n_c, D) \times (D,) \to (n_c,)$
 with per-cluster squared norms $\|x\|^2$ pre-computed at build time.
-This section compares \texttt{VPForestL2Index} against Faiss's
+This section compares \texttt{IVFFlatL2Index} against Faiss's
 \texttt{IndexIVFFlat} (canonical IVF-style approximate index) and the Faiss
 exact flat baseline. All experiments use $N = 50\,000$ data points,
 $k = 8$, and $n_q = 16$ queries; approximately 224 clusters are constructed.
@@ -538,17 +538,17 @@ representing a moderate recall-latency operating point.
   coordinates {(128,5.8)(256,0.2)(512,0.3)(1024,0.9)};
 \addlegendentry{Faiss \texttt{IndexIVFFlat}}
 
-% VPForestL2 (BLAS SGEMV, v2.1)
+% IVFFlatL2 (BLAS SGEMV, v2.1)
 \addplot[color=colRed, mark=diamond*]
   coordinates {(128,2.9)(256,3.7)(512,5.5)(1024,10.6)};
-\addlegendentry{PyNear \texttt{VPForestL2Index} (v2.1)}
+\addlegendentry{PyNear \texttt{IVFFlatL2Index} (v2.1)}
 
 \end{axis}
 \end{tikzpicture}
 \caption{Mean query latency (ms) vs.\ dimensionality for approximate
   $\ell_2$ nearest-neighbour search at $n_{\mathrm{probe}} = 20$,
   $N = 50\,000$, $k=8$, $n_q=16$.
-  \texttt{VPForestL2Index} (v2.1, BLAS SGEMV inner scan) outperforms
+  \texttt{IVFFlatL2Index} (v2.1, BLAS SGEMV inner scan) outperforms
   Faiss \texttt{IndexIVFFlat} at $d=128$ (2.9 ms vs.\ 5.8 ms) and
   scales sub-linearly from 2.9 ms to 10.6 ms over the $128\text{--}1024$
   range.  Faiss IVFFlat achieves lower latency at $d \geq 256$ owing to
@@ -577,8 +577,8 @@ indices at the $n_{\mathrm{probe}} = 20$ operating point.
 \cmidrule(lr){2-5}
 & 128 & 256 & 512 & 1024 \\
 \midrule
-\textbf{VPForestL2 — Latency (ms)} & 2.9 & 3.7 & 5.5 & 10.6 \\
-\textbf{VPForestL2 — Recall@8}   & 1.00 & 1.00 & 1.00 & 1.00 \\
+\textbf{IVFFlatL2 — Latency (ms)} & 2.9 & 3.7 & 5.5 & 10.6 \\
+\textbf{IVFFlatL2 — Recall@8}   & 1.00 & 1.00 & 1.00 & 1.00 \\
 \midrule
 \textbf{Faiss IVFFlat — Latency (ms)} & 5.8 & 0.2 & 0.3 & 0.9 \\
 \textbf{Faiss IVFFlat — Recall@8}   & 1.00 & 1.00 & 1.00 & 1.00 \\
@@ -591,10 +591,10 @@ indices at the $n_{\mathrm{probe}} = 20$ operating point.
 Both IVF indices attain perfect Recall@8 ($= 1.00$) across all
 dimensionalities at $n_{\mathrm{probe}} = 20$, confirming that 20 probed
 clusters are sufficient to recover all 8 true nearest neighbours.
-A notable result is that \texttt{VPForestL2Index} (v2.1) outperforms
+A notable result is that \texttt{IVFFlatL2Index} (v2.1) outperforms
 Faiss \texttt{IndexIVFFlat} at $d=128$ (2.9 ms vs.\ 5.8 ms).  At $d \geq 256$,
 Faiss IVFFlat achieves lower latency owing to its compiled BLAS backend.
-The BLAS-optimised VPForest beats the exact Faiss flat scan at $d=256$
+The BLAS-optimised IVFFlatL2Index beats the exact Faiss flat scan at $d=256$
 (3.7 ms vs.\ 4.2 ms) and $d=512$ (5.5 ms vs.\ 9.4 ms), confirming that
 the approximate index adds meaningful value over brute force.
 
@@ -610,9 +610,9 @@ $n_{\mathrm{probe}}$ from 1 to 80.  The key observations are:
         is well-aligned with the data's local structure at these
         dimensionalities.
   \item \textbf{1024-D:} Both indices achieve Recall@8 $= 1.00$ at
-        $n_{\mathrm{probe}} = 20$.  \texttt{VPForestL2Index} does so at
+        $n_{\mathrm{probe}} = 20$.  \texttt{IVFFlatL2Index} does so at
         10.6 ms, still below the exact Faiss flat baseline of 18.6 ms.
-  \item \textbf{Zero-dependency advantage:} \texttt{VPForestL2Index}
+  \item \textbf{Zero-dependency advantage:} \texttt{IVFFlatL2Index}
         requires no BLAS, GPU, or external native libraries beyond NumPy.
         It shares the same Python API as the exact \texttt{VPTree*} indices,
         enabling a seamless recall--accuracy trade-off without changing
@@ -642,14 +642,14 @@ concentration of measure phenomenon — but remains non-trivial for
 clustered datasets even at 512 dimensions.
 
 \paragraph{High dimensionality ($d = 128\text{--}1024$) — approximate.}
-The BLAS-optimised \texttt{VPForestL2Index} (v2.1) delivers compelling
+The BLAS-optimised \texttt{IVFFlatL2Index} (v2.1) delivers compelling
 approximate-search performance.  At $d=128$ it outperforms Faiss
 \texttt{IndexIVFFlat} (2.9 ms vs.\ 5.8 ms); at $d=256$ and $d=512$ it
 undercuts the exact Faiss flat scan while maintaining perfect recall.
 At $d=1024$ it reaches 10.6 ms vs.\ the exact flat baseline of 18.6 ms.
 Faiss IVFFlat's compiled BLAS backend yields lower latency at $d \geq 256$.
 Practitioners who require maximum throughput and can accept a compiled BLAS
-dependency should prefer Faiss IVF in this regime; \texttt{VPForestL2Index}
+dependency should prefer Faiss IVF in this regime; \texttt{IVFFlatL2Index}
 is preferable when zero native dependencies or the exact-to-approximate
 fallback via a single parameter change are operationally valuable.
 
@@ -676,7 +676,7 @@ narrow, near-identical latency band ($\pm 15\%$), allowing practitioners to
 select the semantically appropriate metric without performance penalties.
 
 Version 2.1 introduces a BLAS-backed inner-cluster scan for
-\texttt{VPForestL2Index} that replaces per-cluster tree traversal with
+\texttt{IVFFlatL2Index} that replaces per-cluster tree traversal with
 a NumPy SGEMV call, enabling competitive approximate-search performance:
 the optimised index outperforms Faiss \texttt{IndexIVFFlat} at $d=128$
 and beats the exact Faiss flat baseline at $d=256$ and $d=512$ while
@@ -684,7 +684,7 @@ maintaining perfect recall at $n_{\mathrm{probe}} = 20$.
 
 Future work includes extending the SIMD kernels to AVX-512 for wider
 vectorisation, investigating product-quantisation-based inner-cluster
-compression to reduce the latency of high-dimensional VPForest probes, and
+compression to reduce the latency of high-dimensional IVFFlatL2Index probes, and
 evaluating performance on non-clustered (adversarial) data distributions.
 
 \paragraph{Static index limitation.}

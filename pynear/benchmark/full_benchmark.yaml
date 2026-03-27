@@ -58,7 +58,7 @@ benchmark:
     dataset_num_clusters: 50
     dataset_type: "float32"
     index_types:
-    - VPForestL2Index_nprobe20
+    - IVFFlatL2Index_nprobe20
     - FaissIVFL2_nprobe20
     - FaissIndexFlatL2
 

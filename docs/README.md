@@ -3,7 +3,7 @@
 ## Available Indices
 
 PyNear provides two families of indices: **exact** (VPTree / BKTree) and
-**approximate** (VPForest).
+**approximate** (IVFFlatL2Index).
 
 ### Exact KNN Indices
 
@@ -23,21 +23,19 @@ All VPTree indices support:
 - `search1NN(queries)` — return the single nearest neighbour (faster than `searchKNN` with `k=1`)
 - `to_string()` — print tree structure (slow, for debugging only)
 
-### Approximate KNN Indices (VPForest)
+### Approximate KNN Indices (IVFFlat)
 
-VPForest indices partition data into clusters and build one VPTree per
-cluster.  Each query probes only the `n_probe` nearest clusters, trading a
-small, configurable recall loss for a large speed gain.  This is the right
-choice for **high-dimensional data** (512-D / 1024-D image or text
-embeddings) where a single VPTree would explore most of the dataset anyway.
+IVFFlat indices partition data into Voronoi clusters via K-Means.  Each query
+probes only the `n_probe` nearest clusters and performs a BLAS-backed flat
+scan inside each one, trading a small, configurable recall loss for a large
+speed gain.  This is the right choice for **high-dimensional data**
+(512-D / 1024-D image or text embeddings).
 
 | Index | Distance | Input dtype | Notes |
 |---|---|---|---|
-| `pynear.VPForestL2Index` | L2 (Euclidean) | `float32` | IVF-style; tunable recall vs speed |
-| `pynear.VPForestL1Index` | L1 (Manhattan) | `float32` | IVF-style; tunable recall vs speed |
-| `pynear.VPForestChebyshevIndex` | L∞ (Chebyshev) | `float32` | IVF-style; tunable recall vs speed |
+| `pynear.IVFFlatL2Index` | L2 (Euclidean) | `float32` | BLAS SGEMV inner scan; best for 512-D – 1024-D |
 
-VPForest indices share the same `set` / `searchKNN` / `search1NN` API as
+IVFFlatL2Index shares the same `set` / `searchKNN` / `search1NN` API as
 VPTree indices.  Setting `n_probe == n_clusters` makes the search exact.
 
 See [Approximate search and recall](./approximate.md) for a full guide on
@@ -109,7 +107,7 @@ indices, distances = index.searchKNN(queries, k)
 
 ---
 
-### `pynear.VPForestL2Index`
+### `pynear.IVFFlatL2Index`
 
 ```python
 import numpy as np
@@ -121,8 +119,8 @@ dimension = 1024
 data = np.random.rand(num_points, dimension).astype(np.float32)
 
 # Rule of thumb: n_clusters ≈ sqrt(N), n_probe controls recall vs speed
-index = pynear.VPForestL2Index(n_clusters=316, n_probe=20)
-index.set(data)  # clusters data with K-Means, builds one VPTree per cluster
+index = pynear.IVFFlatL2Index(n_clusters=316, n_probe=20)
+index.set(data)  # clusters data with K-Means, stores raw vectors per cluster
 
 queries = np.random.rand(10, dimension).astype(np.float32)
 indices, distances = index.searchKNN(queries, k=5)
@@ -131,7 +129,7 @@ indices, distances = index.searchKNN(queries, k=5)
 Set `n_probe = n_clusters` for exact results at the cost of speed:
 
 ```python
-index = pynear.VPForestL2Index(n_clusters=316, n_probe=316)  # exact
+index = pynear.IVFFlatL2Index(n_clusters=316, n_probe=316)  # exact
 ```
 
 See [Approximate search and recall](./approximate.md) for how to measure

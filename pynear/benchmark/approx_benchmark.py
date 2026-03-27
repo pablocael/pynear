@@ -1,5 +1,5 @@
 """
-Approximate search benchmark: VPForestL2Index vs Faiss IndexIVFFlat.
+Approximate search benchmark: IVFFlatL2Index vs Faiss IndexIVFFlat.
 
 Measures both query latency and recall@k across:
   - multiple dimensionalities (128, 256, 512, 1024)
@@ -81,8 +81,8 @@ def benchmark_dimension(dim, data, queries, k):
     for n_probe in N_PROBE_VALUES:
         n_probe_clamped = min(n_probe, n_clusters)
 
-        # ── VPForest ──────────────────────────────────────────────────────────
-        forest = pynear.VPForestL2Index(n_clusters=n_clusters, n_probe=n_probe_clamped)
+        # ── IVFFlatL2 ─────────────────────────────────────────────────────────
+        forest = pynear.IVFFlatL2Index(n_clusters=n_clusters, n_probe=n_probe_clamped)
         forest.set(data)
 
         def vpf_search(q, k_):
@@ -91,7 +91,7 @@ def benchmark_dimension(dim, data, queries, k):
         t, res = timed_search(vpf_search, queries, k, NUM_AVG_RUNS)
         recall = compute_recall(res[0], exact, k)
         results["vpforest"].append({"n_probe": n_probe_clamped, "time": t, "recall": recall})
-        print(f"  [dim={dim}] VPForest  n_probe={n_probe_clamped:3d}  "
+        print(f"  [dim={dim}] IVFFlatL2  n_probe={n_probe_clamped:3d}  "
               f"time={t*1000:.1f}ms  recall={recall:.3f}")
 
         # ── Faiss IVF ─────────────────────────────────────────────────────────
@@ -117,7 +117,7 @@ def benchmark_dimension(dim, data, queries, k):
 # ── Plotting ───────────────────────────────────────────────────────────────────
 
 COLORS = {"vpforest": "#5b8ff9", "faiss_ivf": "#f6bd16"}
-LABELS = {"vpforest": "VPForestL2 (PyNear)", "faiss_ivf": "Faiss IndexIVFFlat"}
+LABELS = {"vpforest": "IVFFlatL2 (PyNear)", "faiss_ivf": "Faiss IndexIVFFlat"}
 
 
 def plot_recall_vs_time(all_results, output_dir):

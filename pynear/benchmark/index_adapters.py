@@ -134,8 +134,8 @@ class AnnoyHammingAdapter(IndexAdapter):
             self._index.get_nns_by_vector(v, k)
 
 
-class VPForestL2Adapter(IndexAdapter):
-    """Approximate L2 index using VPForestL2Index (IVF-style with VPTrees)."""
+class IVFFlatL2Adapter(IndexAdapter):
+    """Approximate L2 index using IVFFlatL2Index (IVF-style flat BLAS scan)."""
 
     def __init__(self, n_probe: int = 10):
         self._n_probe = n_probe
@@ -143,7 +143,7 @@ class VPForestL2Adapter(IndexAdapter):
 
     def build_index(self, data: np.ndarray):
         n_clusters = max(10, int(np.sqrt(len(data))))
-        self._index = pynear.VPForestL2Index(
+        self._index = pynear.IVFFlatL2Index(
             n_clusters=n_clusters,
             n_probe=min(self._n_probe, n_clusters),
         )
@@ -212,15 +212,15 @@ def create_index_adapter(index_name: str):
 
     Supported names:
       VPTreeL2Index, VPTreeL1Index, VPTreeBinaryIndex, VPTreeChebyshevIndex
-      VPForestL2Index, VPForestL2Index_nprobeN   (approximate, n_probe=N)
+      IVFFlatL2Index, IVFFlatL2Index_nprobeN   (approximate, n_probe=N)
       FaissIndexFlatL2, FaissIndexBinaryFlat
       FaissIVFL2, FaissIVFL2_nprobeN             (approximate, n_probe=N)
       AnnoyL2, AnnoyManhattan, AnnoyHamming
       SKLearnL2, BKTreeBinaryIndex
     """
-    if index_name.startswith("VPForestL2Index"):
+    if index_name.startswith("IVFFlatL2Index"):
         n_probe = int(index_name.split("_nprobe")[1]) if "_nprobe" in index_name else 10
-        return VPForestL2Adapter(n_probe=n_probe)
+        return IVFFlatL2Adapter(n_probe=n_probe)
 
     if index_name.startswith("FaissIVFL2"):
         n_probe = int(index_name.split("_nprobe")[1]) if "_nprobe" in index_name else 10

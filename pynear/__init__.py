@@ -25,9 +25,7 @@ from _pynear import dist_l1
 from _pynear import dist_l2
 
 from ._version import __version__
-from .forest import VPForestChebyshevIndex
-from .forest import VPForestL1Index
-from .forest import VPForestL2Index
+from .forest import IVFFlatL2Index
 
 try:
     from .sklearn_adapter import PyNearKNeighborsClassifier

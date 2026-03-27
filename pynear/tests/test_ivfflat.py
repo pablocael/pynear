@@ -1,8 +1,8 @@
 """
-Tests for VPForest (IVF-style) indices.
+Tests for IVFFlatL2Index (IVF-style approximate search).
 
 Correctness strategy: for each query we check that every result returned by
-the forest is also in the brute-force top-k.  We allow a small recall gap
+the index is also in the brute-force top-k.  We allow a small recall gap
 because n_probe < n_clusters is intentionally approximate; at n_probe ==
 n_clusters the result must be exact.
 """
@@ -12,9 +12,7 @@ import pickle
 import numpy as np
 import pytest
 
-import pynear
-from pynear import VPForestL2Index, VPForestL1Index, VPForestChebyshevIndex
-from pynear import VPTreeL2Index
+from pynear import IVFFlatL2Index
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -31,13 +29,13 @@ def brute_knn_l2(data, queries, k):
     return results_idx, results_dist
 
 
-def recall(forest_indices, exact_indices):
+def recall(approx_indices, exact_indices):
     """Mean per-query recall@k."""
     total = sum(
         len(set(fi) & set(ei)) / max(len(ei), 1)
-        for fi, ei in zip(forest_indices, exact_indices)
+        for fi, ei in zip(approx_indices, exact_indices)
     )
-    return total / len(forest_indices)
+    return total / len(approx_indices)
 
 
 # ── basic correctness ──────────────────────────────────────────────────────────
@@ -50,13 +48,13 @@ def test_exact_when_n_probe_equals_n_clusters():
     queries = rng.random((20, 32)).astype(np.float32)
     k = 5
 
-    index = VPForestL2Index(n_clusters=20, n_probe=20)
+    index = IVFFlatL2Index(n_clusters=20, n_probe=20)
     index.set(data)
 
-    forest_idx, forest_dists = index.searchKNN(queries, k)
-    exact_idx, exact_dists = brute_knn_l2(data, queries, k)
+    approx_idx, _ = index.searchKNN(queries, k)
+    exact_idx, _ = brute_knn_l2(data, queries, k)
 
-    assert recall(forest_idx, exact_idx) == pytest.approx(1.0)
+    assert recall(approx_idx, exact_idx) == pytest.approx(1.0)
 
 
 def test_high_recall_with_reasonable_n_probe():
@@ -66,13 +64,13 @@ def test_high_recall_with_reasonable_n_probe():
     queries = rng.random((50, 8)).astype(np.float32)
     k = 10
 
-    index = VPForestL2Index(n_clusters=20, n_probe=15)
+    index = IVFFlatL2Index(n_clusters=20, n_probe=15)
     index.set(data)
 
-    forest_idx, _ = index.searchKNN(queries, k)
+    approx_idx, _ = index.searchKNN(queries, k)
     exact_idx, _ = brute_knn_l2(data, queries, k)
 
-    assert recall(forest_idx, exact_idx) >= 0.90
+    assert recall(approx_idx, exact_idx) >= 0.90
 
 
 def test_search1nn_matches_searchknn():
@@ -80,7 +78,7 @@ def test_search1nn_matches_searchknn():
     data = rng.random((500, 16)).astype(np.float32)
     queries = rng.random((10, 16)).astype(np.float32)
 
-    index = VPForestL2Index(n_clusters=10, n_probe=10)
+    index = IVFFlatL2Index(n_clusters=10, n_probe=10)
     index.set(data)
 
     idx1, dist1 = index.search1NN(queries)
@@ -94,7 +92,7 @@ def test_single_query_vector():
     """1-D query (not batched) should not crash."""
     rng = np.random.default_rng(3)
     data = rng.random((200, 8)).astype(np.float32)
-    index = VPForestL2Index(n_clusters=10, n_probe=5)
+    index = IVFFlatL2Index(n_clusters=10, n_probe=5)
     index.set(data)
 
     q = rng.random(8).astype(np.float32)
@@ -107,7 +105,7 @@ def test_k_larger_than_cluster_size():
     """k can exceed a single cluster's size — results come from multiple clusters."""
     rng = np.random.default_rng(4)
     data = rng.random((50, 4)).astype(np.float32)
-    index = VPForestL2Index(n_clusters=20, n_probe=20)
+    index = IVFFlatL2Index(n_clusters=20, n_probe=20)
     index.set(data)
 
     idx, dist = index.searchKNN(rng.random((1, 4)).astype(np.float32), k=10)
@@ -118,7 +116,7 @@ def test_fewer_points_than_clusters():
     """n_clusters is silently capped at N."""
     rng = np.random.default_rng(5)
     data = rng.random((10, 4)).astype(np.float32)
-    index = VPForestL2Index(n_clusters=100, n_probe=100)
+    index = IVFFlatL2Index(n_clusters=100, n_probe=100)
     index.set(data)
     assert index.n_clusters <= 10
 
@@ -132,27 +130,12 @@ def test_high_dim_1024():
     data = rng.random((2000, 1024)).astype(np.float32)
     queries = rng.random((5, 1024)).astype(np.float32)
 
-    index = VPForestL2Index(n_clusters=40, n_probe=10)
+    index = IVFFlatL2Index(n_clusters=40, n_probe=10)
     index.set(data)
 
     idx, dist = index.searchKNN(queries, k=5)
     assert len(idx) == 5
     assert all(len(r) == 5 for r in idx)
-
-
-# ── metric variants ────────────────────────────────────────────────────────────
-
-
-@pytest.mark.parametrize("IndexClass", [VPForestL1Index, VPForestChebyshevIndex])
-def test_metric_variants_run(IndexClass):
-    rng = np.random.default_rng(7)
-    data = rng.random((300, 16)).astype(np.float32)
-    queries = rng.random((5, 16)).astype(np.float32)
-
-    index = IndexClass(n_clusters=10, n_probe=10)
-    index.set(data)
-    idx, dist = index.searchKNN(queries, k=3)
-    assert len(idx) == 5
 
 
 # ── pickle ─────────────────────────────────────────────────────────────────────
@@ -164,7 +147,7 @@ def test_pickle_roundtrip():
     queries = rng.random((10, 32)).astype(np.float32)
     k = 5
 
-    index = VPForestL2Index(n_clusters=20, n_probe=20)
+    index = IVFFlatL2Index(n_clusters=20, n_probe=20)
     index.set(data)
 
     idx_before, dist_before = index.searchKNN(queries, k)

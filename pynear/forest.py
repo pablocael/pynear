@@ -1,21 +1,15 @@
 """
-VPForest indices — IVF-style partitioned search using flat numpy scans.
+IVFFlat index — IVF-style partitioned search using flat numpy scans.
 
 Data is split into ``n_clusters`` Voronoi cells via K-Means.  Each cell stores
 its raw vectors.  A query probes the ``n_probe`` nearest centroids and merges
 their results into a global top-k ranking.
 
-Inner-cluster distance computation uses numpy BLAS-backed matrix operations:
+Inner-cluster distance computation for L2 uses a BLAS-backed identity:
 
-* **L2**:  ``‖q−x‖² = ‖q‖² + ‖x‖² − 2 qᵀx``  — the ``qᵀX`` term is a
+* ``‖q−x‖² = ‖q‖² + ‖x‖² − 2 qᵀx``  — the ``qᵀX`` term is a
   BLAS SGEMV call (single query) or SGEMM call (batched queries), with
   per-cluster squared norms precomputed at build time.
-* **L1**:  ``|q−x|.sum(axis=1)``  — vectorised over all cluster points.
-* **L∞**:  ``|q−x|.max(axis=1)``  — vectorised over all cluster points.
-
-This replaces the previous per-cluster VP-Tree traversal, which provided
-negligible pruning benefit at high dimensionality (d ≥ 128) while adding
-significant per-call overhead.
 
 Rule of thumb
 -------------
@@ -28,7 +22,7 @@ import heapq
 import numpy as np
 
 
-class _VPForestIndex:
+class _IVFFlatIndex:
     def __init__(self, n_clusters: int, n_probe: int):
         self._n_clusters = n_clusters
         self._n_probe = min(n_probe, n_clusters)
@@ -75,13 +69,13 @@ class _VPForestIndex:
             raise RuntimeError("Index is empty — call set() first")
 
         n_queries = len(queries)
-        n_trees = len(self._cluster_data)
-        n_probe = min(self._n_probe, n_trees)
+        n_clusters = len(self._cluster_data)
+        n_probe = min(self._n_probe, n_clusters)
 
         # Nearest centroids for every query (Q, C) → argpartition → (Q, n_probe)
         centroid_dists = _l2sq_pairwise(queries, self._centroids)
-        if n_probe == n_trees:
-            probe_clusters = np.tile(np.arange(n_trees), (n_queries, 1))
+        if n_probe == n_clusters:
+            probe_clusters = np.tile(np.arange(n_clusters), (n_queries, 1))
         else:
             probe_clusters = np.argpartition(centroid_dists, n_probe - 1, axis=1)[:, :n_probe]
 
@@ -160,13 +154,14 @@ class _VPForestIndex:
 # ── Public index classes ───────────────────────────────────────────────────────
 
 
-class VPForestL2Index(_VPForestIndex):
+class IVFFlatL2Index(_IVFFlatIndex):
     """
-    IVF-style index over **L2 (Euclidean)** distance.
+    IVF-style approximate index over **L2 (Euclidean)** distance.
 
-    Inner-cluster scan uses the BLAS SGEMV identity
-    ``‖q−x‖² = ‖q‖² + ‖x‖² − 2 qᵀX`` with per-cluster squared norms
-    precomputed at build time.
+    Partitions data into Voronoi cells via K-Means.  Each query probes the
+    ``n_probe`` nearest centroids; inner-cluster distances are computed with a
+    BLAS SGEMV using the identity ``‖q−x‖² = ‖q‖² + ‖x‖² − 2 qᵀX``, with
+    per-cluster squared norms precomputed at build time.
 
     Parameters
     ----------
@@ -187,45 +182,6 @@ class VPForestL2Index(_VPForestIndex):
         q_norm = float(np.dot(query, query))
         cross = self._cluster_data[ci] @ query          # SGEMV
         return np.maximum(0.0, q_norm + self._cluster_norms[ci] - 2.0 * cross)
-
-
-class VPForestL1Index(_VPForestIndex):
-    """
-    IVF-style index over **L1 (Manhattan)** distance.
-
-    Parameters
-    ----------
-    n_clusters : int
-        Number of Voronoi cells (K-Means partitioning uses L2 for speed;
-        the fine search inside each cell uses L1).
-    n_probe : int
-        Cells probed per query.
-    """
-
-    def __init__(self, n_clusters: int = 100, n_probe: int = 10):
-        super().__init__(n_clusters, n_probe)
-
-    def _flat_distances(self, query: np.ndarray, ci: int) -> np.ndarray:
-        return np.abs(self._cluster_data[ci] - query).sum(axis=1)
-
-
-class VPForestChebyshevIndex(_VPForestIndex):
-    """
-    IVF-style index over **Chebyshev (L∞)** distance.
-
-    Parameters
-    ----------
-    n_clusters : int
-        Number of Voronoi cells.
-    n_probe : int
-        Cells probed per query.
-    """
-
-    def __init__(self, n_clusters: int = 100, n_probe: int = 10):
-        super().__init__(n_clusters, n_probe)
-
-    def _flat_distances(self, query: np.ndarray, ci: int) -> np.ndarray:
-        return np.abs(self._cluster_data[ci] - query).max(axis=1)
 
 
 # ── Utilities ──────────────────────────────────────────────────────────────────

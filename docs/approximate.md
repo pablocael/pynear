@@ -1,6 +1,6 @@
 # Approximate Search and Recall
 
-VPForest indices trade **recall** for **speed** by searching only a subset
+IVFFlatL2Index trades **recall** for **speed** by searching only a subset
 of the data.  This page explains what recall means, how to measure it, and
 how to tune `n_clusters` and `n_probe` for your use case.
 
@@ -27,9 +27,9 @@ recall@k = (1/Q) * Σ  |returned_i ∩ true_top_k_i| / k
 
 ---
 
-## Why does VPForest lose recall?
+## Why does IVFFlatL2Index lose recall?
 
-VPForest partitions the dataset into `n_clusters` Voronoi cells.  A query
+IVFFlatL2Index partitions the dataset into `n_clusters` Voronoi cells.  A query
 probes only the `n_probe` nearest cells.  If a true nearest neighbour lives
 in a cell that was not probed, it is missed.
 
@@ -44,7 +44,7 @@ The risk grows with:
 
 ## How to measure recall
 
-Compare VPForest results against brute-force (or `VPTreeL2Index` at small
+Compare IVFFlatL2Index results against brute-force (or `VPTreeL2Index` at small
 scale) on a held-out sample of queries:
 
 ```python
@@ -62,7 +62,7 @@ exact.set(data)
 true_idx, _ = exact.searchKNN(queries, k)
 
 # Approximate index under test
-approx = pynear.VPForestL2Index(n_clusters=224, n_probe=20)
+approx = pynear.IVFFlatL2Index(n_clusters=224, n_probe=20)
 approx.set(data)
 approx_idx, _ = approx.searchKNN(queries, k)
 
@@ -88,9 +88,9 @@ A good starting point is `n_clusters ≈ sqrt(N)`:
 | 100 000 | 316 |
 | 1 000 000 | 1 000 |
 
-More clusters → smaller cells → each VPTree search is faster, but recall
+More clusters → smaller cells → each cluster scan is faster, but recall
 drops faster as `n_probe` decreases.  Fewer clusters → larger cells → each
-VPTree search is slower, but recall is more robust to small `n_probe`.
+cluster scan is slower, but recall is more robust to small `n_probe`.
 
 ### Choosing n_probe
 
@@ -99,7 +99,7 @@ smallest value that meets your recall target:
 
 ```python
 for n_probe in [1, 5, 10, 20, 30, 50, 100]:
-    approx = pynear.VPForestL2Index(n_clusters=224, n_probe=n_probe)
+    approx = pynear.IVFFlatL2Index(n_clusters=224, n_probe=n_probe)
     approx.set(data)
     approx_idx, _ = approx.searchKNN(queries, k)
     recall = np.mean([
@@ -138,23 +138,23 @@ These ratios are rough — always measure on your own data.
 | Situation | Recommendation |
 |---|---|
 | Dimensionality ≤ 128-D | `VPTreeL2Index` — exact and fast |
-| Dimensionality 256-D – 1024-D, N > 50 K | `VPForestL2Index` with `n_probe` tuned to recall target |
-| Need guaranteed exact results at any dimensionality | `VPForestL2Index` with `n_probe = n_clusters` |
+| Dimensionality 256-D – 1024-D, N > 50 K | `IVFFlatL2Index` with `n_probe` tuned to recall target |
+| Need guaranteed exact results | `IVFFlatL2Index` with `n_probe = n_clusters` |
 | Binary descriptors (ORB, BRIEF) | `VPTreeBinaryIndex` (exact) or `BKTreeBinaryIndex` (range) |
 
 ---
 
-## Making VPForest exact
+## Making IVFFlatL2Index exact
 
 Setting `n_probe = n_clusters` guarantees exact results regardless of
 dimensionality:
 
 ```python
-index = pynear.VPForestL2Index(n_clusters=316, n_probe=316)
+index = pynear.IVFFlatL2Index(n_clusters=316, n_probe=316)
 index.set(data)  # now fully exact — every cluster is probed
 ```
 
-At that point VPForest behaves like a partitioned exact search and will be
+At that point it behaves like a partitioned exact search and will be
 somewhat slower than a single `VPTreeL2Index` for low-dimensional data (due
-to the clustering overhead), but can be faster for very high-dimensional data
-where the single VPTree's pruning efficiency degrades.
+to the clustering overhead), but faster for very high-dimensional data
+where the VPTree's pruning efficiency degrades.
