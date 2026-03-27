@@ -20,7 +20,11 @@ def hamming_distance_pairwise(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 @pytest.mark.parametrize("bktree_cls, dimensions", CLASSES)
 def test_bktree_empty_index(bktree_cls, dimensions):
     num_points = 2
-    data = np.random.randint(0, 255, size=(num_points, dimensions), dtype=np.uint8)
+    rng = np.random.default_rng(42)
+    data = rng.integers(0, 256, size=(num_points, dimensions), dtype=np.uint8)
+    # ensure all points are distinct so threshold=0 returns exactly one match each
+    while len({tuple(r) for r in data.tolist()}) < num_points:
+        data = rng.integers(0, 256, size=(num_points, dimensions), dtype=np.uint8)
     empty = np.array([], dtype=np.uint8)
 
     tree = bktree_cls()
@@ -43,7 +47,11 @@ def test_bktree_empty_index(bktree_cls, dimensions):
 @pytest.mark.parametrize("bktree_cls, dimensions", CLASSES)
 def test_bktree_find_self(bktree_cls, dimensions):
     num_points = 2
-    data = np.random.randint(0, 255, size=(num_points, dimensions), dtype=np.uint8)
+    rng = np.random.default_rng(42)
+    data = rng.integers(0, 256, size=(num_points, dimensions), dtype=np.uint8)
+    # ensure all points are distinct so threshold=0 returns exactly one match each
+    while len({tuple(r) for r in data.tolist()}) < num_points:
+        data = rng.integers(0, 256, size=(num_points, dimensions), dtype=np.uint8)
 
     tree = bktree_cls()
     tree.set(data)
@@ -58,7 +66,11 @@ def test_bktree_find_self(bktree_cls, dimensions):
 @pytest.mark.parametrize("bktree_cls, dimensions", CLASSES)
 def test_bktree_find_all(bktree_cls, dimensions):
     num_points = 2
-    data = np.random.randint(0, 255, size=(num_points, dimensions), dtype=np.uint8)
+    rng = np.random.default_rng(42)
+    data = rng.integers(0, 256, size=(num_points, dimensions), dtype=np.uint8)
+    # ensure all points are distinct so threshold=0 returns exactly one match each
+    while len({tuple(r) for r in data.tolist()}) < num_points:
+        data = rng.integers(0, 256, size=(num_points, dimensions), dtype=np.uint8)
 
     tree = bktree_cls()
     tree.set(data)
