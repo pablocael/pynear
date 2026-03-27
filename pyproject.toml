@@ -18,7 +18,12 @@ force_single_line = true
 minversion = "6.0"
 addopts = ["-ra", "--showlocals", "--strict-markers", "--strict-config"]
 xfail_strict = true
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # joblib/loky emits this on Windows CI (Python 3.8) when it cannot
+    # query physical core count via the registry — harmless, not our code.
+    "ignore:Could not find the number of physical cores:UserWarning",
+]
 testpaths = ["tests"]
 
 [tool.cibuildwheel]
