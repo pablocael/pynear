@@ -1,37 +1,41 @@
 """
-VPForest indices — IVF-style partitioned search using VPTrees.
+VPForest indices — IVF-style partitioned search using flat numpy scans.
 
-Data is split into ``n_clusters`` Voronoi cells via K-Means.  Each cell gets
-its own VPTree.  A query probes the ``n_probe`` nearest centroids and merges
+Data is split into ``n_clusters`` Voronoi cells via K-Means.  Each cell stores
+its raw vectors.  A query probes the ``n_probe`` nearest centroids and merges
 their results into a global top-k ranking.
 
-This trades a small, configurable recall loss for a large speed gain on
-high-dimensional data (e.g. 512-D / 1024-D image embeddings) where a single
-VPTree would otherwise spend too much time exploring the whole space.
+Inner-cluster distance computation uses numpy BLAS-backed matrix operations:
+
+* **L2**:  ``‖q−x‖² = ‖q‖² + ‖x‖² − 2 qᵀx``  — the ``qᵀX`` term is a
+  BLAS SGEMV call (single query) or SGEMM call (batched queries), with
+  per-cluster squared norms precomputed at build time.
+* **L1**:  ``|q−x|.sum(axis=1)``  — vectorised over all cluster points.
+* **L∞**:  ``|q−x|.max(axis=1)``  — vectorised over all cluster points.
+
+This replaces the previous per-cluster VP-Tree traversal, which provided
+negligible pruning benefit at high dimensionality (d ≥ 128) while adding
+significant per-call overhead.
 
 Rule of thumb
 -------------
 * n_clusters ≈ sqrt(N)  for a dataset of N points
-* n_probe    ≈ 10–20   for ~95 % recall; increase toward n_clusters for exact results
+* n_probe    ≈ 10–20   for ~95 % recall; increase toward n_clusters for exact
 """
 
 import heapq
 
 import numpy as np
 
-from _pynear import VPTreeChebyshevIndex
-from _pynear import VPTreeL1Index
-from _pynear import VPTreeL2Index
-
 
 class _VPForestIndex:
-    def __init__(self, n_clusters: int, n_probe: int, index_class):
+    def __init__(self, n_clusters: int, n_probe: int):
         self._n_clusters = n_clusters
         self._n_probe = min(n_probe, n_clusters)
-        self._index_class = index_class
-        self._centroids = None   # (C, D) float32
-        self._trees = []         # one VPTree per non-empty cluster
-        self._orig_indices = []  # original row indices per cluster
+        self._centroids = None      # (C, D) float32
+        self._cluster_data = []     # list of (n_c, D) float32 arrays
+        self._cluster_norms = []    # list of (n_c,) float32 — precomputed for L2
+        self._orig_indices = []     # list of (n_c,) int arrays — global row indices
 
     # ── Build ──────────────────────────────────────────────────────────────
 
@@ -46,7 +50,8 @@ class _VPForestIndex:
         labels, centroids = self._kmeans(data, n_clusters)
 
         self._centroids = centroids
-        self._trees = []
+        self._cluster_data = []
+        self._cluster_norms = []
         self._orig_indices = []
 
         for c in range(len(centroids)):
@@ -54,15 +59,15 @@ class _VPForestIndex:
             if not mask.any():
                 continue
             idx = np.where(mask)[0]
-            tree = self._index_class()
-            tree.set(data[idx])
-            self._trees.append(tree)
+            pts = data[idx]
+            self._cluster_data.append(pts)
+            self._cluster_norms.append((pts * pts).sum(axis=1))  # ||x||² per point
             self._orig_indices.append(idx)
 
     # ── Search ─────────────────────────────────────────────────────────────
 
     def searchKNN(self, queries: np.ndarray, k: int):
-        """Return (indices, distances) for the k nearest neighbours of each query."""
+        """Return ``(indices, distances)`` for the k nearest neighbours of each query."""
         queries = np.asarray(queries, dtype=np.float32)
         if queries.ndim == 1:
             queries = queries[np.newaxis]
@@ -70,35 +75,41 @@ class _VPForestIndex:
             raise RuntimeError("Index is empty — call set() first")
 
         n_queries = len(queries)
-        n_probe = min(self._n_probe, len(self._trees))
+        n_trees = len(self._cluster_data)
+        n_probe = min(self._n_probe, n_trees)
 
-        # Find the n_probe nearest centroids for every query at once
-        centroid_dists = _l2sq_pairwise(queries, self._centroids)  # (Q, C)
-        if n_probe == len(self._trees):
-            probe_clusters = np.tile(np.arange(len(self._trees)), (n_queries, 1))
+        # Nearest centroids for every query (Q, C) → argpartition → (Q, n_probe)
+        centroid_dists = _l2sq_pairwise(queries, self._centroids)
+        if n_probe == n_trees:
+            probe_clusters = np.tile(np.arange(n_trees), (n_queries, 1))
         else:
             probe_clusters = np.argpartition(centroid_dists, n_probe - 1, axis=1)[:, :n_probe]
 
         all_indices, all_distances = [], []
 
         for qi in range(n_queries):
-            # Max-heap of size k: entries are (-dist, orig_idx)
             heap: list = []
+            q = queries[qi]
 
             for ci in probe_clusters[qi]:
-                tree = self._trees[ci]
+                dists = self._flat_distances(q, int(ci))   # (n_c,)
                 orig_idx = self._orig_indices[ci]
                 local_k = min(k, len(orig_idx))
 
-                local_indices, local_dists = tree.searchKNN(queries[qi : qi + 1], local_k)
+                # Partial sort: find the local_k smallest distances
+                if local_k >= len(dists):
+                    top = np.arange(len(dists))
+                else:
+                    top = np.argpartition(dists, local_k - 1)[:local_k]
 
-                for li, ld in zip(local_indices[0], local_dists[0]):
+                for li in top:
+                    ld = float(dists[li])
+                    gidx = int(orig_idx[li])
                     if len(heap) < k:
-                        heapq.heappush(heap, (-ld, int(orig_idx[li])))
+                        heapq.heappush(heap, (-ld, gidx))
                     elif ld < -heap[0][0]:
-                        heapq.heapreplace(heap, (-ld, int(orig_idx[li])))
+                        heapq.heapreplace(heap, (-ld, gidx))
 
-            # Sort nearest-first
             results = sorted(heap, key=lambda x: -x[0])
             all_indices.append([item[1] for item in results])
             all_distances.append([-item[0] for item in results])
@@ -109,12 +120,18 @@ class _VPForestIndex:
         """Shortcut for k=1 nearest neighbour search."""
         return self.searchKNN(queries, 1)
 
+    # ── Distance kernel (overridden per subclass) ───────────────────────────
+
+    def _flat_distances(self, query: np.ndarray, ci: int) -> np.ndarray:
+        """Return distance from *query* (D,) to every point in cluster *ci*."""
+        raise NotImplementedError
+
     # ── Info ───────────────────────────────────────────────────────────────
 
     @property
     def n_clusters(self) -> int:
         """Number of clusters actually built (may be less than requested)."""
-        return len(self._trees)
+        return len(self._cluster_data)
 
     @property
     def n_probe(self) -> int:
@@ -147,9 +164,9 @@ class VPForestL2Index(_VPForestIndex):
     """
     IVF-style index over **L2 (Euclidean)** distance.
 
-    Clusters data with K-Means and builds one :class:`VPTreeL2Index` per
-    cluster.  Ideal for float32 image / text embeddings (CLIP, ResNet, etc.)
-    in 128-D to 1024-D.
+    Inner-cluster scan uses the BLAS SGEMV identity
+    ``‖q−x‖² = ‖q‖² + ‖x‖² − 2 qᵀX`` with per-cluster squared norms
+    precomputed at build time.
 
     Parameters
     ----------
@@ -162,7 +179,14 @@ class VPForestL2Index(_VPForestIndex):
     """
 
     def __init__(self, n_clusters: int = 100, n_probe: int = 10):
-        super().__init__(n_clusters, n_probe, VPTreeL2Index)
+        super().__init__(n_clusters, n_probe)
+
+    def _flat_distances(self, query: np.ndarray, ci: int) -> np.ndarray:
+        # ||q - x||^2 = ||q||^2 + ||x||^2 - 2 q·x
+        # cluster_data[ci] @ query  →  BLAS SGEMV: (n_c, D) × (D,) = (n_c,)
+        q_norm = float(np.dot(query, query))
+        cross = self._cluster_data[ci] @ query          # SGEMV
+        return np.maximum(0.0, q_norm + self._cluster_norms[ci] - 2.0 * cross)
 
 
 class VPForestL1Index(_VPForestIndex):
@@ -179,7 +203,10 @@ class VPForestL1Index(_VPForestIndex):
     """
 
     def __init__(self, n_clusters: int = 100, n_probe: int = 10):
-        super().__init__(n_clusters, n_probe, VPTreeL1Index)
+        super().__init__(n_clusters, n_probe)
+
+    def _flat_distances(self, query: np.ndarray, ci: int) -> np.ndarray:
+        return np.abs(self._cluster_data[ci] - query).sum(axis=1)
 
 
 class VPForestChebyshevIndex(_VPForestIndex):
@@ -195,7 +222,10 @@ class VPForestChebyshevIndex(_VPForestIndex):
     """
 
     def __init__(self, n_clusters: int = 100, n_probe: int = 10):
-        super().__init__(n_clusters, n_probe, VPTreeChebyshevIndex)
+        super().__init__(n_clusters, n_probe)
+
+    def _flat_distances(self, query: np.ndarray, ci: int) -> np.ndarray:
+        return np.abs(self._cluster_data[ci] - query).max(axis=1)
 
 
 # ── Utilities ──────────────────────────────────────────────────────────────────
@@ -203,7 +233,6 @@ class VPForestChebyshevIndex(_VPForestIndex):
 
 def _l2sq_pairwise(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     """Squared L2 distance matrix between rows of A (N,D) and B (M,D)."""
-    # ||a-b||^2 = ||a||^2 + ||b||^2 - 2 a·b  →  O(NMD) via BLAS gemm
     a_norms = np.einsum("ij,ij->i", A, A)[:, np.newaxis]
     b_norms = np.einsum("ij,ij->i", B, B)[np.newaxis, :]
     return np.maximum(0.0, a_norms + b_norms - 2.0 * (A @ B.T))
