@@ -29,6 +29,13 @@ from .forest import VPForestChebyshevIndex
 from .forest import VPForestL1Index
 from .forest import VPForestL2Index
 
+try:
+    from .sklearn_adapter import PyNearKNeighborsClassifier
+    from .sklearn_adapter import PyNearKNeighborsRegressor
+    from .sklearn_adapter import PyNearNearestNeighbors
+except ImportError:
+    pass
+
 
 def dist_hamming(a: List, b: List):
     if len(a) != len(b):
