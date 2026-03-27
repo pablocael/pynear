@@ -24,6 +24,9 @@ jobs:
         CIBW_ARCHS_MACOS: arm64 x86_64
         CIBW_ARCHS_LINUX: auto64
         CIBW_ARCHS_WINDOWS: auto64
+        # Use manylinux_2_28 (AlmaLinux 8) instead of manylinux2014 so that
+        # pre-built scipy/scikit-learn wheels are available during test runs.
+        CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
         CIBW_BEFORE_ALL_MACOS: brew install llvm libomp
         # Include both Homebrew prefixes: /opt/homebrew (arm64) and /usr/local (x86_64/Rosetta)
         CIBW_ENVIRONMENT_MACOS: >-
