@@ -7,6 +7,9 @@ implementation to ensure identical (or equivalent) results.
 
 import numpy as np
 import pytest
+
+sklearn = pytest.importorskip("sklearn", reason="scikit-learn not installed")
+
 from sklearn.neighbors import (
     KNeighborsClassifier,
     KNeighborsRegressor,
