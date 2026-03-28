@@ -702,12 +702,12 @@ which translates into a steeper but still sub-second curve up to $N = 10^6$.
 
 % Faiss IndexFlatL2
 \addplot[color=colOrange, mark=square*]
-  coordinates {(10000,0.1)(50000,0.5)(100000,1.2)(250000,7.6)(500000,24.1)(1000000,7.8)};
+  coordinates {(10000,0.1)(50000,0.5)(100000,1.6)(250000,7.2)(500000,4.7)(1000000,54.5)};
 \addlegendentry{Faiss \texttt{IndexFlatL2}}
 
 % PyNear VPTreeL2Index
 \addplot[color=colRed, mark=diamond*]
-  coordinates {(10000,3)(50000,15)(100000,33)(250000,92)(500000,213)(1000000,371)};
+  coordinates {(10000,4)(50000,7)(100000,14)(250000,42)(500000,96)(1000000,267)};
 \addlegendentry{PyNear \texttt{VPTreeL2Index}}
 
 \end{axis}
@@ -715,17 +715,20 @@ which translates into a steeper but still sub-second curve up to $N = 10^6$.
 \caption{Exact-index build time (ms, log--log) vs.\ dataset size $N$, $d=32$.
   Faiss \texttt{IndexFlatL2} requires no structural work (copy only), giving
   an $O(N)$ lower bound.  \texttt{VPTreeL2Index} follows an $O(N \log N)$
-  curve, from 3 ms at $N=10\,000$ to 371 ms at $N=10^6$ — well within
+  curve, from 4 ms at $N=10\,000$ to 267 ms at $N=10^6$ — well within
   one-second build budgets for all tested sizes.}
 \label{fig:build-exact}
 \end{figure}
 
 The $O(N \log N)$ growth of \texttt{VPTreeL2Index} results in a
-$15\text{--}50\times$ overhead vs.\ Faiss's copy-only flat index at large $N$,
+$5\text{--}18\times$ overhead vs.\ Faiss's copy-only flat index at large $N$,
 which is expected and acceptable: the VP-Tree build cost is paid once and
 amortised over all subsequent queries, which benefit from $O(\log N)$ tree
 traversal (with best-first pruning) rather than $O(N)$ linear scan —
 yielding up to $39\times$ lower query latency at $d=512$.
+The level-parallel build (all nodes at each tree depth processed concurrently
+with per-thread scratch buffers) and TBB-parallel \texttt{nth\_element} at
+the top level give a $2.2\times$ build speedup at $N=10^5\text{--}5\times10^5$.
 
 \subsection{Approximate Index: IVFFlatL2Index vs.\ Faiss IndexIVFFlat}
 \label{sec:build-approx-scale}
@@ -753,12 +756,12 @@ cases, so the K-Means problem grows with $N$.
 
 % Faiss IndexIVFFlat
 \addplot[color=colOrange, mark=square*]
-  coordinates {(10000,132)(50000,636)(100000,1324)(250000,3119)(500000,6234)(1000000,14125)};
+  coordinates {(10000,139)(50000,694)(100000,1376)(250000,3311)(500000,6979)(1000000,14994)};
 \addlegendentry{Faiss \texttt{IndexIVFFlat}}
 
 % PyNear IVFFlatL2Index (C++ K-Means++)
 \addplot[color=colRed, mark=diamond*]
-  coordinates {(10000,30)(50000,508)(100000,2180)(250000,9784)(500000,25925)(1000000,73711)};
+  coordinates {(10000,26)(50000,653)(100000,2410)(250000,10378)(500000,28855)(1000000,81186)};
 \addlegendentry{PyNear \texttt{IVFFlatL2Index} (C++ K-Means++)}
 
 \end{axis}
@@ -783,12 +786,12 @@ cases, so the K-Means problem grows with $N$.
 \toprule
 \textbf{N} & \textbf{IVFFlatL2 (C++ K-Means++)} & \textbf{Faiss IndexIVFFlat} \\
 \midrule
-10\,000  & \textbf{30}    & 132    \\
-50\,000  & \textbf{508}   & 636    \\
-100\,000 & 2\,180  & \textbf{1\,324}  \\
-250\,000 & 9\,784  & \textbf{3\,119}  \\
-500\,000 & 25\,925 & \textbf{6\,234}  \\
-1\,000\,000 & 73\,711 & \textbf{14\,125} \\
+10\,000  & \textbf{26}    & 139    \\
+50\,000  & \textbf{653}   & 694    \\
+100\,000 & 2\,410  & \textbf{1\,376}  \\
+250\,000 & 10\,378  & \textbf{3\,311}  \\
+500\,000 & 28\,855 & \textbf{6\,979}  \\
+1\,000\,000 & 81\,186 & \textbf{14\,994} \\
 \bottomrule
 \end{tabular}
 \end{table}
