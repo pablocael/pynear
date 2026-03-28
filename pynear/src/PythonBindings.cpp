@@ -102,7 +102,7 @@ public:
         py::bytes flat_bytes(reinterpret_cast<const char*>(flat.data()),
                              flat.size() * sizeof(float));
         py::bytes idx_bytes(reinterpret_cast<const char*>(indices.data()),
-                            indices.size() * sizeof(int64_t));
+                            indices.size() * sizeof(int32_t));
         py::bytes pool_bytes(reinterpret_cast<const char*>(pool.data()),
                              pool.size() * sizeof(pool[0]));
 
@@ -123,9 +123,9 @@ public:
         std::vector<float> flat(flat_str.size() / sizeof(float));
         std::memcpy(flat.data(), flat_str.data(), flat_str.size());
 
-        // Indices
+        // Indices (int32_t since v2.2)
         std::string idx_str(idx_bytes);
-        std::vector<int64_t> indices(idx_str.size() / sizeof(int64_t));
+        std::vector<int32_t> indices(idx_str.size() / sizeof(int32_t));
         std::memcpy(indices.data(), idx_str.data(), idx_str.size());
 
         // Node pool

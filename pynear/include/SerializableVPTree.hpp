@@ -57,7 +57,7 @@ public:
         // Create a writer that will write to the state object
         SerializedStateObjectWriter writer(state);
         writer.writeUserVector<T, serializer>(this->_examples);
-        writer.writeVector<int64_t>(this->_indices);
+        writer.writeVector<int32_t>(this->_indices);
 
         // Serialize partitions
         serializeLevelPartitions(writer);
@@ -78,7 +78,7 @@ public:
 
         SerializedStateObjectReader reader(state);
         this->_examples = reader.readUserVector<T, deserializer>();
-        this->_indices = reader.readVector<int64_t>();
+        this->_indices = reader.readVector<int32_t>();
 
         // Deserialize partitions
         deserializeLevelPartitions(reader);
@@ -98,15 +98,15 @@ public:
         if (idx < 0) {
             // write sentinel null node
             writer.write((float)(0));
-            writer.write((int64_t)(-1));
-            writer.write((int64_t)(-1));
+            writer.write((int32_t)(-1));
+            writer.write((int32_t)(-1));
             return;
         }
 
         const VPLevelPartition<distance_type> &node = this->_nodePool[idx];
         writer.write((float)(node.radius()));
-        writer.write((int64_t)(node.start()));
-        writer.write((int64_t)(node.end()));
+        writer.write((int32_t)(node.start()));
+        writer.write((int32_t)(node.end()));
 
         flattenAndWritePartitions(writer, node.left_idx());
         flattenAndWritePartitions(writer, node.right_idx());
@@ -123,8 +123,8 @@ public:
         }
 
         float radius = reader.read<float>();
-        int64_t indexStart = reader.read<int64_t>();
-        int64_t indexEnd = reader.read<int64_t>();
+        int32_t indexStart = reader.read<int32_t>();
+        int32_t indexEnd = reader.read<int32_t>();
         if (indexEnd == -1) {
             return -1;
         }

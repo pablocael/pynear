@@ -314,7 +314,7 @@ float dist_l2_f_avx2(const arrayf &p1, const arrayf &p2) {
         __m256 my = _mm256_loadu_ps(y);
         y += 8;
         const __m256 a_m_b1 = _mm256_sub_ps(mx, my);
-        msum1 = _mm256_add_ps(msum1, _mm256_mul_ps(a_m_b1, a_m_b1));
+        msum1 = _mm256_fmadd_ps(a_m_b1, a_m_b1, msum1);  // FMA: 1 insn vs 2
         d -= 8;
     }
 

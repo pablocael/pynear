@@ -15,15 +15,15 @@ namespace vptree {
 
 template <typename distance_type> class VPLevelPartition {
 public:
-    VPLevelPartition(distance_type radius, int64_t start, int64_t end)
+    VPLevelPartition(distance_type radius, int32_t start, int32_t end)
         : _radius(radius), _indexStart(start), _indexEnd(end) {}
 
     VPLevelPartition() : _radius(0), _indexStart(-1), _indexEnd(-1) {}
 
     bool isEmpty() const { return _indexStart == -1; }
-    int64_t start() const { return _indexStart; }
-    int64_t end() const { return _indexEnd; }
-    int64_t size() const { return _indexEnd - _indexStart + 1; }
+    int32_t start() const { return _indexStart; }
+    int32_t end() const { return _indexEnd; }
+    int32_t size() const { return _indexEnd - _indexStart + 1; }
     void setRadius(distance_type radius) { _radius = radius; }
     distance_type radius() const { return _radius; }
 
@@ -53,8 +53,8 @@ private:
     }
 
     distance_type _radius = 0;
-    int64_t _indexStart = -1;
-    int64_t _indexEnd = -1;
+    int32_t _indexStart = -1;
+    int32_t _indexEnd = -1;
     int32_t _left_idx = -1;
     int32_t _right_idx = -1;
 };
