@@ -322,7 +322,8 @@ protected:
                 if (medianInPairs >= 0) {
                     const auto &vp = _examples[_indices[start]];
 
-#if ENABLE_OMP_PARALLEL
+#if ENABLE_OMP_PARALLEL && USE_PSTL_NTH_ELEMENT
+                    // Linux only: TBB provides std::execution::par_unseq.
                     // At level 0 (not yet inside a parallel region) and for large
                     // partitions, use a local shared buffer so OMP threads can all
                     // write into it, then use TBB par_unseq for nth_element.
