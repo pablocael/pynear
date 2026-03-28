@@ -15,6 +15,7 @@
 #include <numeric>
 #include <omp.h>
 #include <queue>
+#include <random>
 #include <sstream>
 #include <type_traits>
 #include <unordered_set>
@@ -104,6 +105,7 @@ public:
             _examples = array;
         }
         build(_examples);
+        reorderForCache();
     }
 
     void set(std::vector<T> &&array) {
@@ -124,6 +126,7 @@ public:
             _examples = std::move(array);
         }
         build(_examples);
+        reorderForCache();
     }
 
     bool isEmpty() { return _rootIdx == -1; }
@@ -188,12 +191,12 @@ public:
 
     const std::vector<float>& flatBacking() const { return _flat_backing; }
     size_t flatDim() const { return _dim; }
-    const std::vector<int64_t>& indexPermutation() const { return _indices; }
+    const std::vector<int32_t>& indexPermutation() const { return _indices; }
     const std::vector<VPLevelPartition<distance_type>>& partitionPool() const { return _nodePool; }
     int32_t rootPartitionIdx() const { return _rootIdx; }
 
     void initFromSerialized(std::vector<float> flat, size_t dim,
-                            std::vector<int64_t> indices,
+                            std::vector<int32_t> indices,
                             std::vector<VPLevelPartition<distance_type>> pool,
                             int32_t root_idx) {
         clear();
@@ -202,6 +205,8 @@ public:
         size_t n = (dim > 0) ? _flat_backing.size() / dim : 0;
         _examples.resize(n);
         if constexpr (std::is_same_v<T, FlatSpan>) {
+            // After serialization, _flat_backing is already in tree-traversal order.
+            // _examples[i] points directly to position i in the tree.
             for (size_t i = 0; i < n; i++)
                 _examples[i] = FlatSpan{_flat_backing.data() + i * dim, dim};
         }
@@ -249,40 +254,43 @@ protected:
         std::vector<int32_t> _toSplit;
         // Pre-allocated scratch buffer: (distance, example_index) pairs for nth_element.
         // Reused across all build iterations to avoid repeated heap allocations.
-        std::vector<std::pair<distance_type, int64_t>> distPairs;
+        std::vector<std::pair<distance_type, int32_t>> distPairs;
         distPairs.reserve(_examples.size());
 
         _nodePool.clear();
         _nodePool.reserve(_examples.size());
-        _nodePool.push_back(VPLevelPartition<distance_type>(0, 0, _examples.size() - 1));
+        _nodePool.push_back(VPLevelPartition<distance_type>(0, 0, (int32_t)_examples.size() - 1));
         _rootIdx = 0;
         _toSplit.push_back(_rootIdx);
+
+        // Minimum partition size to justify OpenMP parallelism in distance loop
+        constexpr int32_t MIN_PARALLEL_DIST = 4096;
 
         while (!_toSplit.empty()) {
 
             int32_t currentIdx = _toSplit.back();
             _toSplit.pop_back();
 
-            int64_t start = _nodePool[currentIdx].start();
-            int64_t end = _nodePool[currentIdx].end();
+            int32_t start = _nodePool[currentIdx].start();
+            int32_t end = _nodePool[currentIdx].end();
 
             if (start == end) {
                 // stop dividing if there is only one point inside
                 continue;
             }
 
-            unsigned vpIndex = selectVantagePoint(start, end);
+            int32_t vpIndex = selectVantagePoint(start, end);
 
             // put vantage point as the first element within the examples list
             std::swap(_indices[vpIndex], _indices[start]);
 
-            int64_t median = (end + start) / 2;
+            int32_t median = (end + start) / 2;
 
             // Pre-compute all distances from the VP once, storing (dist, example_idx) pairs.
             // nth_element then sorts the pairs by distance (O(1) comparisons, no hashing).
             // This reduces distance calls from O(n log n) to O(n) per build level.
-            const int64_t range_size = end - start;
-            const int64_t medianInPairs = median - start - 1;
+            const int32_t range_size = end - start;
+            const int32_t medianInPairs = median - start - 1;
 
             // When end == start+1 there is exactly one non-VP element and median == start,
             // giving medianInPairs == -1. No partitioning is needed: radius = 0 and the
@@ -291,16 +299,28 @@ protected:
             if (medianInPairs >= 0) {
                 distPairs.resize(range_size);
                 const auto &vp = _examples[_indices[start]];
-                for (int64_t ci = 0; ci < range_size; ci++) {
-                    const int64_t exIdx = _indices[start + 1 + ci];
-                    distPairs[ci] = {distance(vp, _examples[exIdx]), exIdx};
+
+                // Parallelize the distance loop for large partitions (top few levels).
+                // The _indices and distPairs ranges are disjoint across partitions,
+                // so writes are race-free.
+                if (range_size >= MIN_PARALLEL_DIST) {
+                    #pragma omp parallel for schedule(static)
+                    for (int32_t ci = 0; ci < range_size; ci++) {
+                        const int32_t exIdx = _indices[start + 1 + ci];
+                        distPairs[ci] = {distance(vp, _examples[exIdx]), exIdx};
+                    }
+                } else {
+                    for (int32_t ci = 0; ci < range_size; ci++) {
+                        const int32_t exIdx = _indices[start + 1 + ci];
+                        distPairs[ci] = {distance(vp, _examples[exIdx]), exIdx};
+                    }
                 }
 
                 std::nth_element(distPairs.begin(), distPairs.begin() + medianInPairs, distPairs.begin() + range_size,
                                  [](const auto &a, const auto &b) { return a.first < b.first; });
 
                 // Write the partitioned example indices back to _indices
-                for (int64_t ci = 0; ci < range_size; ci++)
+                for (int32_t ci = 0; ci < range_size; ci++)
                     _indices[start + 1 + ci] = distPairs[ci].second;
 
                 medianDistance = distPairs[medianInPairs].first;
@@ -312,13 +332,13 @@ protected:
             int32_t left_idx = -1, right_idx = -1;
             if (start + 1 <= median) {
                 _nodePool.push_back(VPLevelPartition<distance_type>(0, start + 1, median));
-                left_idx = _nodePool.size() - 1;
+                left_idx = (int32_t)_nodePool.size() - 1;
                 _toSplit.push_back(left_idx);
             }
 
             if (median + 1 <= end) {
                 _nodePool.push_back(VPLevelPartition<distance_type>(0, median + 1, end));
-                right_idx = _nodePool.size() - 1;
+                right_idx = (int32_t)_nodePool.size() - 1;
                 _toSplit.push_back(right_idx);
             }
 
@@ -326,108 +346,121 @@ protected:
         }
     }
 
-    // Internal temporary struct to organize K closest elements in a priorty queue
+    /*
+     * Reorder _flat_backing so that tree position i holds the data for _indices[i].
+     * After this, _examples[i] can be accessed directly in search (no _indices indirection
+     * for data lookups), improving cache locality during tree traversal.
+     * _indices[i] retains the original row index for result reporting.
+     *
+     * Only applicable for FlatSpan (float32 data). No-op for other types.
+     */
+    void reorderForCache() {
+        if constexpr (std::is_same_v<T, FlatSpan>) {
+            size_t n = _examples.size();
+            if (n == 0) return;
+
+            std::vector<float> ordered(n * _dim);
+            for (size_t i = 0; i < n; i++) {
+                std::memcpy(ordered.data() + i * _dim,
+                            _flat_backing.data() + (size_t)_indices[i] * _dim,
+                            _dim * sizeof(float));
+            }
+            _flat_backing = std::move(ordered);
+
+            // Fix up FlatSpan pointers into the new contiguous buffer
+            for (size_t i = 0; i < n; i++)
+                _examples[i] = FlatSpan{_flat_backing.data() + i * _dim, _dim};
+            // _indices[i] still holds the original row index — used only for result reporting
+        }
+    }
+
+    // Internal temporary struct to organize K closest elements in a priority queue
     struct VPTreeSearchElement {
-        VPTreeSearchElement(int index, distance_type dist) : index(index), dist(dist) {}
-        int index;
+        VPTreeSearchElement(int64_t index, distance_type dist) : index(index), dist(dist) {}
+        int64_t index;
         distance_type dist;
         bool operator<(const VPTreeSearchElement &v) const { return dist < v.dist; }
     };
 
-    void searchKNN(int32_t partitionIdx, const T &val, unsigned int k, std::priority_queue<VPTreeSearchElement> &knnQueue) {
+    /*
+     * Best-first KNN search.
+     *
+     * Uses a min-heap sorted by distToBorder (lower bound on distance to any point
+     * in the partition) so that tau shrinks as fast as possible.  Every decrease in
+     * tau prunes more pending heap entries → dramatically fewer distance evaluations
+     * than the original DFS traversal at moderate-to-large N.
+     *
+     * For FlatSpan data (after reorderForCache), data is accessed directly as
+     * _examples[pos] (sequential memory) — no _indices lookup for data.
+     */
+    void searchKNN(int32_t partitionIdx, const T &val, size_t k,
+                   std::priority_queue<VPTreeSearchElement> &knnQueue) {
 
         auto tau = std::numeric_limits<distance_type>::max();
 
-        // stores the distance to the partition border at the time of the storage. Since tau value will change
-        // whiling performing the DFS search from on level, the storage distance will be checked again when about
-        // to dive into that partition. It might not be necessary to dig into the partition anymore if tau decreased.
-        thread_local std::vector<std::tuple<distance_type, int32_t>> toSearch;
-        toSearch.clear();
-        toSearch.push_back({(distance_type)-1, partitionIdx});
+        // Thread-local backing vector — reused across calls (avoids per-query allocation)
+        thread_local std::vector<std::pair<distance_type, int32_t>> tl_heap;
+        tl_heap.clear();
 
-        while (!toSearch.empty()) {
-            auto [distToBorder, currentIdx] = toSearch.back();
-            toSearch.pop_back();
+        static constexpr auto heap_cmp = std::greater<std::pair<distance_type, int32_t>>{};
+
+        tl_heap.push_back({(distance_type)0, partitionIdx});
+        // single-element "heap" is trivially valid
+
+        while (!tl_heap.empty()) {
+            std::pop_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
+            auto [distToBorder, currentIdx] = tl_heap.back();
+            tl_heap.pop_back();
+
+            // Prune: lower bound on this partition > current search radius
+            if (distToBorder > tau && knnQueue.size() >= k) continue;
 
             const VPLevelPartition<distance_type> &current = _nodePool[currentIdx];
 
-            auto dist = distance(val, _examples[_indices[current.start()]]);
+            // Access point data — for FlatSpan, _examples[pos] is direct after reorderForCache()
+            distance_type dist;
+            if constexpr (std::is_same_v<T, FlatSpan>) {
+                dist = distance(val, _examples[current.start()]);
+            } else {
+                dist = distance(val, _examples[_indices[current.start()]]);
+            }
+
             if (dist < tau || knnQueue.size() < k) {
-
-                if (knnQueue.size() == k) {
-                    knnQueue.pop();
-                }
-                int64_t indexToAdd = _indices[current.start()];
-                knnQueue.push(VPTreeSearchElement(indexToAdd, dist));
-
+                if (knnQueue.size() == k) knnQueue.pop();
+                knnQueue.push(VPTreeSearchElement((int64_t)_indices[current.start()], dist));
                 tau = knnQueue.top().dist;
             }
 
-            if (distToBorder >= 0 && distToBorder > tau && knnQueue.size() >= k) {
-
-                // distance to this partition border changed and its not necessary to search within it anymore
-                continue;
-            }
-
-            size_t neighborsSoFar = knnQueue.size();
-            int32_t left_idx = current.left_idx();
+            int32_t left_idx  = current.left_idx();
             int32_t right_idx = current.right_idx();
 
             if (dist > current.radius()) {
-                // must search outside
-
-                /*
-                    We may need to search inside as well. We will schedule this partition to be queried later.
-                    We add it first (if needed) and the outside partition after: since we are doing DFS, we do LIFO
-                    By the time this partition is accessed later, it might be rejected since tau might decrease
-                    during the search of the outside partition (which will be searched for sure)
-
-                    We store current toBorder distance to use later to compare to latest value of tau, so the partition
-                   might not even need to be searched, depending on the tau resulting from the DFS search in outside
-                   partition.
-
-                    The exact same logic is applied to the inside case in the else statement.
-
-                */
-                if (left_idx >= 0) {
-
-                    size_t rightPartitionSize = (right_idx >= 0) ? _nodePool[right_idx].size() : 0;
-                    bool notEnoughPointsOutside = rightPartitionSize < (k - neighborsSoFar);
-                    auto toBorder = dist - current.radius();
-
-                    // we might not have enough point outside to reject the inside partition, so we might need to search
-                    // for both
-                    if (notEnoughPointsOutside) {
-                        toSearch.push_back({(distance_type)-1, left_idx});
-                    } else if (knnQueue.size() < k || toBorder <= tau) {
-                        toSearch.push_back({toBorder, left_idx});
-                    }
-                }
-
-                // now schedule outside
+                // Mandatory: right (outside sphere)
                 if (right_idx >= 0) {
-                    toSearch.push_back({(distance_type)-1, right_idx});
+                    tl_heap.push_back({(distance_type)0, right_idx});
+                    std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
+                }
+                // Optional: left (inside sphere) — lower bound = dist - radius
+                if (left_idx >= 0) {
+                    auto toBorder = dist - current.radius();
+                    if (knnQueue.size() < k || toBorder <= tau) {
+                        tl_heap.push_back({toBorder, left_idx});
+                        std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
+                    }
                 }
             } else {
-                // must search inside
-                // logic is analogous to the outside case
-
-                if (right_idx >= 0) {
-
-                    size_t leftPartitionSize = (left_idx >= 0) ? _nodePool[left_idx].size() : 0;
-                    bool notEnoughPointsInside = leftPartitionSize < (k - neighborsSoFar);
-                    auto toBorder = current.radius() - dist;
-
-                    if (notEnoughPointsInside) {
-                        toSearch.push_back({(distance_type)-1, right_idx});
-                    } else if (knnQueue.size() < k || toBorder <= tau) {
-                        toSearch.push_back({toBorder, right_idx});
-                    }
-                }
-
-                // now schedule inside
+                // Mandatory: left (inside sphere)
                 if (left_idx >= 0) {
-                    toSearch.push_back({(distance_type)-1, left_idx});
+                    tl_heap.push_back({(distance_type)0, left_idx});
+                    std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
+                }
+                // Optional: right (outside sphere) — lower bound = radius - dist
+                if (right_idx >= 0) {
+                    auto toBorder = current.radius() - dist;
+                    if (knnQueue.size() < k || toBorder <= tau) {
+                        tl_heap.push_back({toBorder, right_idx});
+                        std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
+                    }
                 }
             }
         }
@@ -435,74 +468,112 @@ protected:
 
     void search1NN(int32_t partitionIdx, const T &val, int64_t &resultIndex, distance_type &resultDist) {
 
-        resultDist = std::numeric_limits<distance_type>::max();
+        resultDist  = std::numeric_limits<distance_type>::max();
         resultIndex = -1;
 
-        thread_local std::vector<std::tuple<distance_type, int32_t>> toSearch;
-        toSearch.clear();
-        toSearch.push_back({(distance_type)-1, partitionIdx});
+        thread_local std::vector<std::pair<distance_type, int32_t>> tl_heap;
+        tl_heap.clear();
 
-        while (!toSearch.empty()) {
+        static constexpr auto heap_cmp = std::greater<std::pair<distance_type, int32_t>>{};
 
-            auto [distToBorder, currentIdx] = toSearch.back();
-            toSearch.pop_back();
+        tl_heap.push_back({(distance_type)0, partitionIdx});
+
+        while (!tl_heap.empty()) {
+            std::pop_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
+            auto [distToBorder, currentIdx] = tl_heap.back();
+            tl_heap.pop_back();
+
+            if (distToBorder > resultDist) continue;
 
             const VPLevelPartition<distance_type> &current = _nodePool[currentIdx];
 
-            auto dist = distance(val, _examples[_indices[current.start()]]);
+            distance_type dist;
+            if constexpr (std::is_same_v<T, FlatSpan>) {
+                dist = distance(val, _examples[current.start()]);
+            } else {
+                dist = distance(val, _examples[_indices[current.start()]]);
+            }
+
             if (dist < resultDist) {
-                resultDist = dist;
-                resultIndex = _indices[current.start()];
+                resultDist  = dist;
+                resultIndex = (int64_t)_indices[current.start()];
             }
 
-            if (distToBorder >= 0 && distToBorder > resultDist) {
-
-                // distance to this partition border change and its not necessary to search within it anymore
-                continue;
-            }
-
-            int32_t left_idx = current.left_idx();
+            int32_t left_idx  = current.left_idx();
             int32_t right_idx = current.right_idx();
 
             if (dist > current.radius()) {
-                // may need to search inside as well
-                auto toBorder = dist - current.radius();
-                if (toBorder < resultDist && left_idx >= 0) {
-                    toSearch.push_back({toBorder, left_idx});
-                }
-
-                // must search outside
+                // Must search outside (right)
                 if (right_idx >= 0) {
-                    toSearch.push_back({(distance_type)-1, right_idx});
+                    tl_heap.push_back({(distance_type)0, right_idx});
+                    std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
+                }
+                // May search inside (left)
+                if (left_idx >= 0) {
+                    auto toBorder = dist - current.radius();
+                    if (toBorder < resultDist) {
+                        tl_heap.push_back({toBorder, left_idx});
+                        std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
+                    }
                 }
             } else {
-                auto toBorder = current.radius() - dist;
-                // may need to search outside as well
-                if (toBorder < resultDist && right_idx >= 0) {
-                    toSearch.push_back({toBorder, right_idx});
-                }
-
-                // must search inside
+                // Must search inside (left)
                 if (left_idx >= 0) {
-                    toSearch.push_back({(distance_type)-1, left_idx});
+                    tl_heap.push_back({(distance_type)0, left_idx});
+                    std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
+                }
+                // May search outside (right)
+                if (right_idx >= 0) {
+                    auto toBorder = current.radius() - dist;
+                    if (toBorder < resultDist) {
+                        tl_heap.push_back({toBorder, right_idx});
+                        std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
+                    }
                 }
             }
         }
     }
 
-    int64_t selectVantagePoint(int64_t fromIndex, int64_t toIndex) {
+    /*
+     * Sample S candidate vantage points and select the one with the highest
+     * variance of distances to a random probe set.  Higher variance → a more
+     * balanced median split → shallower tree → better search pruning.
+     *
+     * Cost: O(S²) distance evaluations per partition level — negligible compared
+     * to the O(N) distance loop in build().
+     */
+    int32_t selectVantagePoint(int32_t fromIndex, int32_t toIndex) {
+        int32_t range = (toIndex - fromIndex) + 1;
+        if (range <= 2) return fromIndex;
 
-        // for now, simple random point selection as basic strategy: TODO: better vantage point selection
-        // considering length of active region border (as in Yianilos (1993) paper)
-        //
-        assert(fromIndex >= 0 && fromIndex < _examples.size() && toIndex >= 0 && toIndex < _examples.size() && fromIndex <= toIndex &&
-               "fromIndex and toIndex must be in a valid range");
+        constexpr int S = 5;
+        int nSample = std::min(range, (int32_t)S);
 
-        int64_t range = (toIndex - fromIndex) + 1;
-        return fromIndex + (rand() % range);
+        int32_t best_vp     = fromIndex;
+        float   best_spread = -1.f;
+
+        std::uniform_int_distribution<int32_t> uni(fromIndex, toIndex);
+
+        for (int s = 0; s < nSample; ++s) {
+            int32_t cand_pos = uni(_rng);
+            const auto &cand = _examples[_indices[cand_pos]];
+
+            float sum = 0.f, sum2 = 0.f;
+            for (int p = 0; p < nSample; ++p) {
+                int32_t probe_pos = uni(_rng);
+                float d = (float)distance(cand, _examples[_indices[probe_pos]]);
+                sum += d; sum2 += d * d;
+            }
+            float var = sum2 / nSample - (sum / nSample) * (sum / nSample);
+            if (var > best_spread) {
+                best_spread = var;
+                best_vp = cand_pos;
+            }
+        }
+        return best_vp;
     }
 
-    // Fill result element from serach element internal structure
+    // Fill result element from search element internal structure
     // After a call to that function, knnQueue gets invalidated!
     void fillSearchResult(std::priority_queue<VPTreeSearchElement> &knnQueue, VPTreeSearchResultElement &element) {
         element.distances.reserve(knnQueue.size());
@@ -518,11 +589,12 @@ protected:
 
 protected:
     std::vector<T> _examples;
-    std::vector<int64_t> _indices;
+    std::vector<int32_t> _indices;   // tree-position → original row index (for result reporting)
     std::vector<VPLevelPartition<distance_type>> _nodePool;
     int32_t _rootIdx = -1;
     std::vector<float> _flat_backing;
     size_t _dim = 0;
+    std::mt19937 _rng{42};
 };
 
 } // namespace vptree
