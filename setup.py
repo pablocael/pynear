@@ -9,6 +9,7 @@ from setuptools import setup
 if sys.platform == "win32":
     extra_compile_args = ["/Wall", "/arch:AVX", "/openmp"]  # /LTCG unrecognized here
     extra_link_args = ["/LTCG"]  # /openmp unrecognized here
+    extra_macros = [("ENABLE_OMP_PARALLEL", "1")]
 elif sys.platform == "darwin":
     # ARCHFLAGS is set by cibuildwheel when cross-compiling (e.g. arm64 host -> x86_64 target).
     # When set, avoid -march=native (which would tune for the host, not the target).
@@ -33,9 +34,14 @@ elif sys.platform == "darwin":
         omp_link = ["-fopenmp", "-lomp"]
     extra_compile_args = lto + ["-Wall"] + march + avx + omp_compile
     extra_link_args = omp_link
+    # Apple libc++ does not ship std::execution::par_unseq without explicit PSTL;
+    # level-parallel OMP build still applies, only the TBB nth_element is disabled.
+    extra_macros = [("ENABLE_OMP_PARALLEL", "1")]
 else:
     extra_compile_args = ["-flto", "-Wall", "-march=native", "-mavx", "-fopenmp"]
     extra_link_args = ["-fopenmp", "-lgomp", "-ltbb"]
+    # Linux: TBB available, enable parallel nth_element via std::execution::par_unseq.
+    extra_macros = [("ENABLE_OMP_PARALLEL", "1"), ("USE_PSTL_NTH_ELEMENT", "1")]
 
 ext_modules = [
     Pybind11Extension(
@@ -45,7 +51,7 @@ ext_modules = [
         cxx_std=17,
         extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
-        define_macros=[("ENABLE_OMP_PARALLEL", "1")],
+        define_macros=extra_macros,
     ),
 ]
 
