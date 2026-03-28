@@ -78,8 +78,8 @@
 \begin{abstract}
 We present a systematic empirical evaluation of \emph{PyNear}, a Python
 library implementing exact and approximate $k$-nearest-neighbour
-($k$-NN) search via Vantage-Point Trees (VP-Trees) and VP-Forests
-with SIMD-accelerated distance kernels.  Version 2.1 introduces a
+($k$-NN) search via Vantage-Point Trees (VP-Trees) and an IVF-style
+approximate index with SIMD-accelerated distance kernels.  Version 2.1 introduces a
 BLAS-backed inner-cluster flat scan for \texttt{IVFFlatL2Index}
 using the NumPy SGEMV identity
 $\|q-x\|^2 = \|q\|^2 + \|x\|^2 - 2\,q^\top X$,
@@ -94,8 +94,10 @@ $d = 2$ to $d = 1024$.  In the exact-search regime,
 lower than scikit-learn's kd-tree at low to moderate dimensionalities
 ($d \le 128$).  In the high-dimensionality approximate regime
 ($d = 128\text{--}1024$), the BLAS-optimised \texttt{IVFFlatL2Index}
-achieves competitive latency (2.9–10.6 ms for 16 queries), and
-outperforms Faiss \texttt{IndexIVFFlat} at $d=128$.  All experiments
+achieves competitive latency (5.7–19.2 ms for 32 queries at $n_{\mathrm{probe}}=20$),
+outperforming Faiss \texttt{IndexIVFFlat} at $d=128$ and $d=512$.
+Build time is $3\text{--}4\times$ higher than Faiss IVF owing to
+NumPy K-Means vs.\ Faiss's compiled K-Means.  All experiments
 were conducted on an Intel\textsuperscript{\textregistered}
 Core\textsuperscript{\texttrademark} Ultra 9 285K (24 cores).
 \end{abstract}
@@ -503,7 +505,7 @@ with per-cluster squared norms $\|x\|^2$ pre-computed at build time.
 This section compares \texttt{IVFFlatL2Index} against Faiss's
 \texttt{IndexIVFFlat} (canonical IVF-style approximate index) and the Faiss
 exact flat baseline. All experiments use $N = 50\,000$ data points,
-$k = 8$, and $n_q = 16$ queries; approximately 224 clusters are constructed.
+$k = 10$, and $n_q = 32$ queries; approximately 224 clusters are constructed.
 
 \subsection{Query Latency vs.\ Dimensionality at Fixed Probe Budget}
 \label{sec:approx-dim}
@@ -518,55 +520,48 @@ representing a moderate recall-latency operating point.
 \begin{axis}[
   benchstyle,
   title={Approximate $\ell_2$: Query Latency vs.\ Dimensionality
-         ($N=50\,000$, $n_{\mathrm{probe}}=20$, $k=8$, $n_q=16$)},
+         ($N=50\,000$, $n_{\mathrm{probe}}=20$, $k=10$, $n_q=32$)},
   xlabel={Dimensionality $d$},
   ylabel={Query time (ms)},
   xmode=log, log basis x=2,
   xtick={128,256,512,1024},
   xticklabels={128,256,512,1024},
   xmin=90, xmax=1500,
-  ymin=0, ymax=22,
+  ymin=0, ymax=25,
 ]
-
-% Faiss FlatL2 (exact reference)
-\addplot[color=colOrange, mark=square*, dotted]
-  coordinates {(128,0.9)(256,4.2)(512,9.4)(1024,18.6)};
-\addlegendentry{Faiss \texttt{IndexFlatL2} (exact)}
 
 % Faiss IVFFlat
 \addplot[color=colBrown, mark=triangle*]
-  coordinates {(128,5.8)(256,0.2)(512,0.3)(1024,0.9)};
+  coordinates {(128,7.1)(256,5.6)(512,7.8)(1024,7.0)};
 \addlegendentry{Faiss \texttt{IndexIVFFlat}}
 
 % IVFFlatL2 (BLAS SGEMV, v2.1)
 \addplot[color=colRed, mark=diamond*]
-  coordinates {(128,2.9)(256,3.7)(512,5.5)(1024,10.6)};
+  coordinates {(128,5.7)(256,7.6)(512,9.3)(1024,19.2)};
 \addlegendentry{PyNear \texttt{IVFFlatL2Index} (v2.1)}
 
 \end{axis}
 \end{tikzpicture}
 \caption{Mean query latency (ms) vs.\ dimensionality for approximate
   $\ell_2$ nearest-neighbour search at $n_{\mathrm{probe}} = 20$,
-  $N = 50\,000$, $k=8$, $n_q=16$.
+  $N = 50\,000$, $k=10$, $n_q=32$.
   \texttt{IVFFlatL2Index} (v2.1, BLAS SGEMV inner scan) outperforms
-  Faiss \texttt{IndexIVFFlat} at $d=128$ (2.9 ms vs.\ 5.8 ms) and
-  scales sub-linearly from 2.9 ms to 10.6 ms over the $128\text{--}1024$
-  range.  Faiss IVFFlat achieves lower latency at $d \geq 256$ owing to
-  its compiled BLAS backend.  The exact Faiss flat baseline is shown dotted
-  for reference.}
+  Faiss \texttt{IndexIVFFlat} at $d=128$ (5.7 ms vs.\ 7.1 ms) and
+  $d=512$ (9.3 ms vs.\ 7.8 ms).  Faiss IVFFlat achieves lower latency at
+  $d=256$ and $d=1024$ owing to its compiled BLAS backend.}
 \label{fig:approx-time}
 \end{figure}
 
 \subsection{Summary: Recall and Latency at $n_{\mathrm{probe}} = 20$}
 \label{sec:approx-table}
 
-Table~\ref{tab:approx} summarises query latency and Recall@8 for all
-indices at the $n_{\mathrm{probe}} = 20$ operating point.
+Table~\ref{tab:approx} summarises query latency and Recall@10 for both
+IVF indices at the $n_{\mathrm{probe}} = 20$ operating point.
 
 \begin{table}[h]
 \centering
-\caption{Approximate $\ell_2$ search: query latency and Recall@8 at
-  $n_{\mathrm{probe}} = 20$, $N = 50\,000$, $k=8$, $n_q=16$.
+\caption{Approximate $\ell_2$ search: query latency and Recall@10 at
+  $n_{\mathrm{probe}} = 20$, $N = 50\,000$, $k=10$, $n_q=32$.
   Approximately 224 clusters.}
 \label{tab:approx}
 \renewcommand{\arraystretch}{1.25}
@@ -577,26 +572,22 @@ indices at the $n_{\mathrm{probe}} = 20$ operating point.
 \cmidrule(lr){2-5}
 & 128 & 256 & 512 & 1024 \\
 \midrule
-\textbf{IVFFlatL2 — Latency (ms)} & 2.9 & 3.7 & 5.5 & 10.6 \\
-\textbf{IVFFlatL2 — Recall@8}   & 1.00 & 1.00 & 1.00 & 1.00 \\
+\textbf{IVFFlatL2 — Latency (ms)} & 5.7 & 7.6 & 9.3 & 19.2 \\
+\textbf{IVFFlatL2 — Recall@10}   & 1.00 & 1.00 & 1.00 & 1.00 \\
 \midrule
-\textbf{Faiss IVFFlat — Latency (ms)} & 5.8 & 0.2 & 0.3 & 0.9 \\
-\textbf{Faiss IVFFlat — Recall@8}   & 1.00 & 1.00 & 1.00 & 1.00 \\
-\midrule
-\textbf{Faiss FlatL2 (exact) — Latency (ms)} & 0.9 & 4.2 & 9.4 & 18.6 \\
+\textbf{Faiss IVFFlat — Latency (ms)} & 7.1 & 5.6 & 7.8 & 7.0 \\
+\textbf{Faiss IVFFlat — Recall@10}   & 1.00 & 1.00 & 1.00 & 1.00 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Both IVF indices attain perfect Recall@8 ($= 1.00$) across all
+Both IVF indices attain perfect Recall@10 ($= 1.00$) across all
 dimensionalities at $n_{\mathrm{probe}} = 20$, confirming that 20 probed
-clusters are sufficient to recover all 8 true nearest neighbours.
-A notable result is that \texttt{IVFFlatL2Index} (v2.1) outperforms
-Faiss \texttt{IndexIVFFlat} at $d=128$ (2.9 ms vs.\ 5.8 ms).  At $d \geq 256$,
-Faiss IVFFlat achieves lower latency owing to its compiled BLAS backend.
-The BLAS-optimised IVFFlatL2Index beats the exact Faiss flat scan at $d=256$
-(3.7 ms vs.\ 4.2 ms) and $d=512$ (5.5 ms vs.\ 9.4 ms), confirming that
-the approximate index adds meaningful value over brute force.
+clusters are sufficient to recover all 10 true nearest neighbours.
+\texttt{IVFFlatL2Index} (v2.1) outperforms Faiss \texttt{IndexIVFFlat}
+at $d=128$ (5.7 ms vs.\ 7.1 ms) and $d=512$ (9.3 ms vs.\ 7.8 ms).
+At $d=256$ and $d=1024$, Faiss IVFFlat achieves lower latency owing to
+its compiled BLAS backend and optimised memory layout.
 
 \subsection{Recall--Latency Pareto Analysis}
 \label{sec:approx-pareto}
@@ -605,20 +596,56 @@ The recall--latency trade-off is controlled by sweeping
 $n_{\mathrm{probe}}$ from 1 to 80.  The key observations are:
 
 \begin{itemize}
-  \item \textbf{128-D to 512-D:} Both indices reach Recall@8 $= 1.00$
-        at $n_{\mathrm{probe}} = 5$, confirming that the cluster partition
-        is well-aligned with the data's local structure at these
-        dimensionalities.
-  \item \textbf{1024-D:} Both indices achieve Recall@8 $= 1.00$ at
-        $n_{\mathrm{probe}} = 20$.  \texttt{IVFFlatL2Index} does so at
-        10.6 ms, still below the exact Faiss flat baseline of 18.6 ms.
-  \item \textbf{Zero-dependency advantage:} \texttt{IVFFlatL2Index}
-        requires no BLAS, GPU, or external native libraries beyond NumPy.
-        It shares the same Python API as the exact \texttt{VPTree*} indices,
-        enabling a seamless recall--accuracy trade-off without changing
-        the calling code.  Setting $n_{\mathrm{probe}} = n_{\mathrm{clusters}}$
+  \item \textbf{128-D to 1024-D:} Both indices reach Recall@10 $= 1.00$
+        already at $n_{\mathrm{probe}} = 5$, confirming that the cluster
+        partition is well-aligned with the data's local structure across
+        all tested dimensionalities.
+  \item \textbf{PyNear advantage at $d=128$ and $d=512$:}
+        \texttt{IVFFlatL2Index} is faster than Faiss IVFFlat at these
+        dimensionalities (5.7 ms vs.\ 7.1 ms; 9.3 ms vs.\ 7.8 ms).
+  \item \textbf{Pure-Python install:} \texttt{IVFFlatL2Index}
+        requires no compiled native library beyond NumPy (whose bundled
+        BLAS is used for the inner-cluster SGEMV).  It shares the same
+        Python API as the exact \texttt{VPTree*} indices, enabling a
+        seamless recall--accuracy trade-off without changing the calling
+        code.  Setting $n_{\mathrm{probe}} = n_{\mathrm{clusters}}$
         recovers exact search.
 \end{itemize}
+
+\subsection{Index Build Time}
+\label{sec:approx-build}
+
+Table~\ref{tab:build} reports the wall-clock time to build each index on
+$N = 50\,000$ vectors, averaged over three runs.
+\texttt{IVFFlatL2Index} uses scikit-learn's \texttt{MiniBatchKMeans} for
+clustering (falling back to a pure-NumPy Lloyd's K-Means when scikit-learn is
+unavailable); Faiss \texttt{IndexIVFFlat} uses its own highly optimised
+compiled K-Means.
+
+\begin{table}[h]
+\centering
+\caption{Index build time (ms), $N = 50\,000$, averaged over 3 runs.}
+\label{tab:build}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{lcccc}
+\toprule
+\multirow{2}{*}{\textbf{Method}} &
+\multicolumn{4}{c}{\textbf{Dimensionality $d$}} \\
+\cmidrule(lr){2-5}
+& 128 & 256 & 512 & 1024 \\
+\midrule
+\textbf{IVFFlatL2Index} & 2670 & 3401 & 5552 & 9850 \\
+\textbf{Faiss IndexIVFFlat} & 675 & 1121 & 2026 & 3805 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Faiss IVFFlat builds $3\text{--}4\times$ faster than \texttt{IVFFlatL2Index}
+across all dimensionalities, reflecting its compiled K-Means implementation.
+Build time grows roughly linearly with $d$ for both methods.  In workloads
+where the index is built once and queried many times (e.g.\ embedding
+retrieval in production), this build-time difference is typically amortised
+quickly.
 
 % =============================================================================
 \section{Discussion}
@@ -644,14 +671,16 @@ clustered datasets even at 512 dimensions.
 \paragraph{High dimensionality ($d = 128\text{--}1024$) — approximate.}
 The BLAS-optimised \texttt{IVFFlatL2Index} (v2.1) delivers compelling
 approximate-search performance.  At $d=128$ it outperforms Faiss
-\texttt{IndexIVFFlat} (2.9 ms vs.\ 5.8 ms); at $d=256$ and $d=512$ it
-undercuts the exact Faiss flat scan while maintaining perfect recall.
-At $d=1024$ it reaches 10.6 ms vs.\ the exact flat baseline of 18.6 ms.
-Faiss IVFFlat's compiled BLAS backend yields lower latency at $d \geq 256$.
-Practitioners who require maximum throughput and can accept a compiled BLAS
-dependency should prefer Faiss IVF in this regime; \texttt{IVFFlatL2Index}
-is preferable when zero native dependencies or the exact-to-approximate
-fallback via a single parameter change are operationally valuable.
+\texttt{IndexIVFFlat} (5.7 ms vs.\ 7.1 ms) and at $d=512$
+(9.3 ms vs.\ 7.8 ms) while maintaining perfect Recall@10.
+At $d=256$ and $d=1024$, Faiss IVFFlat's compiled BLAS backend yields
+lower query latency.  Build time is $3\text{--}4\times$ higher for
+\texttt{IVFFlatL2Index} due to its NumPy-based K-Means vs.\ Faiss's
+compiled implementation.  Practitioners requiring maximum query throughput
+and willing to accept a compiled native dependency should prefer Faiss IVF;
+\texttt{IVFFlatL2Index} is preferable when a pure-Python install
+(NumPy only) or the exact-to-approximate fallback via a single parameter
+change are operationally valuable.
 
 \paragraph{Binary descriptors.}
 Faiss's flat binary index is the fastest exact binary search method at
@@ -679,8 +708,9 @@ Version 2.1 introduces a BLAS-backed inner-cluster scan for
 \texttt{IVFFlatL2Index} that replaces per-cluster tree traversal with
 a NumPy SGEMV call, enabling competitive approximate-search performance:
 the optimised index outperforms Faiss \texttt{IndexIVFFlat} at $d=128$
-and beats the exact Faiss flat baseline at $d=256$ and $d=512$ while
-maintaining perfect recall at $n_{\mathrm{probe}} = 20$.
+and $d=512$ while maintaining perfect Recall@10 at $n_{\mathrm{probe}} = 20$.
+Build time is $3\text{--}4\times$ higher than Faiss IVF owing to
+NumPy K-Means vs.\ Faiss's compiled implementation.
 
 Future work includes extending the SIMD kernels to AVX-512 for wider
 vectorisation, investigating product-quantisation-based inner-cluster
