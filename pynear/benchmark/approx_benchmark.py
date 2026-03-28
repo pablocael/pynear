@@ -27,6 +27,7 @@ N_QUERIES = 32
 K = 10
 N_PROBE_VALUES = [1, 5, 10, 20, 40, 80]
 NUM_AVG_RUNS = 5
+NUM_BUILD_RUNS = 3
 OUTPUT_DIR = "./results/approximate-l2-high-dimensionality"
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -38,6 +39,16 @@ def compute_recall(approx_indices, exact_indices, k):
         len(set(a[:k]) & set(e[:k])) / k
         for a, e in zip(approx_indices, exact_indices)
     ]))
+
+
+def timed_build(build_fn, n_runs):
+    """Return mean build time in seconds over n_runs."""
+    times = []
+    for _ in range(n_runs):
+        t0 = time.perf_counter()
+        build_fn()
+        times.append(time.perf_counter() - t0)
+    return float(np.mean(times))
 
 
 def timed_search(search_fn, query, k, n_runs):
@@ -69,14 +80,30 @@ def build_exact_ground_truth(data, queries, k):
 def benchmark_dimension(dim, data, queries, k):
     """
     Returns a dict with keys 'vpforest' and 'faiss_ivf', each a list of
-    {n_probe, time, recall} dicts.
+    {n_probe, time, recall} dicts, plus 'build_time' with per-library ms.
     """
     print(f"  [dim={dim}] computing ground truth ... ", end="", flush=True)
     exact = build_exact_ground_truth(data, queries, k)
     print("done")
 
     n_clusters = max(10, int(np.sqrt(len(data))))
-    results = {"vpforest": [], "faiss_ivf": []}
+    results = {"vpforest": [], "faiss_ivf": [], "build_time": {}}
+
+    # ── Build time (measured once, independent of n_probe) ─────────────────
+    def build_pynear():
+        idx = pynear.IVFFlatL2Index(n_clusters=n_clusters, n_probe=1)
+        idx.set(data)
+
+    def build_faiss():
+        q = faiss.IndexFlatL2(dim)
+        idx = faiss.IndexIVFFlat(q, dim, n_clusters, faiss.METRIC_L2)
+        idx.train(data)
+        idx.add(data)
+
+    bt_pynear = timed_build(build_pynear, NUM_BUILD_RUNS)
+    bt_faiss  = timed_build(build_faiss,  NUM_BUILD_RUNS)
+    results["build_time"] = {"vpforest": bt_pynear, "faiss_ivf": bt_faiss}
+    print(f"  [dim={dim}] build  IVFFlatL2={bt_pynear*1000:.0f}ms  FaissIVF={bt_faiss*1000:.0f}ms")
 
     for n_probe in N_PROBE_VALUES:
         n_probe_clamped = min(n_probe, n_clusters)
@@ -190,6 +217,30 @@ def plot_time_vs_dim(all_results, output_dir):
     print(f"  saved {path}")
 
 
+def plot_build_time_vs_dim(all_results, output_dir):
+    """Index build time vs dimensionality."""
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.set_title(
+        f"Index Build Time vs Dimensionality  |  N={DATASET_SIZE:,}  |  n_clusters≈sqrt(N)",
+        fontsize=11,
+    )
+
+    for key in ("vpforest", "faiss_ivf"):
+        times_ms = [all_results[dim]["build_time"][key] * 1000 for dim in DIMENSIONS]
+        ax.plot(DIMENSIONS, times_ms, "o-", color=COLORS[key], label=LABELS[key], linewidth=2)
+
+    ax.set_xlabel("Dimensionality")
+    ax.set_ylabel("Build time (ms)")
+    ax.set_xticks(DIMENSIONS)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    path = os.path.join(output_dir, "build_time_vs_dim.png")
+    plt.savefig(path, dpi=150)
+    plt.clf()
+    print(f"  saved {path}")
+
+
 def plot_recall_vs_dim(all_results, output_dir):
     """Recall@k vs dimensionality at a fixed n_probe."""
     target_n_probe = 20
@@ -244,6 +295,7 @@ def main():
     plot_recall_vs_time(all_results, OUTPUT_DIR)
     plot_time_vs_dim(all_results, OUTPUT_DIR)
     plot_recall_vs_dim(all_results, OUTPUT_DIR)
+    plot_build_time_vs_dim(all_results, OUTPUT_DIR)
     print(f"\nDone. Results in {OUTPUT_DIR}/")
 
 
