@@ -727,8 +727,12 @@ amortised over all subsequent queries, which benefit from $O(\log N)$ tree
 traversal (with best-first pruning) rather than $O(N)$ linear scan —
 yielding up to $39\times$ lower query latency at $d=512$.
 The level-parallel build (all nodes at each tree depth processed concurrently
-with per-thread scratch buffers) and TBB-parallel \texttt{nth\_element} at
-the top level give a $2.2\times$ build speedup at $N=10^5\text{--}5\times10^5$.
+with per-thread scratch buffers) gives a $2.2\times$ build speedup at
+$N=10^5\text{--}5\times10^5$.  On Linux systems where Intel TBB is available,
+\texttt{std::execution::par\_unseq} is additionally applied to \texttt{nth\_element}
+at the root partition, providing further improvement at $N \ge 5\times10^5$;
+on macOS and TBB-free Linux environments the standard serial
+\texttt{nth\_element} is used instead.
 
 \subsection{Approximate Index: IVFFlatL2Index vs.\ Faiss IndexIVFFlat}
 \label{sec:build-approx-scale}
