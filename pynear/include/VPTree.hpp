@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <execution>
 #include <functional>
 #include <iostream>
 #include <limits>
@@ -240,109 +241,148 @@ public:
 
 protected:
     /*
-     *  Builds a Vantage Point tree using each element of the given array as one coordinate buffer
-     *  using the given metric distance.
+     *  Builds a Vantage Point tree using a level-parallel BFS strategy.
+     *
+     *  All nodes at the same tree depth are processed concurrently:
+     *  - Each worker thread owns its distPairs scratch buffer (thread_local)
+     *    so nth_element calls across sibling partitions run in parallel.
+     *  - Child nodePool slots are pre-assigned via prefix-sum before the
+     *    parallel region, so _nodePool is never mutated during parallel work.
+     *  - _indices ranges are disjoint per partition → no write races.
+     *  - selectVantagePoint uses a thread_local RNG → race-free.
      */
     void build(const std::vector<T> &array) {
 
-        _indices.resize(_examples.size());
+        const int32_t n = (int32_t)_examples.size();
+        if (n == 0) return;
 
-        // initialize indices sequentially
+        _indices.resize(n);
         std::iota(_indices.begin(), _indices.end(), 0);
 
-        // Select vantage point
-        std::vector<int32_t> _toSplit;
-        // Pre-allocated scratch buffer: (distance, example_index) pairs for nth_element.
-        // Reused across all build iterations to avoid repeated heap allocations.
-        std::vector<std::pair<distance_type, int32_t>> distPairs;
-        distPairs.reserve(_examples.size());
-
         _nodePool.clear();
-        _nodePool.reserve(_examples.size());
-        _nodePool.push_back(VPLevelPartition<distance_type>(0, 0, (int32_t)_examples.size() - 1));
+        _nodePool.reserve(n);
+        _nodePool.push_back(VPLevelPartition<distance_type>(0, 0, n - 1));
         _rootIdx = 0;
-        _toSplit.push_back(_rootIdx);
 
-        // Minimum partition size to justify OpenMP parallelism in distance loop
-        constexpr int32_t MIN_PARALLEL_DIST = 4096;
+        struct WorkItem { int32_t nodeIdx, start, end; };
+        std::vector<WorkItem> current;
+        current.push_back({0, 0, n - 1});
 
-        while (!_toSplit.empty()) {
+        while (!current.empty()) {
+            const int32_t nItems = (int32_t)current.size();
 
-            int32_t currentIdx = _toSplit.back();
-            _toSplit.pop_back();
-
-            int32_t start = _nodePool[currentIdx].start();
-            int32_t end = _nodePool[currentIdx].end();
-
-            if (start == end) {
-                // stop dividing if there is only one point inside
-                continue;
+            // --- Pre-assign child nodePool slots (serial, O(nItems)) ---
+            // Ranges are determined by (start,end) alone — independent of
+            // nth_element outcome — so we can assign before the parallel work.
+            std::vector<int32_t> leftSlot(nItems, -1), rightSlot(nItems, -1);
+            {
+                int32_t nextSlot = (int32_t)_nodePool.size();
+                for (int32_t i = 0; i < nItems; i++) {
+                    const int32_t s = current[i].start, e = current[i].end;
+                    if (s == e) continue;
+                    const int32_t median = (s + e) / 2;
+                    if (s + 1   <= median) leftSlot[i]  = nextSlot++;
+                    if (median + 1 <= e)   rightSlot[i] = nextSlot++;
+                }
+                _nodePool.resize(nextSlot); // default-init; written in parallel below
             }
 
-            int32_t vpIndex = selectVantagePoint(start, end);
+            // Pre-build the next-level work list (ranges known before nth_element).
+            std::vector<WorkItem> next;
+            next.reserve(2 * nItems);
+            for (int32_t i = 0; i < nItems; i++) {
+                const int32_t s = current[i].start, e = current[i].end;
+                if (s == e) continue;
+                const int32_t median = (s + e) / 2;
+                if (leftSlot[i]  >= 0) next.push_back({leftSlot[i],  s + 1,      median});
+                if (rightSlot[i] >= 0) next.push_back({rightSlot[i], median + 1, e});
+            }
 
-            // put vantage point as the first element within the examples list
-            std::swap(_indices[vpIndex], _indices[start]);
+            // --- Process all items at this level in parallel ---
+            // Each item writes to a disjoint slice of _indices and to
+            // pre-assigned, non-overlapping slots in _nodePool → no races.
+#if ENABLE_OMP_PARALLEL
+            #pragma omp parallel for schedule(dynamic) if(nItems > 1)
+#endif
+            for (int32_t i = 0; i < nItems; i++) {
+                const int32_t nodeIdx = current[i].nodeIdx;
+                const int32_t start   = current[i].start;
+                const int32_t end_    = current[i].end;
 
-            int32_t median = (end + start) / 2;
+                if (start == end_) continue;
 
-            // Pre-compute all distances from the VP once, storing (dist, example_idx) pairs.
-            // nth_element then sorts the pairs by distance (O(1) comparisons, no hashing).
-            // This reduces distance calls from O(n log n) to O(n) per build level.
-            const int32_t range_size = end - start;
-            const int32_t medianInPairs = median - start - 1;
+                const int32_t vpIndex = selectVantagePoint(start, end_);
+                std::swap(_indices[vpIndex], _indices[start]);
 
-            // When end == start+1 there is exactly one non-VP element and median == start,
-            // giving medianInPairs == -1. No partitioning is needed: radius = 0 and the
-            // single element goes straight to the right child.
-            distance_type medianDistance = 0;
-            if (medianInPairs >= 0) {
-                distPairs.resize(range_size);
-                const auto &vp = _examples[_indices[start]];
+                const int32_t median        = (start + end_) / 2;
+                const int32_t range_size    = end_ - start;
+                const int32_t medianInPairs = median - start - 1;
 
-                // Parallelize the distance loop for large partitions (top few levels).
-                // The _indices and distPairs ranges are disjoint across partitions,
-                // so writes are race-free.
-                if (range_size >= MIN_PARALLEL_DIST) {
-                    #pragma omp parallel for schedule(static)
-                    for (int32_t ci = 0; ci < range_size; ci++) {
-                        const int32_t exIdx = _indices[start + 1 + ci];
-                        distPairs[ci] = {distance(vp, _examples[exIdx]), exIdx};
-                    }
-                } else {
-                    for (int32_t ci = 0; ci < range_size; ci++) {
-                        const int32_t exIdx = _indices[start + 1 + ci];
-                        distPairs[ci] = {distance(vp, _examples[exIdx]), exIdx};
+                distance_type medianDistance = 0;
+                if (medianInPairs >= 0) {
+                    const auto &vp = _examples[_indices[start]];
+
+#if ENABLE_OMP_PARALLEL
+                    // At level 0 (not yet inside a parallel region) and for large
+                    // partitions, use a local shared buffer so OMP threads can all
+                    // write into it, then use TBB par_unseq for nth_element.
+                    // For inner nodes (already inside OMP parallel for), use a
+                    // thread_local buffer — each thread processes its own partition
+                    // entirely, so no sharing is needed.
+                    constexpr int32_t PAR_THRESHOLD = 4096;
+                    if (!omp_in_parallel() && range_size >= PAR_THRESHOLD) {
+                        std::vector<std::pair<distance_type, int32_t>> distPairs(range_size);
+
+                        #pragma omp parallel for schedule(static)
+                        for (int32_t ci = 0; ci < range_size; ci++) {
+                            const int32_t exIdx = _indices[start + 1 + ci];
+                            distPairs[ci] = {distance(vp, _examples[exIdx]), exIdx};
+                        }
+
+                        std::nth_element(std::execution::par_unseq,
+                                         distPairs.begin(),
+                                         distPairs.begin() + medianInPairs,
+                                         distPairs.begin() + range_size,
+                                         [](const auto &a, const auto &b) { return a.first < b.first; });
+
+                        for (int32_t ci = 0; ci < range_size; ci++)
+                            _indices[start + 1 + ci] = distPairs[ci].second;
+
+                        medianDistance = distPairs[medianInPairs].first;
+                    } else
+#endif
+                    {
+                        // Thread-local scratch: each thread owns its own full partition,
+                        // so there are no write conflicts between concurrent threads.
+                        thread_local std::vector<std::pair<distance_type, int32_t>> tl_distPairs;
+                        tl_distPairs.resize(range_size);
+
+                        for (int32_t ci = 0; ci < range_size; ci++) {
+                            const int32_t exIdx = _indices[start + 1 + ci];
+                            tl_distPairs[ci] = {distance(vp, _examples[exIdx]), exIdx};
+                        }
+
+                        std::nth_element(tl_distPairs.begin(),
+                                         tl_distPairs.begin() + medianInPairs,
+                                         tl_distPairs.begin() + range_size,
+                                         [](const auto &a, const auto &b) { return a.first < b.first; });
+
+                        for (int32_t ci = 0; ci < range_size; ci++)
+                            _indices[start + 1 + ci] = tl_distPairs[ci].second;
+
+                        medianDistance = tl_distPairs[medianInPairs].first;
                     }
                 }
 
-                std::nth_element(distPairs.begin(), distPairs.begin() + medianInPairs, distPairs.begin() + range_size,
-                                 [](const auto &a, const auto &b) { return a.first < b.first; });
-
-                // Write the partitioned example indices back to _indices
-                for (int32_t ci = 0; ci < range_size; ci++)
-                    _indices[start + 1 + ci] = distPairs[ci].second;
-
-                medianDistance = distPairs[medianInPairs].first;
-            }
-            _nodePool[currentIdx].setRadius(medianDistance);
-
-            // Schedule to build next levels
-            // Left is every one within the median distance radius
-            int32_t left_idx = -1, right_idx = -1;
-            if (start + 1 <= median) {
-                _nodePool.push_back(VPLevelPartition<distance_type>(0, start + 1, median));
-                left_idx = (int32_t)_nodePool.size() - 1;
-                _toSplit.push_back(left_idx);
+                _nodePool[nodeIdx].setRadius(medianDistance);
+                if (leftSlot[i]  >= 0)
+                    _nodePool[leftSlot[i]]  = VPLevelPartition<distance_type>(0, start + 1, median);
+                if (rightSlot[i] >= 0)
+                    _nodePool[rightSlot[i]] = VPLevelPartition<distance_type>(0, median + 1, end_);
+                _nodePool[nodeIdx].setChildIdx(leftSlot[i], rightSlot[i]);
             }
 
-            if (median + 1 <= end) {
-                _nodePool.push_back(VPLevelPartition<distance_type>(0, median + 1, end));
-                right_idx = (int32_t)_nodePool.size() - 1;
-                _toSplit.push_back(right_idx);
-            }
-
-            _nodePool[currentIdx].setChildIdx(left_idx, right_idx);
+            current = std::move(next);
         }
     }
 
@@ -552,15 +592,17 @@ protected:
         int32_t best_vp     = fromIndex;
         float   best_spread = -1.f;
 
+        // Thread-local RNG so selectVantagePoint is safe in parallel build.
+        thread_local std::mt19937 tl_rng{std::random_device{}()};
         std::uniform_int_distribution<int32_t> uni(fromIndex, toIndex);
 
         for (int s = 0; s < nSample; ++s) {
-            int32_t cand_pos = uni(_rng);
+            int32_t cand_pos = uni(tl_rng);
             const auto &cand = _examples[_indices[cand_pos]];
 
             float sum = 0.f, sum2 = 0.f;
             for (int p = 0; p < nSample; ++p) {
-                int32_t probe_pos = uni(_rng);
+                int32_t probe_pos = uni(tl_rng);
                 float d = (float)distance(cand, _examples[_indices[probe_pos]]);
                 sum += d; sum2 += d * d;
             }
@@ -594,7 +636,6 @@ protected:
     int32_t _rootIdx = -1;
     std::vector<float> _flat_backing;
     size_t _dim = 0;
-    std::mt19937 _rng{42};
 };
 
 } // namespace vptree
