@@ -140,14 +140,15 @@ class _IVFFlatIndex:
             km = MiniBatchKMeans(
                 n_clusters=n_clusters,
                 random_state=42,
-                n_init=3,  # type: ignore[arg-type]
-                batch_size=min(4096, len(data)),
+                n_init=1,  # type: ignore[arg-type]
+                batch_size=min(len(data), max(4096, len(data) // 8)),
             )
             labels = km.fit_predict(data)
             centroids = km.cluster_centers_.astype(np.float32)  # type: ignore[union-attr]
             return labels, centroids
         except ImportError:
             pass
+
         return _numpy_kmeans(data, n_clusters)
 
 
