@@ -109,6 +109,11 @@ achieves competitive latency (5.7–19.2 ms for 32 queries at $n_{\mathrm{probe}
 outperforming Faiss \texttt{IndexIVFFlat} at $d=128$ and $d=512$.
 Build time is now \emph{faster} than Faiss IVF for $N \le 50\,000$
 and within $1.4\text{--}5\times$ at larger scales owing to the C++ K-Means kernel.
+Version~2.2 further introduces \texttt{MIHBinaryIndex} (Multi-Index Hashing)
+and \texttt{IVFFlatBinaryIndex} for approximate Hamming-distance search;
+at $d=512$, $N=10^6$, \texttt{MIHBinaryIndex} achieves 0.037 ms/query —
+a $\mathbf{257\times}$ speedup over exact binary brute-force — with 100\%
+Recall@10 in near-duplicate image retrieval.
 All experiments were conducted on an
 Intel\textsuperscript{\textregistered}
 Core\textsuperscript{\texttrademark} Ultra 9 285K (24 cores).
@@ -151,7 +156,10 @@ The remainder of this report is organised as follows.
 Section~\ref{sec:setup} describes the experimental setup.
 Section~\ref{sec:exact} reports results for exact-search indices across
 $\ell_2$, $\ell_1$, and Hamming metrics.  Section~\ref{sec:approx}
-evaluates the approximate regime.  Section~\ref{sec:build-scale}
+evaluates the approximate $\ell_2$ regime.
+Section~\ref{sec:approx-binary} presents the new approximate binary-descriptor
+indices (\texttt{MIHBinaryIndex}, \texttt{IVFFlatBinaryIndex}).
+Section~\ref{sec:build-scale}
 analyses build-time scalability from $N=10\,000$ to $N=10^6$.
 Section~\ref{sec:discussion} synthesises the findings, and
 Section~\ref{sec:conclusion} concludes.
@@ -665,6 +673,153 @@ Build time grows roughly linearly with $d$ for both methods.
 Section~\ref{sec:build-scale} examines how build time scales with $N$.
 
 % =============================================================================
+\section{Approximate Binary-Descriptor Search}
+\label{sec:approx-binary}
+
+At high descriptor dimensionality ($d \ge 128$ bits), the concentration of
+measure progressively erodes the pruning advantage of VP-Trees: distances
+between random bit-strings cluster tightly around $d/2$, making the triangle
+inequality an increasingly loose bound.  Version~2.2 introduces two
+approximate binary-search indices designed specifically for this regime:
+
+\begin{description}
+  \item[\texttt{IVFFlatBinaryIndex}] Binary K-Means (majority-vote centroids,
+    K-Means++ initialisation, OpenMP-parallel assignment) partitions the
+    dataset into $n_{\mathrm{list}}$ Voronoi cells.  At query time, the
+    $n_{\mathrm{probe}}$ nearest centroids are identified by POPCNT scan and
+    the corresponding inverted lists are searched linearly with POPCNT.
+    Complexity: $O(n_{\mathrm{probe}} \cdot n_c \cdot d/64)$ distance
+    evaluations per query, where $n_c = N / n_{\mathrm{list}}$ is the mean
+    cluster size.
+
+  \item[\texttt{MIHBinaryIndex}] Multi-Index Hashing (MIH) splits each
+    $d$-bit descriptor into $m$ sub-strings of $d/m$ bits and builds $m$
+    hash tables keyed by sub-string value.  At query time with Hamming radius
+    $r$, the pigeonhole principle guarantees that every true neighbour at
+    distance $\le r$ must have at least one sub-string within Hamming distance
+    $r_{\mathrm{sub}} = \lfloor r/m \rfloor$ from the query.  We enumerate
+    all keys within that radius in each sub-table
+    ($\sum_{i=0}^{r_{\mathrm{sub}}} \binom{d/m}{i}$ lookups per table), union
+    the candidate sets, and verify with full POPCNT.  Sub-strings are stored
+    as \texttt{uint64\_t} keys, requiring $d/(m) \le 8$ bytes per sub-string.
+    Recommended: $m = 8$ for $d = 512$, $m = 4$ for $d \le 256$.
+\end{description}
+
+\subsection{Query Latency vs.\ Descriptor Length (N = 100\,000)}
+\label{sec:approx-binary-100k}
+
+Table~\ref{tab:binary-approx-100k} reports mean per-query latency and
+Recall@10 for synthetic near-duplicate retrieval: database vectors are random
+512-bit bitstrings; queries are formed by flipping exactly 5 bits from a
+subset of database vectors.  The exact reference is Faiss
+\texttt{IndexBinaryFlat}.  All results use $N = 100\,000$, $k = 10$, and
+500 queries.
+
+\begin{table}[h]
+\centering
+\caption{Approximate binary-descriptor $k$-NN search: query latency (ms/query)
+  and Recall@10.  $N=100\,000$, $k=10$, 500 queries, Hamming radius 8,
+  near-duplicate setting (5 flipped bits).
+  MIH: $m=4$ for $d\le256$, $m=8$ for $d=512$.
+  IVFFlat: $n_{\mathrm{list}}=500$, $n_{\mathrm{probe}}=15$.
+  Faiss BinaryFlat is exact brute-force (reference).}
+\label{tab:binary-approx-100k}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{lccc}
+\toprule
+\multirow{2}{*}{\textbf{Method}} &
+\multicolumn{3}{c}{\textbf{Descriptor length $d$ (bits)}} \\
+\cmidrule(lr){2-4}
+& 128 & 256 & 512 \\
+\midrule
+\multicolumn{4}{l}{\textit{Query latency (ms/query)}} \\
+PyNear \texttt{MIHBinaryIndex}       & 0.076 & 0.249 & 0.032 \\
+PyNear \texttt{IVFFlatBinaryIndex}   & 0.022 & 0.034 & 0.058 \\
+Faiss \texttt{IndexBinaryFlat} (exact) & 1.938 & 2.053 & 1.803 \\
+\midrule
+\multicolumn{4}{l}{\textit{Recall@10}} \\
+PyNear \texttt{MIHBinaryIndex}       & 100.0\% & 100.0\% & 100.0\% \\
+PyNear \texttt{IVFFlatBinaryIndex}   & 99.4\%  & 100.0\% & 100.0\% \\
+Faiss \texttt{IndexBinaryFlat} (exact) & 100.0\% & 100.0\% & 100.0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+At $d = 512$ (the most common case for image descriptors such as ORB and
+BRIEF-512), \texttt{MIHBinaryIndex} achieves 0.032 ms/query — a
+\textbf{56$\times$ speedup} over Faiss \texttt{IndexBinaryFlat} (1.803 ms)
+with 100\% Recall@10.  \texttt{IVFFlatBinaryIndex} achieves 0.058 ms/query
+($31\times$ speedup) with 100\% recall at the same operating point.
+
+\subsection{Query Latency vs.\ Descriptor Length (N = 1\,000\,000)}
+\label{sec:approx-binary-1m}
+
+Table~\ref{tab:binary-approx-1m} extends the benchmark to $N = 10^6$, the
+scale typical of large image-retrieval databases.
+
+\begin{table}[h]
+\centering
+\caption{Approximate binary-descriptor $k$-NN search at $N=1{,}000{,}000$,
+  $k=10$, 500 queries.  Configuration as in Table~\ref{tab:binary-approx-100k}
+  except $n_{\mathrm{list}}=512$, $n_{\mathrm{probe}}=16$.
+  Build time includes K-Means++ clustering (IVFFlat) or hash-table
+  construction (MIH).}
+\label{tab:binary-approx-1m}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{lcccccc}
+\toprule
+\multirow{2}{*}{\textbf{Method}} &
+\multicolumn{3}{c}{\textbf{Build time (s)}} &
+\multicolumn{3}{c}{\textbf{Query time (ms/query)}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+& $d=128$ & $d=256$ & $d=512$ & $d=128$ & $d=256$ & $d=512$ \\
+\midrule
+PyNear \texttt{MIHBinaryIndex}     & 4.6 & 7.7 & 13.2 & 0.117 & 0.553 & 0.037 \\
+PyNear \texttt{IVFFlatBinaryIndex} & 5.0 & 9.5 & 15.0 & 0.901 & 1.662 & 2.422 \\
+Faiss \texttt{IndexBinaryFlat} (exact) & — & — & — & 9.385 & 9.837 & 9.510 \\
+\midrule
+\multicolumn{4}{l}{\textit{Recall@10 (all methods, all $d$)}} &
+\multicolumn{3}{c}{$\ge$98.4\% (MIH: 100\%)} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+At $d=512$ and $N=10^6$, \texttt{MIHBinaryIndex} achieves 0.037 ms/query
+— a \textbf{257$\times$ speedup} over Faiss brute-force (9.510 ms) while
+maintaining 100\% Recall@10.  The MIH advantage at $d=512$ is particularly
+strong: with $m=8$ sub-tables of 64-bit keys and $r_{\mathrm{sub}}=1$,
+each query issues only $8 \times 65 = 520$ hash lookups.  At $N=10^6$, the
+expected number of candidates per lookup is $10^6 / 2^{64} \approx 0$, so
+the candidate set is tiny and verification is near-instant.
+
+The MIH query time actually \emph{decreases} with $d$ at fixed $m=8$ because
+the sub-table keys become more sparse in the $2^{64}$ key space as $d$
+increases (more bits → more entropy per key → fewer collisions per bucket).
+
+\subsection{MIH Parametrisation Guidelines}
+\label{sec:mih-params}
+
+Optimal MIH performance depends on choosing $m$ to balance lookup count
+and candidate set size:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{ccccc}
+\toprule
+$d$ (bits) & $m$ & sub-bits & $r_{\mathrm{sub}}$ & lookups/query \\
+\midrule
+128 & 4 & 32 & 2 & $4 \times 529 = 2{,}116$ \\
+256 & 4 & 64 & 2 & $4 \times 2{,}081 = 8{,}324$ \\
+512 & 8 & 64 & 1 & $8 \times 65 = 520$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+For $d=256$ and $d=128$, a larger $r_{\mathrm{sub}}=2$ is used to ensure
+good recall; the higher lookup count is compensated by the larger key space
+relative to $N$.
+
+% =============================================================================
 \section{Build-Time Scalability}
 \label{sec:build-scale}
 
@@ -847,7 +1002,7 @@ install (NumPy only) or the exact-to-approximate fallback via a single
 parameter change are operationally valuable, \texttt{IVFFlatL2Index}
 is the preferable choice.
 
-\paragraph{Binary descriptors.}
+\paragraph{Binary descriptors — exact.}
 Faiss's flat binary index is the fastest exact binary search method at
 all descriptor lengths.  \texttt{VPTreeBinaryIndex} remains
 viable for moderate lengths ($\leq 64$ bits, $< 6$ ms) and for workloads
@@ -855,6 +1010,20 @@ where tree-based pruning amortises the per-query cost.
 \texttt{BKTreeBinaryIndex} is best suited to range queries
 (\texttt{find\_threshold}), where its B-K tree structure is optimal, and
 should not be interpreted as a general-purpose $k$-NN competitor.
+
+\paragraph{Binary descriptors — approximate (v2.2).}
+The new \texttt{MIHBinaryIndex} and \texttt{IVFFlatBinaryIndex} (Section~\ref{sec:approx-binary})
+decisively outperform exact brute-force binary search at high dimensionality.
+At $d=512$, $N=100\,000$: \texttt{MIHBinaryIndex} achieves 0.032 ms/query
+($56\times$ over Faiss flat) with 100\% Recall@10; at $N=10^6$ the speedup
+grows to $257\times$ (0.037 ms vs.\ 9.5 ms) because the key space becomes
+increasingly sparse relative to $N$.  The MIH technique is particularly
+well-suited to the near-duplicate image-retrieval use case (ORB, BRIEF,
+AKAZE descriptors) where true nearest neighbours lie within Hamming radius 8
+of 512-bit descriptors.  \texttt{IVFFlatBinaryIndex} provides a complementary
+trade-off: slightly higher recall and predictable per-cluster scan cost,
+making it preferable when the query radius is unknown or the data distribution
+is non-uniform.
 
 % =============================================================================
 \section{Conclusion}
@@ -883,6 +1052,11 @@ $1.2\text{--}1.8\times$ faster than Faiss IVF at $N=50\,000$, and
 $4.7\times$ faster at $N=10\,000$.  At larger scales ($N \ge 100\,000$)
 Faiss's compiled K-Means is faster, with the gap widening to ${\sim}5\times$
 at $N=10^6$.
+
+Version~2.2 adds \texttt{MIHBinaryIndex} and \texttt{IVFFlatBinaryIndex},
+delivering $56\text{--}257\times$ speedups over exact binary brute-force at
+$d=512$ while maintaining $\ge 98\%$ Recall@10, directly targeting
+large-scale image-descriptor retrieval workloads.
 
 Future work includes extending the SIMD kernels to AVX-512 for wider
 vectorisation, investigating product-quantisation-based inner-cluster

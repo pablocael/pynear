@@ -16,10 +16,12 @@
 #include <vector>
 
 #include <BKTree.hpp>
+#include <BinaryIVF.hpp>
 #include <BuiltinSerializers.hpp>
 #include <DistanceFunctions.hpp>
 #include <ISerializable.hpp>
 #include <KMeans.hpp>
+#include <MIH.hpp>
 #include <SerializableVPTree.hpp>
 
 namespace py = pybind11;
@@ -225,6 +227,50 @@ public:
     std::vector<key_t> values() { return tree.values(); }
 };
 
+// ── IVFFlatBinaryIndex adapter ────────────────────────────────────────────────
+class IVFFlatBinaryNumpyAdapter {
+public:
+    IVFFlatBinaryNumpyAdapter(int32_t nlist = 256, int32_t nprobe = 8,
+                               int32_t max_iter = 20, uint32_t seed = 42)
+        : _index(nlist, nprobe, max_iter, seed) {}
+
+    void set(const ndarrayli& data) { _index.set(data); }
+
+    std::tuple<std::vector<std::vector<int64_t>>,
+               std::vector<std::vector<int64_t>>>
+    searchKNN(const ndarrayli& queries, size_t k) {
+        return _index.searchKNN(queries, k);
+    }
+
+    int32_t nlist()  const { return _index.nlist(); }
+    int32_t nprobe() const { return _index.nprobe(); }
+    void set_nprobe(int32_t nprobe) { _index.set_nprobe(nprobe); }
+
+private:
+    IVFFlatBinaryIndex _index;
+};
+
+// ── MIHBinaryIndex adapter ────────────────────────────────────────────────────
+class MIHBinaryNumpyAdapter {
+public:
+    explicit MIHBinaryNumpyAdapter(int32_t m = 8) : _index(m) {}
+
+    void set(const ndarrayli& data) { _index.set(data); }
+
+    std::tuple<std::vector<std::vector<int64_t>>,
+               std::vector<std::vector<int64_t>>>
+    searchKNN(const ndarrayli& queries, size_t k, int32_t radius = 8) {
+        return _index.searchKNN(queries, k, radius);
+    }
+
+    int32_t m()      const { return _index.m(); }
+    size_t  n()      const { return _index.n(); }
+    size_t  nbytes() const { return _index.nbytes(); }
+
+private:
+    MIHBinaryIndex _index;
+};
+
 static const char *index_set = "Add vectors to index";
 static const char *index_topk = "Batch find top-k vectors in index and return indices and distances";
 static const char *index_top1 = "Batch find closest vectors in index and return indices and distances";
@@ -403,4 +449,33 @@ PYBIND11_MODULE(_pynear, m) {
         .def("empty", &BKTreeBinaryNumpyAdapter<dist_hamming>::empty)
         .def("size", &BKTreeBinaryNumpyAdapter<dist_hamming>::size)
         .def("values", &BKTreeBinaryNumpyAdapter<dist_hamming>::values, index_values);
+
+    // ── IVFFlatBinaryIndex ────────────────────────────────────────────────────
+    py::class_<IVFFlatBinaryNumpyAdapter>(m, "IVFFlatBinaryIndex")
+        .def(py::init<int32_t, int32_t, int32_t, uint32_t>(),
+             "Inverted File Index for binary descriptors (approximate Hamming KNN).\n"
+             "Args: nlist (clusters), nprobe (clusters scanned per query), "
+             "max_iter, seed",
+             py::arg("nlist") = 256, py::arg("nprobe") = 8,
+             py::arg("max_iter") = 20, py::arg("seed") = 42)
+        .def("set", &IVFFlatBinaryNumpyAdapter::set, index_set, py::arg("vectors"))
+        .def("searchKNN", &IVFFlatBinaryNumpyAdapter::searchKNN, index_topk,
+             py::arg("vectors"), py::arg("k"))
+        .def("nlist",      &IVFFlatBinaryNumpyAdapter::nlist)
+        .def("nprobe",     &IVFFlatBinaryNumpyAdapter::nprobe)
+        .def("set_nprobe", &IVFFlatBinaryNumpyAdapter::set_nprobe, py::arg("nprobe"));
+
+    // ── MIHBinaryIndex ────────────────────────────────────────────────────────
+    py::class_<MIHBinaryNumpyAdapter>(m, "MIHBinaryIndex")
+        .def(py::init<int32_t>(),
+             "Multi-Index Hashing for binary descriptors (approximate Hamming KNN).\n"
+             "Args: m — number of sub-strings; descriptor byte width must be "
+             "divisible by m and nbytes/m ≤ 8.",
+             py::arg("m") = 8)
+        .def("set", &MIHBinaryNumpyAdapter::set, index_set, py::arg("vectors"))
+        .def("searchKNN", &MIHBinaryNumpyAdapter::searchKNN, index_topk,
+             py::arg("vectors"), py::arg("k"), py::arg("radius") = 8)
+        .def("m",      &MIHBinaryNumpyAdapter::m)
+        .def("n",      &MIHBinaryNumpyAdapter::n)
+        .def("nbytes", &MIHBinaryNumpyAdapter::nbytes);
 };
