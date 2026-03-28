@@ -1,10 +1,36 @@
 import os
 import platform
+import subprocess
 import sys
+import tempfile
 
 from pybind11.setup_helpers import Pybind11Extension
 from setuptools import find_packages
 from setuptools import setup
+
+
+def _tbb_available():
+    """Return True if libtbb can be linked on the current platform."""
+    src = "int main(){return 0;}"
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".cpp", mode="w", delete=False) as f:
+            f.write(src)
+            src_path = f.name
+        out_path = src_path.replace(".cpp", ".out")
+        result = subprocess.run(
+            ["g++", src_path, "-ltbb", "-o", out_path],
+            capture_output=True,
+            timeout=15,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+    finally:
+        for p in (src_path, out_path):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
 
 if sys.platform == "win32":
     extra_compile_args = ["/Wall", "/arch:AVX", "/openmp"]  # /LTCG unrecognized here
@@ -39,9 +65,13 @@ elif sys.platform == "darwin":
     extra_macros = [("ENABLE_OMP_PARALLEL", "1")]
 else:
     extra_compile_args = ["-flto", "-Wall", "-march=native", "-mavx", "-fopenmp"]
-    extra_link_args = ["-fopenmp", "-lgomp", "-ltbb"]
-    # Linux: TBB available, enable parallel nth_element via std::execution::par_unseq.
-    extra_macros = [("ENABLE_OMP_PARALLEL", "1"), ("USE_PSTL_NTH_ELEMENT", "1")]
+    extra_link_args = ["-fopenmp", "-lgomp"]
+    extra_macros = [("ENABLE_OMP_PARALLEL", "1")]
+    # Enable TBB parallel nth_element only when libtbb is available (not present
+    # in all manylinux images or minimal Linux installs).
+    if _tbb_available():
+        extra_link_args.append("-ltbb")
+        extra_macros.append(("USE_PSTL_NTH_ELEMENT", "1"))
 
 ext_modules = [
     Pybind11Extension(
