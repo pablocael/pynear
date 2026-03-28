@@ -19,6 +19,7 @@
 #include <BuiltinSerializers.hpp>
 #include <DistanceFunctions.hpp>
 #include <ISerializable.hpp>
+#include <KMeans.hpp>
 #include <SerializableVPTree.hpp>
 
 namespace py = pybind11;
@@ -255,6 +256,32 @@ static float py_dist_chebyshev(py::array_t<float, py::array::c_style | py::array
     return dist_chebyshev_f_avx2(sa, sb);
 }
 
+static py::tuple py_kmeans_l2(
+    py::array_t<float, py::array::c_style | py::array::forcecast> data,
+    size_t   k,
+    size_t   max_iter,
+    uint32_t seed)
+{
+    auto buf = data.request();
+    if (buf.ndim != 2)
+        throw std::runtime_error("kmeans_l2: data must be a 2D float32 array (N, D)");
+    size_t n = (size_t)buf.shape[0];
+    size_t d = (size_t)buf.shape[1];
+    if (k == 0 || k > n)
+        throw std::runtime_error("kmeans_l2: k must be between 1 and N");
+
+    const float* ptr = static_cast<const float*>(buf.ptr);
+    KMeansResult res  = kmeans_l2(ptr, n, d, k, max_iter, seed);
+
+    py::array_t<int32_t> labels_out({(py::ssize_t)n});
+    std::memcpy(labels_out.mutable_data(), res.labels.data(), n * sizeof(int32_t));
+
+    py::array_t<float> centroids_out({(py::ssize_t)k, (py::ssize_t)d});
+    std::memcpy(centroids_out.mutable_data(), res.centroids.data(), k * d * sizeof(float));
+
+    return py::make_tuple(labels_out, centroids_out);
+}
+
 PYBIND11_MODULE(_pynear, m) {
     m.def("dist_l2", py_dist_l2);
     m.def("dist_l1", py_dist_l1);
@@ -263,6 +290,10 @@ PYBIND11_MODULE(_pynear, m) {
     m.def("dist_hamming_128", dist_hamming_128);
     m.def("dist_hamming_256", dist_hamming_256);
     m.def("dist_hamming_512", dist_hamming_512);
+    m.def("kmeans_l2", py_kmeans_l2,
+          "Lloyd K-Means (K-Means++ init, SIMD L2, OpenMP parallel assignment)\n"
+          "Args: data (N,D) float32, k, max_iter, seed  →  (labels int32, centroids float32)",
+          py::arg("data"), py::arg("k"), py::arg("max_iter") = 100, py::arg("seed") = 42);
 
     py::class_<VPTreeNumpyAdapter<dist_l2_f_avx2>>(m, "VPTreeL2Index")
         .def(py::init<>())
