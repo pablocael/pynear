@@ -134,6 +134,15 @@ class _IVFFlatIndex:
     # ── K-Means ────────────────────────────────────────────────────────────
 
     def _kmeans(self, data: np.ndarray, n_clusters: int):
+        # Fast path: C++ Lloyd's K-Means with K-Means++ init and OpenMP parallelism
+        try:
+            from _pynear import kmeans_l2  # type: ignore[import]
+            labels, centroids = kmeans_l2(data, n_clusters, 100, 42)
+            return labels.astype(np.intp), centroids
+        except (ImportError, AttributeError):
+            pass
+
+        # Fallback: sklearn MiniBatchKMeans
         try:
             from sklearn.cluster import MiniBatchKMeans
 
