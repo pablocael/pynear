@@ -5,7 +5,7 @@
 [![CI](https://github.com/pablocael/pynear/actions/workflows/pythonpackage.yml/badge.svg)](https://github.com/pablocael/pynear/actions/workflows/pythonpackage.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Fast, exact K-nearest-neighbour search for Python**
+**Fast, exact and approximate K-nearest-neighbour search for Python**
 
 <video src="https://github.com/user-attachments/assets/4e07e82d-f3a0-4d47-9d34-a5ea4f752e14" autoplay muted loop width="100%"></video>
 
@@ -27,16 +27,19 @@ implement the same `fit` / `predict` / `score` / `kneighbors` API —
 | **Metric agnostic** | ✅ L2, L1, L∞, Hamming | L2 / inner product | L2 / cosine / Hamming | L2 / others |
 | **Low-dim sweet spot** | ✅ | ❌ | ❌ | ❌ |
 | **High-dim (512-D – 1024-D)** | ✅ IVFFlatL2Index | ✅ | ✅ | ❌ |
-| **Binary / Hamming** | ✅ hardware popcount | ✅ | ✅ | ❌ |
+| **Binary / Hamming exact** | ✅ hardware popcount | ✅ | ✅ | ❌ |
+| **Binary / Hamming approx** | ✅ MIH + IVFFlat | ⚠️ slow build | ❌ | ❌ |
 | **Threshold / range search** | ✅ BKTree | ❌ | ❌ | ❌ |
 | **Pickle serialization** | ✅ | ❌ | ✅ | ✅ |
 | **No extra native deps** | ✅ NumPy only | ❌ compiled lib + optional GPU | ❌ | ❌ |
 | **scikit-learn compatible API** | ✅ drop-in adapters | ❌ | ❌ | — |
 
 PyNear covers the full spectrum: use **VPTree** indices when you need
-guaranteed exact answers (2-D to ~256-D), or **IVFFlatL2Index** when you need fast
-approximate search on high-dimensional data (512-D to 1024-D) with a
-configurable recall target.
+guaranteed exact answers (2-D to ~256-D), **IVFFlatL2Index** for fast
+approximate float search on high-dimensional data (512-D to 1024-D), or
+**MIHBinaryIndex** / **IVFFlatBinaryIndex** for approximate Hamming search
+on binary descriptors — achieving up to **257× speedup** over exact
+binary brute-force at N=1M, d=512 with 100% Recall@10.
 
 #### For the Layman
 
@@ -97,6 +100,50 @@ nn_indices, nn_distances = index.search1NN(queries)
 ```
 
 For all index types and advanced usage see [docs/README.md](./docs/README.md).
+
+### Approximate binary search (image descriptors)
+
+For large-scale image retrieval with binary descriptors (ORB, BRIEF, AKAZE),
+PyNear provides two approximate Hamming-distance indices that are orders of
+magnitude faster than exact brute-force:
+
+```python
+import numpy as np
+import pynear
+
+# 1M × 512-bit descriptors (64 bytes each)
+db = np.random.randint(0, 256, size=(1_000_000, 64), dtype=np.uint8)
+
+# ── Multi-Index Hashing ───────────────────────────────────────────────────────
+# Best for d=512 (m=8 sub-tables of 64 bits).
+# 257× faster than brute-force at N=1M; 100% Recall@10 for near-duplicates.
+mih = pynear.MIHBinaryIndex(m=8)   # m=4 for d=128/256, m=8 for d=512
+mih.set(db)
+
+queries = np.random.randint(0, 256, size=(100, 64), dtype=np.uint8)
+indices, distances = mih.searchKNN(queries, k=10, radius=8)
+# radius: any true neighbour within Hamming distance ≤ radius is guaranteed
+# to be found (pigeonhole principle). Increase for higher recall on noisier data.
+
+# ── IVF Flat Binary ───────────────────────────────────────────────────────────
+# Predictable cost: scans nprobe clusters per query.
+# Good when the query radius is unknown or data is non-uniform.
+ivf = pynear.IVFFlatBinaryIndex(nlist=512, nprobe=16)
+ivf.set(db)
+
+indices, distances = ivf.searchKNN(queries, k=10)
+ivf.set_nprobe(32)  # increase nprobe at runtime to trade speed for recall
+```
+
+**Choosing between MIH and IVFFlat:**
+
+| | `MIHBinaryIndex` | `IVFFlatBinaryIndex` |
+|---|---|---|
+| Best for | Near-duplicate retrieval (small Hamming radius) | General approximate Hamming KNN |
+| d=512, N=1M query time | **0.037 ms** | 1.95 ms |
+| Recall guarantee | Exact for distance ≤ radius (pigeonhole) | Probabilistic (depends on nprobe) |
+| Recall control | `radius` parameter | `nprobe` parameter |
+| Recommended `m` | d/8 bytes (e.g. m=8 for 512-bit) | — |
 
 ---
 
@@ -170,13 +217,15 @@ reg.score(X_test, y_test)    # R²
 | `VPTreeBinaryIndex` | Hamming | `uint8` | Hardware popcount |
 | `BKTreeBinaryIndex` | Hamming | `uint8` | Threshold / range search |
 
-**Approximate indices** — partition data into clusters, search `n_probe` of them per query; tunable recall vs speed:
+**Approximate indices** — trade a small recall budget for large speed gains; tunable via `n_probe` / `radius`:
 
 | Index | Distance | Data type | Notes |
 |---|---|---|---|
 | `IVFFlatL2Index` | L2 (Euclidean) | `float32` | BLAS SGEMV inner scan; best for 512-D – 1024-D |
+| `IVFFlatBinaryIndex` | Hamming | `uint8` | Binary K-Means IVF; faster build than Faiss binary IVF |
+| `MIHBinaryIndex` | Hamming | `uint8` | Multi-Index Hashing; 257× faster than brute-force at N=1M, d=512 |
 
-All VPTree and IVFFlat indices support `searchKNN(queries, k)` and `search1NN(queries)`.
+All VPTree and IVFFlat indices support `searchKNN(queries, k)`.
 `BKTreeBinaryIndex` supports `find_threshold(queries, threshold)` for range queries.
 Set `n_probe = n_clusters` on `IVFFlatL2Index` to make it exact.
 
@@ -300,8 +349,10 @@ See [docs/demos.md](./docs/demos.md) for full details.
 A formal evaluation of PyNear against Faiss, scikit-learn, and Annoy across
 Euclidean, Manhattan, and Hamming distance metrics, dimensionalities from
 2-D to 1024-D, and both exact and approximate search modes. Includes
-TikZ-rendered latency charts and a recall–latency Pareto analysis of
-IVFFlatL2Index vs Faiss IndexIVFFlat.
+TikZ-rendered latency charts, a recall–latency Pareto analysis of
+IVFFlatL2Index vs Faiss IndexIVFFlat, and approximate binary-descriptor
+benchmarks showing MIHBinaryIndex achieving **257× speedup** over
+Faiss exact binary brute-force at N=1M, d=512 with 100% Recall@10.
 
 To run a quick standalone benchmark:
 

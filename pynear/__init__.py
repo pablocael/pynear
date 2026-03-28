@@ -3,6 +3,8 @@ from typing import Tuple
 
 import numpy as np
 
+from _pynear import IVFFlatBinaryIndex as IVFFlatBinaryIndex
+from _pynear import MIHBinaryIndex as MIHBinaryIndex
 from _pynear import BKTreeBinaryIndex64
 from _pynear import BKTreeBinaryIndex128
 from _pynear import BKTreeBinaryIndex256
