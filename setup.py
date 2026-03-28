@@ -35,7 +35,7 @@ elif sys.platform == "darwin":
     extra_link_args = omp_link
 else:
     extra_compile_args = ["-flto", "-Wall", "-march=native", "-mavx", "-fopenmp"]
-    extra_link_args = ["-fopenmp", "-lgomp"]
+    extra_link_args = ["-fopenmp", "-lgomp", "-ltbb"]
 
 ext_modules = [
     Pybind11Extension(
