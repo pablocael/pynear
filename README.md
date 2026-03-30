@@ -362,6 +362,42 @@ python bench_run.py
 
 ---
 
+<!-- binary-benchmark-start -->
+## Real-World Benchmark — SIFT1M Binary
+
+Performance of pynear's approximate Hamming-distance indices on the
+[INRIA TEXMEX SIFT1M](http://corpus-texmex.irisa.fr/) dataset:
+1,000,000 × 128-dim float SIFT descriptors sign-quantised to **128-bit binary**
+(16 bytes/descriptor).  Ground truth computed by exact brute-force Hamming k-NN
+over 500 queries, k=10.  Machine: Intel(R) Core(TM) Ultra 9 285K.
+
+![QPS vs Recall@10](results/binary_benchmark_qps.png)
+
+| Index               | Configuration         | Build (s) | ms / query | QPS | Recall@10 |
+| ------------------- | --------------------- | --------- | ---------- | --- | --------- |
+| Brute-force (numpy) | N=1,000,000           | —         | 49.6       | 20  | 1.000     |
+| IVFFlatBinaryIndex  | nlist=500, nprobe=31  | 6.90      | 1.43       | 698 | 1.000     |
+| IVFFlatBinaryIndex  | nlist=500, nprobe=62  | 6.90      | 2.77       | 361 | 1.000     |
+| IVFFlatBinaryIndex  | nlist=500, nprobe=125 | 6.90      | 5.42       | 184 | 1.000     |
+| IVFFlatBinaryIndex  | nlist=500, nprobe=250 | 6.90      | 10.54      | 95  | 1.000     |
+| IVFFlatBinaryIndex  | nlist=500, nprobe=500 | 6.90      | 20.85      | 48  | 1.000     |
+| MIHBinaryIndex      | m=8, radius=4         | 2.83      | 1.29       | 772 | 0.992     |
+| MIHBinaryIndex      | m=8, radius=8         | 2.83      | 7.56       | 132 | 1.000     |
+| MIHBinaryIndex      | m=8, radius=12        | 2.83      | 7.56       | 132 | 1.000     |
+| MIHBinaryIndex      | m=8, radius=16        | 2.83      | 24.02      | 42  | 1.000     |
+| MIHBinaryIndex      | m=8, radius=24        | 2.83      | 50.92      | 20  | 1.000     |
+| MIHBinaryIndex      | m=8, radius=32        | 2.83      | 81.68      | 12  | 1.000     |
+| MIHBinaryIndex      | m=8, radius=48        | 2.83      | 171.86     | 6   | 1.000     |
+
+**Key takeaways:**
+- `IVFFlatBinaryIndex` (nprobe=31) achieves **100% Recall@10 at 698 QPS — **35× faster than brute-force****.
+- `MIHBinaryIndex` (radius=4) is the fastest single configuration at **772 QPS** with 0.992 recall.
+- MIH excels on wider descriptors (512-bit / 64 bytes) where sub-table sparsity is higher.
+
+> **Reproduce:** `python demo_binary.py` · add `--small` for a 10 K quick test · `--n-gt-queries N` to adjust evaluation size.
+
+<!-- binary-benchmark-end -->
+
 ## Development
 
 ### Building and installing locally
