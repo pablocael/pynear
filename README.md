@@ -7,6 +7,23 @@
 
 **Fast, exact and approximate K-nearest-neighbour search for Python**
 
+## Table of Contents
+
+- [Installation](#installation)
+- [Quick start](#quick-start)
+  - [Approximate binary search (image descriptors)](#approximate-binary-search-image-descriptors)
+- [Migrating from scikit-learn](#migrating-from-scikit-learn)
+- [Features](#features)
+  - [Available indices](#available-indices)
+  - [Pickle serialisation](#pickle-serialisation)
+  - [Tree inspection](#tree-inspection)
+- [Demos](#demos)
+- [Benchmarks](#benchmarks)
+- [Real-World Benchmark — SIFT1M Binary](#real-world-benchmark--sift1m-binary)
+- [Development](#development)
+
+---
+
 <video src="https://github.com/user-attachments/assets/4e07e82d-f3a0-4d47-9d34-a5ea4f752e14" autoplay muted loop width="100%"></video>
 
 PyNear is a Python library with a C++ core for exact or approximate (fast) KNN search over metric
