@@ -1,4 +1,3 @@
-[![Star History Chart](https://api.star-history.com/svg?repos=pablocael/pynear&type=Date)](https://star-history.com/#pablocael/pynear&Date)
 
 # PyNear
 
