@@ -25,7 +25,7 @@
 
 ---
 
-<video src="https://github.com/user-attachments/assets/4e07e82d-f3a0-4d47-9d34-a5ea4f752e14" autoplay muted loop width="100%"></video>
+![PyNear demo](docs/img/demo.gif)
 
 PyNear is a Python library with a C++ core for exact or approximate (fast) KNN search over metric
 spaces.  It is built around [Vantage Point Trees](./docs/vptrees.md), a metric
