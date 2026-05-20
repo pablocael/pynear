@@ -144,6 +144,165 @@ public:
     vptree::VPTree<arrayf, float, distance> tree;
 };
 
+// VPTreeCosineNumpyAdapter — exact cosine-distance KNN.
+//
+// Implementation: pre-normalize all input rows and query rows to unit length,
+// then use an L2 tree internally. For unit vectors:
+//
+//     ||u − v||² = 2 − 2 (u·v) = 2 (1 − cos(u,v))
+//
+// so argmin_L2 ≡ argmax_cos and L2 is a true metric (so VPTree pruning is
+// correct). Returned distances are converted back to cosine distance
+// d_cos = ||u−v||² / 2 ∈ [0, 2], with 0 = identical direction, 1 = orthogonal,
+// 2 = antiparallel. Zero-norm rows are left as zeros and behave as orthogonal
+// to every unit vector.
+class VPTreeCosineNumpyAdapter {
+public:
+    VPTreeCosineNumpyAdapter() = default;
+
+    static void normalize_rows(const float* src, float* dst, size_t n, size_t d) {
+        for (size_t i = 0; i < n; i++) {
+            const float* row = src + i * d;
+            float sumsq = 0.0f;
+            for (size_t j = 0; j < d; j++) sumsq += row[j] * row[j];
+            if (sumsq > 0.0f) {
+                float inv = 1.0f / std::sqrt(sumsq);
+                for (size_t j = 0; j < d; j++) dst[i * d + j] = row[j] * inv;
+            } else {
+                for (size_t j = 0; j < d; j++) dst[i * d + j] = 0.0f;
+            }
+        }
+    }
+
+    void set(py::array_t<float, py::array::c_style | py::array::forcecast> arr) {
+        auto buf = arr.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("set() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        const float* ptr = static_cast<const float*>(buf.ptr);
+
+        std::vector<float> normalized(n * d);
+        normalize_rows(ptr, normalized.data(), n, d);
+
+        std::vector<arrayf> spans(n);
+        for (size_t i = 0; i < n; i++)
+            spans[i] = FlatSpan{normalized.data() + i * d, d};
+        tree.set(spans);  // VPTree copies into its own _flat_backing
+    }
+
+    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<float>>>
+    searchKNN(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k) {
+        auto buf = queries.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("searchKNN() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        const float* ptr = static_cast<const float*>(buf.ptr);
+
+        std::vector<float> qnorm(n * d);
+        normalize_rows(ptr, qnorm.data(), n, d);
+
+        std::vector<arrayf> spans(n);
+        for (size_t i = 0; i < n; i++)
+            spans[i] = FlatSpan{qnorm.data() + i * d, d};
+
+        std::vector<typename vptree::VPTree<arrayf, float, dist_l2_f_avx2>::VPTreeSearchResultElement> results;
+        tree.searchKNN(spans, k, results);
+
+        std::vector<std::vector<int64_t>> indexes(results.size());
+        std::vector<std::vector<float>> distances(results.size());
+        for (size_t i = 0; i < results.size(); i++) {
+            indexes[i] = std::move(results[i].indexes);
+            distances[i] = std::move(results[i].distances);
+            // dist_l2_f_avx2 returns sqrt(L2²) → square then halve to get cosine distance.
+            for (size_t j = 0; j < distances[i].size(); j++) {
+                float l2 = distances[i][j];
+                distances[i][j] = (l2 * l2) * 0.5f;
+            }
+        }
+        return std::make_tuple(indexes, distances);
+    }
+
+    std::tuple<std::vector<int64_t>, std::vector<float>>
+    search1NN(py::array_t<float, py::array::c_style | py::array::forcecast> queries) {
+        auto buf = queries.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("search1NN() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        const float* ptr = static_cast<const float*>(buf.ptr);
+
+        std::vector<float> qnorm(n * d);
+        normalize_rows(ptr, qnorm.data(), n, d);
+
+        std::vector<arrayf> spans(n);
+        for (size_t i = 0; i < n; i++)
+            spans[i] = FlatSpan{qnorm.data() + i * d, d};
+
+        std::vector<int64_t> indices;
+        std::vector<float> distances;
+        tree.search1NN(spans, indices, distances);
+        for (size_t j = 0; j < distances.size(); j++) {
+            float l2 = distances[j];
+            distances[j] = (l2 * l2) * 0.5f;
+        }
+        return std::make_tuple(std::move(indices), std::move(distances));
+    }
+
+    std::string to_string() {
+        std::stringstream stream;
+        stream << tree;
+        return stream.str();
+    }
+
+    static py::tuple get_state(const VPTreeCosineNumpyAdapter& p) {
+        const auto& flat = p.tree.flatBacking();
+        size_t dim = p.tree.flatDim();
+        const auto& indices = p.tree.indexPermutation();
+        const auto& pool = p.tree.partitionPool();
+        int32_t root_idx = p.tree.rootPartitionIdx();
+
+        py::bytes flat_bytes(reinterpret_cast<const char*>(flat.data()),
+                             flat.size() * sizeof(float));
+        py::bytes idx_bytes(reinterpret_cast<const char*>(indices.data()),
+                            indices.size() * sizeof(int32_t));
+        py::bytes pool_bytes(reinterpret_cast<const char*>(pool.data()),
+                             pool.size() * sizeof(pool[0]));
+
+        return py::make_tuple(flat_bytes, (uint64_t)dim, idx_bytes, pool_bytes, root_idx);
+    }
+
+    static VPTreeCosineNumpyAdapter set_state(py::tuple t) {
+        VPTreeCosineNumpyAdapter p;
+
+        auto flat_bytes  = t[0].cast<py::bytes>();
+        uint64_t dim     = t[1].cast<uint64_t>();
+        auto idx_bytes   = t[2].cast<py::bytes>();
+        auto pool_bytes  = t[3].cast<py::bytes>();
+        int32_t root_idx = t[4].cast<int32_t>();
+
+        std::string flat_str(flat_bytes);
+        std::vector<float> flat(flat_str.size() / sizeof(float));
+        std::memcpy(flat.data(), flat_str.data(), flat_str.size());
+
+        std::string idx_str(idx_bytes);
+        std::vector<int32_t> indices(idx_str.size() / sizeof(int32_t));
+        std::memcpy(indices.data(), idx_str.data(), idx_str.size());
+
+        using NodeT = vptree::VPLevelPartition<float>;
+        std::string pool_str(pool_bytes);
+        std::vector<NodeT> pool(pool_str.size() / sizeof(NodeT));
+        std::memcpy(pool.data(), pool_str.data(), pool_str.size());
+
+        p.tree.initFromSerialized(std::move(flat), (size_t)dim,
+                                  std::move(indices), std::move(pool), root_idx);
+        return p;
+    }
+
+    vptree::VPTree<arrayf, float, dist_l2_f_avx2> tree;
+};
+
 template <distance_func_li distance> class VPTreeNumpyAdapterBinary {
 public:
     VPTreeNumpyAdapterBinary() = default;
@@ -364,6 +523,14 @@ PYBIND11_MODULE(_pynear, m) {
         .def("searchKNN", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
         .def("search1NN", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::get_state, &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::set_state));
+
+    py::class_<VPTreeCosineNumpyAdapter>(m, "VPTreeCosineIndex")
+        .def(py::init<>())
+        .def("set", &VPTreeCosineNumpyAdapter::set, index_set, py::arg("vectors"))
+        .def("to_string", &VPTreeCosineNumpyAdapter::to_string, index_string)
+        .def("searchKNN", &VPTreeCosineNumpyAdapter::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("search1NN", &VPTreeCosineNumpyAdapter::search1NN, index_top1, py::arg("vectors"))
+        .def(py::pickle(&VPTreeCosineNumpyAdapter::get_state, &VPTreeCosineNumpyAdapter::set_state));
 
     py::class_<VPTreeNumpyAdapterBinary<dist_hamming_512>>(m, "VPTreeBinaryIndex512")
         .def(py::init<>())

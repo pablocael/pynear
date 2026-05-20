@@ -6,7 +6,7 @@ Full feature matrix. The README carries an abridged 4-row version; this page is 
 |---|---|---|---|---|
 | **Exact results** | ✅ VPTree always | ✅ flat index | ❌ approximate | ✅ |
 | **Approximate (fast, tunable)** | ✅ IVFFlatL2Index | ✅ IVF | ✅ | ❌ |
-| **Metric agnostic** | ✅ L2, L1, L∞, Hamming | L2 / inner product | L2 / cosine / Hamming | L2 / others |
+| **Metric agnostic** | ✅ L2, L1, L∞, cosine, Hamming | L2 / inner product / cosine | L2 / cosine / Hamming | L2 / others |
 | **Low-dim sweet spot** | ✅ | ❌ | ❌ | ❌ |
 | **High-dim (512-D – 1024-D)** | ✅ IVFFlatL2Index | ✅ | ✅ | ❌ |
 | **Binary / Hamming exact** | ✅ hardware popcount | ✅ | ✅ | ❌ |

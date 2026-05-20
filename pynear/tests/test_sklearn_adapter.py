@@ -121,7 +121,7 @@ class TestPyNearNearestNeighbors:
 
     def test_unsupported_metric_raises(self):
         with pytest.raises(ValueError, match="Unsupported metric"):
-            PyNearNearestNeighbors(metric="cosine").fit(make_X())
+            PyNearNearestNeighbors(metric="mahalanobis").fit(make_X())
 
     def test_not_fitted_raises(self):
         from sklearn.exceptions import NotFittedError

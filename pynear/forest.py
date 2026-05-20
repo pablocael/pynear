@@ -194,6 +194,63 @@ class IVFFlatL2Index(_IVFFlatIndex):
         return np.maximum(0.0, q_norm + self._cluster_norms[ci] - 2.0 * cross)
 
 
+class IVFFlatCosineIndex(_IVFFlatIndex):
+    """
+    IVF-style approximate index over **cosine distance**.
+
+    Data and query vectors are L2-normalised at insert and query time. Inner-
+    cluster scoring then reduces to ``d_cos = 1 − q·x`` for unit-norm vectors,
+    computed with a single BLAS SGEMV per probed cluster. Returned distances
+    lie in ``[0, 2]`` (0 = identical direction, 1 = orthogonal, 2 =
+    antiparallel). Zero-norm rows are tolerated and behave as orthogonal to
+    every unit vector.
+
+    Parameters
+    ----------
+    n_clusters : int
+        Number of Voronoi cells.  Suggested starting point: ``int(sqrt(N))``.
+    n_probe : int
+        Cells probed per query.  ``n_probe=1`` is fast but approximate;
+        ``n_probe=n_clusters`` is exact.  Values in 10–30 usually give
+        ≥ 95 % recall.
+    """
+
+    def __init__(self, n_clusters: int = 100, n_probe: int = 10):
+        super().__init__(n_clusters, n_probe)
+
+    @staticmethod
+    def _l2_normalize(arr: np.ndarray) -> np.ndarray:
+        arr = np.asarray(arr, dtype=np.float32)
+        if arr.ndim == 1:
+            arr = arr[np.newaxis]
+        norms = np.linalg.norm(arr, axis=1, keepdims=True).astype(np.float32)
+        # Avoid div-by-zero: leave zero rows as zeros (they will be orthogonal
+        # to every unit vector, giving d_cos = 1).
+        norms = np.where(norms > 0, norms, 1.0).astype(np.float32)
+        return (arr / norms).astype(np.float32, copy=False)
+
+    def set(self, data: np.ndarray) -> None:
+        super().set(self._l2_normalize(data))
+        # K-Means on unit vectors leaves centroids off the unit sphere
+        # (the mean of unit vectors has norm ≤ 1). Project them back so that
+        # cluster-assignment distance is monotonic with cosine — the
+        # spherical-K-Means projection step.
+        if self._centroids is not None and len(self._centroids):
+            self._centroids = self._l2_normalize(self._centroids)
+
+    def searchKNN(self, queries: np.ndarray, k: int):
+        return super().searchKNN(self._l2_normalize(queries), k)
+
+    def search1NN(self, queries: np.ndarray):
+        return self.searchKNN(queries, 1)
+
+    def _flat_distances(self, query: np.ndarray, ci: int) -> np.ndarray:
+        # Vectors are unit-normalised → d_cos(q, x) = 1 − q·x.
+        # cluster_data[ci] @ query  →  BLAS SGEMV: (n_c, D) × (D,) = (n_c,)
+        cross = self._cluster_data[ci] @ query
+        return np.maximum(0.0, 1.0 - cross)
+
+
 # ── Utilities ──────────────────────────────────────────────────────────────────
 
 

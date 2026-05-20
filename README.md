@@ -52,14 +52,14 @@ A metric-space KNN library with a C++ core. **VP-Trees** for exact search up to 
 
 | | PyNear | Faiss | Annoy | scikit-learn |
 |---|---|---|---|---|
-| **Metric agnostic** | ✅ L2, L1, L∞, Hamming | L2 / IP | L2 / cosine / Hamming | L2 / others |
+| **Metric agnostic** | ✅ L2, L1, L∞, cosine, Hamming | L2 / IP / cosine | L2 / cosine / Hamming | L2 / others |
 | **Binary / Hamming approx** | ✅ 257× faster than brute-force | ⚠️ slow build | ❌ | ❌ |
 | **scikit-learn drop-in** | ✅ adapter classes | ❌ | ❌ | — |
 | **Zero native deps** | ✅ NumPy only | ❌ compiled lib + optional GPU | ❌ | ❌ |
 
 [Full comparison →](./docs/comparison.md)
 
-PyNear covers the full spectrum: **VPTree** indices for guaranteed exact answers (2-D to ~256-D), **IVFFlatL2Index** for fast approximate float search at 512–1024-D, and **MIHBinaryIndex** / **IVFFlatBinaryIndex** for approximate Hamming search on binary descriptors.
+PyNear covers the full spectrum: **VPTree** indices for guaranteed exact answers (2-D to ~256-D), **IVFFlatL2Index** / **IVFFlatCosineIndex** for fast approximate float search at 512–1024-D (text embeddings, RAG), and **MIHBinaryIndex** / **IVFFlatBinaryIndex** for approximate Hamming search on binary descriptors.
 
 > New to KNN? See [docs/intro.md](./docs/intro.md) for a gentle, jargon-free introduction.
 
@@ -196,7 +196,7 @@ reg.predict(X_test)          # predicted values
 reg.score(X_test, y_test)    # R²
 ```
 
-**Supported metrics:** `euclidean` / `l2`, `manhattan` / `l1`, `chebyshev` / `linf`, `hamming`
+**Supported metrics:** `euclidean` / `l2`, `manhattan` / `l1`, `chebyshev` / `linf`, `cosine`, `hamming`
 
 **Supported weights:** `uniform`, `distance` (inverse-distance-weighted)
 
@@ -218,6 +218,7 @@ reg.score(X_test, y_test)    # R²
 | `VPTreeL2Index` | L2 (Euclidean) | `float32` | SIMD-accelerated |
 | `VPTreeL1Index` | L1 (Manhattan) | `float32` | SIMD-accelerated |
 | `VPTreeChebyshevIndex` | L∞ (Chebyshev) | `float32` | SIMD-accelerated |
+| `VPTreeCosineIndex` | Cosine | `float32` | L2-normalised internally; SIMD-accelerated |
 | `VPTreeBinaryIndex` | Hamming | `uint8` | Hardware popcount |
 | `BKTreeBinaryIndex` | Hamming | `uint8` | Threshold / range search |
 
@@ -226,6 +227,7 @@ reg.score(X_test, y_test)    # R²
 | Index | Distance | Data type | Notes |
 |---|---|---|---|
 | `IVFFlatL2Index` | L2 (Euclidean) | `float32` | BLAS SGEMV inner scan; best for 512-D – 1024-D |
+| `IVFFlatCosineIndex` | Cosine | `float32` | Spherical K-Means + BLAS SGEMV; ideal for text embeddings |
 | `IVFFlatBinaryIndex` | Hamming | `uint8` | Binary K-Means IVF; faster build than Faiss binary IVF |
 | `MIHBinaryIndex` | Hamming | `uint8` | Multi-Index Hashing; 257× faster than brute-force at N=1M, d=512 |
 

@@ -16,6 +16,7 @@ from _pynear import VPTreeBinaryIndex256
 from _pynear import VPTreeBinaryIndex512
 from _pynear import VPTreeBinaryIndex as VPTreeBinaryIndexN
 from _pynear import VPTreeChebyshevIndex
+from _pynear import VPTreeCosineIndex
 from _pynear import VPTreeL1Index
 from _pynear import VPTreeL2Index
 from _pynear import dist_chebyshev
@@ -27,6 +28,7 @@ from _pynear import dist_l1
 from _pynear import dist_l2
 
 from ._version import __version__
+from .forest import IVFFlatCosineIndex
 from .forest import IVFFlatL2Index
 
 try:

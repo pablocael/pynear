@@ -30,7 +30,7 @@ from sklearn.utils.validation import check_array, check_is_fitted
 # (built lazily to avoid circular import with pynear/__init__.py)
 # ---------------------------------------------------------------------------
 
-_FLOAT_METRIC_NAMES = {"euclidean", "l2", "manhattan", "l1", "chebyshev", "linf"}
+_FLOAT_METRIC_NAMES = {"euclidean", "l2", "manhattan", "l1", "chebyshev", "linf", "cosine"}
 _BINARY_METRIC_NAMES = {"hamming"}
 _ALL_METRIC_NAMES = _FLOAT_METRIC_NAMES | _BINARY_METRIC_NAMES
 
@@ -46,6 +46,7 @@ def _resolve_index(metric: str):
         "l1":        pynear.VPTreeL1Index,
         "chebyshev": pynear.VPTreeChebyshevIndex,
         "linf":      pynear.VPTreeChebyshevIndex,
+        "cosine":    pynear.VPTreeCosineIndex,
         "hamming":   pynear.VPTreeBinaryIndex,
     }
     cls = metric_map.get(metric.lower())
