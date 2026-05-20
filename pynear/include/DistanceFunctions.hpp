@@ -301,6 +301,73 @@ static inline __m128 masked_read(int d, const float *x) {
     // cannot use AVX2 _mm_mask_set1_epi32
 }
 
+// 4-way batched L2 distance — compute distance(query, v[i]) for i in [0, n)
+// processing 4 neighbours in parallel to expose instruction-level parallelism.
+// Four independent FMA chains hide the FMA latency (~5 cycles on Skylake+)
+// far better than computing distances sequentially.
+//
+// Single-vector fallback for the remainder (< 4 neighbours).
+inline void batch_l2_f_avx2(const float* query, size_t d,
+                            const float* const* vectors,
+                            size_t n,
+                            float* out) {
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        __m256 s0 = _mm256_setzero_ps();
+        __m256 s1 = _mm256_setzero_ps();
+        __m256 s2 = _mm256_setzero_ps();
+        __m256 s3 = _mm256_setzero_ps();
+        const float* p0 = vectors[i + 0];
+        const float* p1 = vectors[i + 1];
+        const float* p2 = vectors[i + 2];
+        const float* p3 = vectors[i + 3];
+        size_t j = 0;
+        for (; j + 8 <= d; j += 8) {
+            __m256 q = _mm256_loadu_ps(query + j);
+            __m256 d0 = _mm256_sub_ps(q, _mm256_loadu_ps(p0 + j));
+            __m256 d1 = _mm256_sub_ps(q, _mm256_loadu_ps(p1 + j));
+            __m256 d2 = _mm256_sub_ps(q, _mm256_loadu_ps(p2 + j));
+            __m256 d3 = _mm256_sub_ps(q, _mm256_loadu_ps(p3 + j));
+            s0 = _mm256_fmadd_ps(d0, d0, s0);
+            s1 = _mm256_fmadd_ps(d1, d1, s1);
+            s2 = _mm256_fmadd_ps(d2, d2, s2);
+            s3 = _mm256_fmadd_ps(d3, d3, s3);
+        }
+        // Horizontal-add each accumulator + sqrt.
+        float r0 = sum8(s0), r1 = sum8(s1), r2 = sum8(s2), r3 = sum8(s3);
+        // Tail (dim % 8) — scalar.
+        for (; j < d; j++) {
+            float t;
+            t = query[j] - p0[j]; r0 += t * t;
+            t = query[j] - p1[j]; r1 += t * t;
+            t = query[j] - p2[j]; r2 += t * t;
+            t = query[j] - p3[j]; r3 += t * t;
+        }
+        out[i + 0] = std::sqrt(r0);
+        out[i + 1] = std::sqrt(r1);
+        out[i + 2] = std::sqrt(r2);
+        out[i + 3] = std::sqrt(r3);
+    }
+    // Remainder — < 4 neighbours, inline the single-vector SIMD path
+    // (avoids a forward-reference dependency on dist_l2_f_avx2 below).
+    for (; i < n; i++) {
+        const float* p = vectors[i];
+        __m256 sum = _mm256_setzero_ps();
+        size_t j = 0;
+        for (; j + 8 <= d; j += 8) {
+            __m256 q = _mm256_loadu_ps(query + j);
+            __m256 dd = _mm256_sub_ps(q, _mm256_loadu_ps(p + j));
+            sum = _mm256_fmadd_ps(dd, dd, sum);
+        }
+        float r = sum8(sum);
+        for (; j < d; j++) {
+            float t = query[j] - p[j];
+            r += t * t;
+        }
+        out[i] = std::sqrt(r);
+    }
+}
+
 float dist_l2_f_avx2(const arrayf &p1, const arrayf &p2) {
     unsigned int d = p1.size();
     __m256 msum1 = _mm256_setzero_ps();

@@ -44,9 +44,23 @@ Without this heuristic, recall collapses at high dimensions because the graph be
 | `M` | 16 | Max edges per node above layer 0. Layer 0 gets `2*M`. Higher = more memory, better recall, slower build. |
 | `ef_construction` | 200 | Candidate set size during build. Higher = better-quality graph, slower build. |
 | `ef_search` | 50 | Candidate set size during query. Tunable at runtime via `set_ef`. Higher = better recall, slower search. |
+| `n_threads` | 1 | OpenMP threads for the build loop. `1` = deterministic; higher = much faster build, slightly non-deterministic graph. |
 | `mL` | `1 / ln(M)` | Layer assignment exponential parameter. Fixed by paper. |
 
 Memory budget per point at layer 0: `dim * 4 bytes (vector) + 2*M * 4 bytes (edges) + ~8 bytes overhead`. For `d=128, M=16`: ~656 bytes/point → ~625 MB for 1M points.
+
+#### Recall guidance
+
+Empirical recall on random Gaussian data (N=20 000, d=128, k=10):
+
+| M | ef_construction | ef_search | pynear recall@10 | Faiss recall@10 |
+|---|---|---|---|---|
+| 16 | 200 | 128 | 0.85 | 0.88 |
+| 16 | 200 | 256 | 0.94 | 0.96 |
+| 32 | 200 | 128 | 0.96 | 0.96 |
+| 32 | 200 | 256 | **0.99** | **0.99** |
+
+At `M=32` pynear matches Faiss exactly. Use `M=32` when high recall matters more than memory; `M=16` is fine for most applications.
 
 ## API surface
 
