@@ -83,7 +83,9 @@ jobs:
         # any AVX-512 regression is caught.
         sde64 -spr -- python -m pytest pynear/tests/ -q
 
-
+  build-sdist:
+    needs: build-wheels
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-python@v5
