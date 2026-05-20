@@ -392,21 +392,22 @@ inline void batch_l2sq_sq8_avx2(const int8_t* query, size_t d,
             __m256i q_lo = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(q, 0));
             __m256i q_hi = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(q, 1));
 
-            #define ACCUM(acc, v) do {                                                              \
-                __m256i d_lo = _mm256_sub_epi16(q_lo,                                               \
-                    _mm256_cvtepi8_epi16(_mm256_extracti128_si256(v, 0)));                          \
-                __m256i d_hi = _mm256_sub_epi16(q_hi,                                               \
-                    _mm256_cvtepi8_epi16(_mm256_extracti128_si256(v, 1)));                          \
-                (acc) = _mm256_add_epi32((acc), _mm256_madd_epi16(d_lo, d_lo));                     \
-                (acc) = _mm256_add_epi32((acc), _mm256_madd_epi16(d_hi, d_hi));                     \
-            } while (0)
-
-            ACCUM(a0, v0);
-            ACCUM(a1, v1);
-            ACCUM(a2, v2);
-            ACCUM(a3, v3);
-
-            #undef ACCUM
+            // Accumulate (sum of squared diffs) for one DB vector into `acc`.
+            // Inlined per-vector to avoid a multi-line macro (MSVC has been
+            // brittle around those in some configurations).
+            auto accum_one = [q_lo, q_hi](__m256i acc, __m256i v) -> __m256i {
+                __m256i d_lo = _mm256_sub_epi16(q_lo,
+                    _mm256_cvtepi8_epi16(_mm256_extracti128_si256(v, 0)));
+                __m256i d_hi = _mm256_sub_epi16(q_hi,
+                    _mm256_cvtepi8_epi16(_mm256_extracti128_si256(v, 1)));
+                acc = _mm256_add_epi32(acc, _mm256_madd_epi16(d_lo, d_lo));
+                acc = _mm256_add_epi32(acc, _mm256_madd_epi16(d_hi, d_hi));
+                return acc;
+            };
+            a0 = accum_one(a0, v0);
+            a1 = accum_one(a1, v1);
+            a2 = accum_one(a2, v2);
+            a3 = accum_one(a3, v3);
         }
         alignas(32) int32_t b0[8], b1[8], b2[8], b3[8];
         _mm256_store_si256(reinterpret_cast<__m256i*>(b0), a0);
