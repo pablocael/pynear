@@ -162,6 +162,7 @@ def test_ivfflat_cosine_approximate_recall():
 
 def test_sklearn_adapter_cosine():
     """metric='cosine' must route to VPTreeCosineIndex and rank correctly."""
+    pytest.importorskip("sklearn", reason="scikit-learn not installed")
     from pynear.sklearn_adapter import PyNearNearestNeighbors
 
     rng = np.random.default_rng(0)
