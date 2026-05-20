@@ -985,11 +985,97 @@ float dist_chebyshev_f_avx2(const arrayf &p1, const arrayf &p2) {
 }
 
 #else // !(__AVX__ || __AVX2__) — scalar fallbacks for non-x86 platforms (e.g. arm64)
+       // and for x86 cross-compile builds where -mavx isn't passed (macos
+       // cibuildwheel arm64→x86_64 path falls here).
 
 double dist_l2_d_avx2(const arrayd &p1, const arrayd &p2) { return dist_l2_d(p1, p2); }
 float  dist_l2_f_avx2(const arrayf &p1, const arrayf &p2) { return dist_l2_f(p1, p2); }
 float  dist_l1_f_avx2(const arrayf &p1, const arrayf &p2) { return dist_l1_f(p1, p2); }
 float  dist_chebyshev_f_avx2(const arrayf &p1, const arrayf &p2) { return dist_chebyshev_f(p1, p2); }
+
+// ─── Scalar fallbacks for the L2² / dot / SQ8 batch family ────────────────
+// HNSWIndex.hpp references these unconditionally inside `if constexpr` arms,
+// so the symbols must exist even when AVX is unavailable.
+
+inline float vec_l2sq_avx2(const float* v, size_t d) {
+    float r = 0.0f;
+    for (size_t i = 0; i < d; i++) r += v[i] * v[i];
+    return r;
+}
+
+inline float dist_l2sq_raw_avx2(const float* x, const float* y, size_t d) {
+    float r = 0.0f;
+    for (size_t i = 0; i < d; i++) {
+        float t = x[i] - y[i];
+        r += t * t;
+    }
+    return r;
+}
+
+inline float dist_l2sq_f_avx2(const arrayf &p1, const arrayf &p2) {
+    return dist_l2sq_raw_avx2(p1.data(), p2.data(), p1.size());
+}
+
+inline float dot_f_avx2(const float* q, const float* v, size_t d) {
+    float r = 0.0f;
+    for (size_t i = 0; i < d; i++) r += q[i] * v[i];
+    return r;
+}
+
+inline void batch_dot_f_avx2(const float* query, size_t d,
+                              const float* const* vectors,
+                              size_t n,
+                              float* out_dots) {
+    for (size_t i = 0; i < n; i++) out_dots[i] = dot_f_avx2(query, vectors[i], d);
+}
+
+inline void batch_dot_f_avx2_8(const float* query, size_t d,
+                                const float* const* vectors,
+                                size_t n,
+                                float* out_dots) {
+    for (size_t i = 0; i < n; i++) out_dots[i] = dot_f_avx2(query, vectors[i], d);
+}
+
+inline void batch_l2_f_avx2(const float* query, size_t d,
+                             const float* const* vectors,
+                             size_t n,
+                             float* out) {
+    for (size_t i = 0; i < n; i++) {
+        out[i] = std::sqrt(dist_l2sq_raw_avx2(query, vectors[i], d));
+    }
+}
+
+inline void batch_l2sq_f_avx2(const float* query, size_t d,
+                               const float* const* vectors,
+                               size_t n,
+                               float* out) {
+    for (size_t i = 0; i < n; i++) {
+        out[i] = dist_l2sq_raw_avx2(query, vectors[i], d);
+    }
+}
+
+// SQ8 scalar fallbacks (used by HNSWL2IndexSQ8).
+inline int32_t dist_l2sq_sq8_avx2(const int8_t* x, const int8_t* y, size_t d) {
+    int32_t r = 0;
+    for (size_t i = 0; i < d; i++) {
+        int32_t t = static_cast<int32_t>(x[i]) - static_cast<int32_t>(y[i]);
+        r += t * t;
+    }
+    return r;
+}
+
+inline int32_t dist_l2sq_sq8(const SQ8Span& p1, const SQ8Span& p2) {
+    return dist_l2sq_sq8_avx2(p1.ptr, p2.ptr, p1.sz);
+}
+
+inline void batch_l2sq_sq8_avx2(const int8_t* query, size_t d,
+                                 const int8_t* const* vectors,
+                                 size_t n,
+                                 int32_t* out) {
+    for (size_t i = 0; i < n; i++) {
+        out[i] = dist_l2sq_sq8_avx2(query, vectors[i], d);
+    }
+}
 
 #endif // __AVX__
 
