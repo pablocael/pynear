@@ -33,7 +33,12 @@ def _tbb_available():
                 pass
 
 if sys.platform == "win32":
-    extra_compile_args = ["/Wall", "/arch:AVX", "/openmp"]  # /LTCG unrecognized here
+    # /arch:AVX2 enables AVX2 + FMA + BMI + F16C — needed for the
+    # _mm256_cvtepi8_epi16, _mm256_madd_epi16 (SQ8 kernels) and
+    # _mm256_fmadd_ps (L2/dot kernels) intrinsics. /arch:AVX alone is
+    # not enough on MSVC; it permits 256-bit float ops but not AVX2 or
+    # FMA intrinsics, so the build fails to find those symbols.
+    extra_compile_args = ["/Wall", "/arch:AVX2", "/openmp"]  # /LTCG unrecognized here
     extra_link_args = ["/LTCG"]  # /openmp unrecognized here
     extra_macros = [("ENABLE_OMP_PARALLEL", "1")]
 elif sys.platform == "darwin":
