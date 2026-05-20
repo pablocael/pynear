@@ -78,6 +78,12 @@ public:
     int n_threads() const { return _n_threads; }
     void set_n_threads(int n) { _n_threads = n; }
 
+    // Profiling: total distance calls since last reset. Useful for comparing
+    // beam-search efficiency against Faiss's hnsw_stats.ndis.
+    mutable uint64_t _dist_calls = 0;
+    uint64_t dist_calls() const { return _dist_calls; }
+    void reset_dist_calls() { _dist_calls = 0; }
+
     void set_ef(size_t ef_search) { _ef_search = ef_search; }
     size_t ef_search() const { return _ef_search; }
     size_t size() const { return _examples.size(); }
@@ -463,8 +469,13 @@ private:
                 if (n_unvis == 0) continue;
 
                 float dists[MAX_BATCH];
-                batch_l2_f_avx2(query.ptr, query.sz, vptr,
-                                n_unvis, dists);
+                // HNSW pipelines use the squared-L2 internal kernel (no sqrt
+                // in the hot loop) and the Python adapter applies sqrt only
+                // to the final top-k. Cosine adapter consumes squared L2
+                // directly (d_cos = L2_sq / 2).
+                batch_l2sq_f_avx2(query.ptr, query.sz, vptr,
+                                  n_unvis, dists);
+                _dist_calls += n_unvis;
 
                 for (int i = 0; i < n_unvis; i++) {
                     distT d = dists[i];

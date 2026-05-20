@@ -301,6 +301,99 @@ static inline __m128 masked_read(int d, const float *x) {
     // cannot use AVX2 _mm_mask_set1_epi32
 }
 
+// Squared L2 — same memory and FMA pattern as L2, no final sqrt.
+// Used internally by HNSW where ordering is preserved by squared distance
+// and we save ~10 cycle sqrt latency per distance (~2.5 ns at 4 GHz).
+// The HNSW adapter applies sqrt only to the final returned top-k.
+inline float dist_l2sq_raw_avx2(const float* x, const float* y, size_t d) {
+    __m256 s0 = _mm256_setzero_ps();
+    __m256 s1 = _mm256_setzero_ps();
+    __m256 s2 = _mm256_setzero_ps();
+    __m256 s3 = _mm256_setzero_ps();
+    while (d >= 32) {
+        __m256 x0 = _mm256_loadu_ps(x +  0);
+        __m256 x1 = _mm256_loadu_ps(x +  8);
+        __m256 x2 = _mm256_loadu_ps(x + 16);
+        __m256 x3 = _mm256_loadu_ps(x + 24);
+        __m256 d0 = _mm256_sub_ps(x0, _mm256_loadu_ps(y +  0));
+        __m256 d1 = _mm256_sub_ps(x1, _mm256_loadu_ps(y +  8));
+        __m256 d2 = _mm256_sub_ps(x2, _mm256_loadu_ps(y + 16));
+        __m256 d3 = _mm256_sub_ps(x3, _mm256_loadu_ps(y + 24));
+        s0 = _mm256_fmadd_ps(d0, d0, s0);
+        s1 = _mm256_fmadd_ps(d1, d1, s1);
+        s2 = _mm256_fmadd_ps(d2, d2, s2);
+        s3 = _mm256_fmadd_ps(d3, d3, s3);
+        x += 32; y += 32; d -= 32;
+    }
+    while (d >= 8) {
+        __m256 mx = _mm256_loadu_ps(x); x += 8;
+        __m256 my = _mm256_loadu_ps(y); y += 8;
+        __m256 dd = _mm256_sub_ps(mx, my);
+        s0 = _mm256_fmadd_ps(dd, dd, s0);
+        d -= 8;
+    }
+    __m256 sum = _mm256_add_ps(_mm256_add_ps(s0, s1), _mm256_add_ps(s2, s3));
+    float r = sum8(sum);
+    for (size_t j = 0; j < d; j++) {
+        float t = x[j] - y[j];
+        r += t * t;
+    }
+    return r;
+}
+
+// Batched squared L2 — 4-way to hide FMA latency.
+inline void batch_l2sq_f_avx2(const float* query, size_t d,
+                              const float* const* vectors,
+                              size_t n,
+                              float* out) {
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        __m256 s0 = _mm256_setzero_ps();
+        __m256 s1 = _mm256_setzero_ps();
+        __m256 s2 = _mm256_setzero_ps();
+        __m256 s3 = _mm256_setzero_ps();
+        const float* p0 = vectors[i + 0];
+        const float* p1 = vectors[i + 1];
+        const float* p2 = vectors[i + 2];
+        const float* p3 = vectors[i + 3];
+        size_t j = 0;
+        for (; j + 8 <= d; j += 8) {
+            __m256 q = _mm256_loadu_ps(query + j);
+            __m256 d0 = _mm256_sub_ps(q, _mm256_loadu_ps(p0 + j));
+            __m256 d1 = _mm256_sub_ps(q, _mm256_loadu_ps(p1 + j));
+            __m256 d2 = _mm256_sub_ps(q, _mm256_loadu_ps(p2 + j));
+            __m256 d3 = _mm256_sub_ps(q, _mm256_loadu_ps(p3 + j));
+            s0 = _mm256_fmadd_ps(d0, d0, s0);
+            s1 = _mm256_fmadd_ps(d1, d1, s1);
+            s2 = _mm256_fmadd_ps(d2, d2, s2);
+            s3 = _mm256_fmadd_ps(d3, d3, s3);
+        }
+        float r0 = sum8(s0), r1 = sum8(s1), r2 = sum8(s2), r3 = sum8(s3);
+        for (; j < d; j++) {
+            float t;
+            t = query[j] - p0[j]; r0 += t * t;
+            t = query[j] - p1[j]; r1 += t * t;
+            t = query[j] - p2[j]; r2 += t * t;
+            t = query[j] - p3[j]; r3 += t * t;
+        }
+        out[i + 0] = r0;
+        out[i + 1] = r1;
+        out[i + 2] = r2;
+        out[i + 3] = r3;
+    }
+    for (; i < n; i++) {
+        out[i] = dist_l2sq_raw_avx2(query, vectors[i], d);
+    }
+}
+
+// FlatSpan wrapper used as the function-pointer template parameter for
+// HNSWIndex. Returns squared L2; the HNSW Python adapter applies sqrt
+// when handing distances back to the caller so the public API still
+// reports L2 (sqrt'd) distances.
+inline float dist_l2sq_f_avx2(const arrayf &p1, const arrayf &p2) {
+    return dist_l2sq_raw_avx2(p1.data(), p2.data(), p1.size());
+}
+
 // 4-way batched L2 distance — compute distance(query, v[i]) for i in [0, n)
 // processing 4 neighbours in parallel to expose instruction-level parallelism.
 // Four independent FMA chains hide the FMA latency (~5 cycles on Skylake+)
@@ -370,20 +463,51 @@ inline void batch_l2_f_avx2(const float* query, size_t d,
 
 float dist_l2_f_avx2(const arrayf &p1, const arrayf &p2) {
     unsigned int d = p1.size();
-    __m256 msum1 = _mm256_setzero_ps();
+    // Four independent FMA accumulators hide FMA latency (~5 cycles on
+    // Skylake+/Zen+). With a single accumulator this loop was latency-bound:
+    // ~1 FMA every 5 cycles. With four accumulators we issue ~1 FMA per
+    // cycle → ~4× throughput on the hot inner loop.
+    __m256 s0 = _mm256_setzero_ps();
+    __m256 s1 = _mm256_setzero_ps();
+    __m256 s2 = _mm256_setzero_ps();
+    __m256 s3 = _mm256_setzero_ps();
 
     const float *x = p1.data();
     const float *y = p2.data();
 
+    // 32 floats per iteration (4 lanes × 8 floats).
+    while (d >= 32) {
+        __m256 x0 = _mm256_loadu_ps(x +  0);
+        __m256 x1 = _mm256_loadu_ps(x +  8);
+        __m256 x2 = _mm256_loadu_ps(x + 16);
+        __m256 x3 = _mm256_loadu_ps(x + 24);
+        __m256 y0 = _mm256_loadu_ps(y +  0);
+        __m256 y1 = _mm256_loadu_ps(y +  8);
+        __m256 y2 = _mm256_loadu_ps(y + 16);
+        __m256 y3 = _mm256_loadu_ps(y + 24);
+        __m256 d0 = _mm256_sub_ps(x0, y0);
+        __m256 d1 = _mm256_sub_ps(x1, y1);
+        __m256 d2 = _mm256_sub_ps(x2, y2);
+        __m256 d3 = _mm256_sub_ps(x3, y3);
+        s0 = _mm256_fmadd_ps(d0, d0, s0);
+        s1 = _mm256_fmadd_ps(d1, d1, s1);
+        s2 = _mm256_fmadd_ps(d2, d2, s2);
+        s3 = _mm256_fmadd_ps(d3, d3, s3);
+        x += 32; y += 32;
+        d -= 32;
+    }
+    // Drain remaining 8-float chunks into s0.
     while (d >= 8) {
         __m256 mx = _mm256_loadu_ps(x);
         x += 8;
         __m256 my = _mm256_loadu_ps(y);
         y += 8;
         const __m256 a_m_b1 = _mm256_sub_ps(mx, my);
-        msum1 = _mm256_fmadd_ps(a_m_b1, a_m_b1, msum1);  // FMA: 1 insn vs 2
+        s0 = _mm256_fmadd_ps(a_m_b1, a_m_b1, s0);
         d -= 8;
     }
+    // Combine all four accumulators into one.
+    __m256 msum1 = _mm256_add_ps(_mm256_add_ps(s0, s1), _mm256_add_ps(s2, s3));
 
     __m128 msum2 = _mm256_extractf128_ps(msum1, 1);
     msum2 = _mm_add_ps(msum2, _mm256_extractf128_ps(msum1, 0));

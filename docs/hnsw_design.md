@@ -49,6 +49,40 @@ Without this heuristic, recall collapses at high dimensions because the graph be
 
 Memory budget per point at layer 0: `dim * 4 bytes (vector) + 2*M * 4 bytes (edges) + ~8 bytes overhead`. For `d=128, M=16`: ~656 bytes/point → ~625 MB for 1M points.
 
+#### Query-latency notes
+
+Profiling against Faiss with identical params (N=20k, d=128, M=16,
+ef_construction=200, ef_search=256) shows:
+
+| | pynear | Faiss |
+|---|---|---|
+| Distance computations per query (`ndis`) | ~4 810 | ~4 930 |
+| Query time | ~115 µs | ~9 µs |
+| Per distance | ~24 ns | ~2 ns* |
+
+*Faiss's `ndis` may count distance-computer invocations rather than
+individual SIMD distances, so the 2 ns figure is misleading. The
+real gap is closer to ~3–4 × on per-distance throughput plus a
+larger gap in heap-management overhead — Faiss uses a custom
+`MinimaxHeap` whereas pynear uses `std::vector` + `std::push_heap`.
+
+Closing the heap gap would require ~2 days of work to write a custom
+data structure; closing the per-distance gap would require AVX-512
+kernels (~1 week). Both are post-release follow-ups.
+
+For profiling, the index exposes:
+
+```python
+idx.reset_dist_calls()
+idx.searchKNN(queries, k=k)
+print(idx.dist_calls())  # total distance computations since reset
+```
+
+The HNSW internal pipeline uses **squared L2** distance to skip ~4 800
+`sqrt` operations per query (each ~10 cycle latency). The public
+`searchKNN` / `search1NN` still return sqrt'd L2 distances — sqrt is
+applied only to the final top-k.
+
 #### Recall guidance
 
 Empirical recall on random Gaussian data (N=20 000, d=128, k=10):

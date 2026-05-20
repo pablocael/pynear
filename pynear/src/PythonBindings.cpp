@@ -343,6 +343,12 @@ public:
         std::vector<std::vector<int64_t>> idx;
         std::vector<std::vector<float>> dist;
         hnsw.searchKNN(spans, k, idx, dist);
+        // HNSW pipeline runs on squared L2 internally (skips sqrt in the
+        // hot loop). Apply sqrt only to the final returned top-k so the
+        // public API still reports L2 distances.
+        for (auto& row : dist) {
+            for (float& v : row) v = std::sqrt(v);
+        }
         return std::make_tuple(std::move(idx), std::move(dist));
     }
 
@@ -361,6 +367,7 @@ public:
         std::vector<int64_t> idx;
         std::vector<float> dist;
         hnsw.search1NN(spans, idx, dist);
+        for (float& v : dist) v = std::sqrt(v);
         return std::make_tuple(std::move(idx), std::move(dist));
     }
 
@@ -492,10 +499,10 @@ public:
         std::vector<std::vector<int64_t>> idx;
         std::vector<std::vector<float>> dist;
         hnsw.searchKNN(spans, k, idx, dist);
-        // hnsw was built with dist_l2_f_avx2 which returns L2 (= sqrt of L2^2).
-        // Convert to cosine distance: d_cos = L2^2 / 2.
+        // hnsw was built with dist_l2sq_f_avx2 which returns L2² directly.
+        // Cosine distance: d_cos = L2² / 2 for unit vectors.
         for (auto& row : dist) {
-            for (float& v : row) v = (v * v) * 0.5f;
+            for (float& v : row) v = v * 0.5f;
         }
         return std::make_tuple(std::move(idx), std::move(dist));
     }
@@ -518,7 +525,7 @@ public:
         std::vector<int64_t> idx;
         std::vector<float> dist;
         hnsw.search1NN(spans, idx, dist);
-        for (float& v : dist) v = (v * v) * 0.5f;
+        for (float& v : dist) v = v * 0.5f;
         return std::make_tuple(std::move(idx), std::move(dist));
     }
 
@@ -586,7 +593,7 @@ public:
         return p;
     }
 
-    hnsw::HNSWIndex<arrayf, float, dist_l2_f_avx2> hnsw;
+    hnsw::HNSWIndex<arrayf, float, dist_l2sq_f_avx2> hnsw;
 };
 
 // HNSWBinaryNumpyAdapter — HNSW over Hamming distance.
@@ -947,21 +954,25 @@ PYBIND11_MODULE(_pynear, m) {
         .def("search1NN", &VPTreeCosineNumpyAdapter::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeCosineNumpyAdapter::get_state, &VPTreeCosineNumpyAdapter::set_state));
 
-    py::class_<HNSWFloatNumpyAdapter<dist_l2_f_avx2>>(m, "HNSWL2Index")
+    py::class_<HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>>(m, "HNSWL2Index")
         .def(py::init<size_t, size_t, size_t, uint64_t, int>(),
              py::arg("M") = 16, py::arg("ef_construction") = 200,
              py::arg("ef_search") = 50, py::arg("seed") = 42,
              py::arg("n_threads") = 1)
-        .def("set", &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::set, py::arg("vectors"))
-        .def("searchKNN", &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::searchKNN,
+        .def("set", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::set, py::arg("vectors"))
+        .def("searchKNN", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::searchKNN,
              py::arg("vectors"), py::arg("k"))
-        .def("search1NN", &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::search1NN, py::arg("vectors"))
-        .def("set_ef", &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::set_ef, py::arg("ef_search"))
-        .def_property_readonly("ef_search", &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::ef_search)
-        .def_property_readonly("size", &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::size)
-        .def_property_readonly("dim", &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::dim)
-        .def(py::pickle(&HNSWFloatNumpyAdapter<dist_l2_f_avx2>::get_state,
-                        &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::set_state));
+        .def("search1NN", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::search1NN, py::arg("vectors"))
+        .def("set_ef", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::set_ef, py::arg("ef_search"))
+        .def("dist_calls",
+             [](const HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>& a){ return a.hnsw.dist_calls(); })
+        .def("reset_dist_calls",
+             [](HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>& a){ a.hnsw.reset_dist_calls(); })
+        .def_property_readonly("ef_search", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::ef_search)
+        .def_property_readonly("size", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::size)
+        .def_property_readonly("dim", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::dim)
+        .def(py::pickle(&HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::get_state,
+                        &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::set_state));
 
     py::class_<HNSWCosineNumpyAdapter>(m, "HNSWCosineIndex")
         .def(py::init<size_t, size_t, size_t, uint64_t, int>(),
