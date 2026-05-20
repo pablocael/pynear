@@ -5,8 +5,31 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/pynear)](https://pypi.org/project/pynear/)
 [![CI](https://github.com/pablocael/pynear/actions/workflows/pythonpackage.yml/badge.svg)](https://github.com/pablocael/pynear/actions/workflows/pythonpackage.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/pablocael/pynear?style=social)](https://github.com/pablocael/pynear/stargazers)
 
-**Fast, exact and approximate K-nearest-neighbour search for Python**
+> **Fast KNN that doesn't make you choose between exact answers and production speed.**
+> Drop-in for scikit-learn. SIMD-accelerated. Up to **257× faster than Faiss** on binary descriptors at 100% recall.
+
+![PyNear demo](docs/img/demo.gif)
+
+```python
+import numpy as np, pynear
+
+db      = np.random.rand(1_000_000, 128).astype(np.float32)
+queries = np.random.rand(10, 128).astype(np.float32)
+
+index = pynear.VPTreeL2Index()
+index.set(db)
+indices, distances = index.searchKNN(queries, k=5)
+```
+
+```console
+pip install pynear     # pre-built wheels, no compiler needed
+```
+
+A metric-space KNN library with a C++ core. **VP-Trees** for exact search up to ~256-D, **IVF-Flat** for fast approximate float search at 512–1024-D, **MIH** and **IVF-Binary** for Hamming search on image descriptors. Already on scikit-learn? [Switch with a one-line import change.](#migrating-from-scikit-learn)
+
+---
 
 ## Table of Contents
 
@@ -24,17 +47,6 @@
 - [Development](#development)
 
 ---
-
-![PyNear demo](docs/img/demo.gif)
-
-PyNear is a Python library with a C++ core for exact or approximate (fast) KNN search over metric
-spaces.  It is built around [Vantage Point Trees](./docs/vptrees.md), a metric
-tree that scales well to higher dimensionalities where kd-trees degrade, and
-uses SIMD intrinsics (AVX2 on x86-64, portable fallbacks on arm64/Apple
-Silicon) to accelerate the hot distance computation paths.
-Already using scikit-learn's KNN? PyNear ships **drop-in adapter classes** that
-implement the same `fit` / `predict` / `score` / `kneighbors` API —
-[migrate in one line](#migrating-from-scikit-learn).
 
 ### Why PyNear?
 
