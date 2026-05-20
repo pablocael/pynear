@@ -311,8 +311,9 @@ public:
     HNSWFloatNumpyAdapter(size_t M = 16,
                           size_t ef_construction = 200,
                           size_t ef_search = 50,
-                          uint64_t seed = 42)
-        : hnsw(M, ef_construction, ef_search, seed) {}
+                          uint64_t seed = 42,
+                          int n_threads = 1)
+        : hnsw(M, ef_construction, ef_search, seed, n_threads) {}
 
     void set(py::array_t<float, py::array::c_style | py::array::forcecast> arr) {
         auto buf = arr.request();
@@ -439,8 +440,9 @@ public:
     HNSWCosineNumpyAdapter(size_t M = 16,
                            size_t ef_construction = 200,
                            size_t ef_search = 50,
-                           uint64_t seed = 42)
-        : hnsw(M, ef_construction, ef_search, seed) {}
+                           uint64_t seed = 42,
+                           int n_threads = 1)
+        : hnsw(M, ef_construction, ef_search, seed, n_threads) {}
 
     static void normalize_rows(const float* src, float* dst, size_t n, size_t d) {
         for (size_t i = 0; i < n; i++) {
@@ -595,8 +597,9 @@ public:
     HNSWBinaryNumpyAdapter(size_t M = 16,
                            size_t ef_construction = 200,
                            size_t ef_search = 50,
-                           uint64_t seed = 42)
-        : hnsw(M, ef_construction, ef_search, seed) {}
+                           uint64_t seed = 42,
+                           int n_threads = 1)
+        : hnsw(M, ef_construction, ef_search, seed, n_threads) {}
 
     void set(const ndarrayli& data) { hnsw.set(data); }
 
@@ -643,8 +646,9 @@ public:
                                 size_t ef_search = 50,
                                 uint64_t seed = 42,
                                 int32_t mih_m = 8,
-                                int32_t mih_radius = 8)
-        : hnsw(M, ef_construction, ef_search, seed),
+                                int32_t mih_radius = 8,
+                                int n_threads = 1)
+        : hnsw(M, ef_construction, ef_search, seed, n_threads),
           mih(mih_m),
           _mih_radius(mih_radius) {}
 
@@ -944,9 +948,10 @@ PYBIND11_MODULE(_pynear, m) {
         .def(py::pickle(&VPTreeCosineNumpyAdapter::get_state, &VPTreeCosineNumpyAdapter::set_state));
 
     py::class_<HNSWFloatNumpyAdapter<dist_l2_f_avx2>>(m, "HNSWL2Index")
-        .def(py::init<size_t, size_t, size_t, uint64_t>(),
+        .def(py::init<size_t, size_t, size_t, uint64_t, int>(),
              py::arg("M") = 16, py::arg("ef_construction") = 200,
-             py::arg("ef_search") = 50, py::arg("seed") = 42)
+             py::arg("ef_search") = 50, py::arg("seed") = 42,
+             py::arg("n_threads") = 1)
         .def("set", &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::set, py::arg("vectors"))
         .def("searchKNN", &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::searchKNN,
              py::arg("vectors"), py::arg("k"))
@@ -959,9 +964,10 @@ PYBIND11_MODULE(_pynear, m) {
                         &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::set_state));
 
     py::class_<HNSWCosineNumpyAdapter>(m, "HNSWCosineIndex")
-        .def(py::init<size_t, size_t, size_t, uint64_t>(),
+        .def(py::init<size_t, size_t, size_t, uint64_t, int>(),
              py::arg("M") = 16, py::arg("ef_construction") = 200,
-             py::arg("ef_search") = 50, py::arg("seed") = 42)
+             py::arg("ef_search") = 50, py::arg("seed") = 42,
+             py::arg("n_threads") = 1)
         .def("set", &HNSWCosineNumpyAdapter::set, py::arg("vectors"))
         .def("searchKNN", &HNSWCosineNumpyAdapter::searchKNN, py::arg("vectors"), py::arg("k"))
         .def("search1NN", &HNSWCosineNumpyAdapter::search1NN, py::arg("vectors"))
@@ -973,9 +979,10 @@ PYBIND11_MODULE(_pynear, m) {
                         &HNSWCosineNumpyAdapter::set_state));
 
     py::class_<HNSWBinaryNumpyAdapter<dist_hamming>>(m, "HNSWBinaryIndex")
-        .def(py::init<size_t, size_t, size_t, uint64_t>(),
+        .def(py::init<size_t, size_t, size_t, uint64_t, int>(),
              py::arg("M") = 16, py::arg("ef_construction") = 200,
-             py::arg("ef_search") = 50, py::arg("seed") = 42)
+             py::arg("ef_search") = 50, py::arg("seed") = 42,
+             py::arg("n_threads") = 1)
         .def("set", &HNSWBinaryNumpyAdapter<dist_hamming>::set, py::arg("vectors"))
         .def("searchKNN", &HNSWBinaryNumpyAdapter<dist_hamming>::searchKNN,
              py::arg("vectors"), py::arg("k"))
@@ -988,10 +995,11 @@ PYBIND11_MODULE(_pynear, m) {
         "Novel variant: HNSW over Hamming distance, layer-0 beam search seeded with "
         "exact MIH lookups within a Hamming radius. Gives exact small-radius retrieval "
         "AND HNSW robustness for larger queries in one index. See docs/hnsw_design.md.")
-        .def(py::init<size_t, size_t, size_t, uint64_t, int32_t, int32_t>(),
+        .def(py::init<size_t, size_t, size_t, uint64_t, int32_t, int32_t, int>(),
              py::arg("M") = 16, py::arg("ef_construction") = 200,
              py::arg("ef_search") = 50, py::arg("seed") = 42,
-             py::arg("mih_m") = 8, py::arg("mih_radius") = 8)
+             py::arg("mih_m") = 8, py::arg("mih_radius") = 8,
+             py::arg("n_threads") = 1)
         .def("set", &MIHSeededHNSWBinaryAdapter::set, py::arg("vectors"))
         .def("searchKNN", &MIHSeededHNSWBinaryAdapter::searchKNN,
              py::arg("vectors"), py::arg("k"))

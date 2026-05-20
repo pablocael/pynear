@@ -58,7 +58,7 @@ def bench_float_l2(n: int = 20_000, d: int = 128, k: int = 10):
     ref = brute_l2(db, q, k)
     rows = []
 
-    # pynear HNSW
+    # pynear HNSW, single-threaded build (default)
     for ef in (32, 64, 128, 256):
         idx = pynear.HNSWL2Index(M=16, ef_construction=200, ef_search=ef)
         t0 = time.perf_counter(); idx.set(db); build_s = time.perf_counter() - t0
@@ -66,8 +66,20 @@ def bench_float_l2(n: int = 20_000, d: int = 128, k: int = 10):
         pi, _ = idx.searchKNN(q, k=k)
         query_s = time.perf_counter() - t0
         pi = np.array(pi)[:, ::-1]
-        rows.append(("pynear.HNSWL2Index", f"M=16,ef={ef}", build_s, query_s / len(q) * 1e3,
-                     recall_at_k(pi, ref, k)))
+        rows.append(("pynear.HNSWL2Index", f"M=16,ef={ef},nt=1", build_s,
+                     query_s / len(q) * 1e3, recall_at_k(pi, ref, k)))
+
+    # pynear HNSW, parallel build
+    nt = max(1, (os.cpu_count() or 1))
+    for ef in (64, 256):
+        idx = pynear.HNSWL2Index(M=16, ef_construction=200, ef_search=ef, n_threads=nt)
+        t0 = time.perf_counter(); idx.set(db); build_s = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        pi, _ = idx.searchKNN(q, k=k)
+        query_s = time.perf_counter() - t0
+        pi = np.array(pi)[:, ::-1]
+        rows.append(("pynear.HNSWL2Index", f"M=16,ef={ef},nt={nt}", build_s,
+                     query_s / len(q) * 1e3, recall_at_k(pi, ref, k)))
 
     # Faiss HNSW
     if HAS_FAISS:

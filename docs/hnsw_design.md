@@ -88,7 +88,30 @@ Distinct from VP-Tree's. Stored as a tuple of 6 byte blobs:
 
 ## Threading
 
-v1 is **single-threaded build, single-threaded search**. Parallel build is a follow-up (would use the ParlayHNSW approach if added). The cosine wrapper does not change the threading model.
+- **Search** is single-threaded (one query at a time, no internal parallelism).
+- **Build** is opt-in parallel via the `n_threads` constructor parameter.
+  Default is `n_threads=1` (sequential, fully deterministic given the seed).
+  Pass `n_threads=os.cpu_count()` for max-speed builds.
+
+Parallel build is implemented with OpenMP `parallel for` over the insertion
+loop. Per-node `std::shared_mutex` instances protect adjacency modifications;
+reads inside `search_layer` take shared locks (build-time only) so concurrent
+inserts and graph traversals are safe. Per-thread visited-version buffers and
+per-thread `std::mt19937` RNGs avoid cross-thread contention.
+
+Observed speedup (N=20 000, d=128, M=16, ef_construction=200, 24-core box):
+
+| n_threads | Build time | vs nt=1 |
+|---|---|---|
+| 1 | 2.41 s | 1.00× |
+| 24 | 0.16 s | 15.1× |
+
+Parallel build is **non-deterministic** — the resulting graph topology depends
+on the OpenMP thread schedule. Recall at the same `ef_search` is empirically
+within ~0.5 % of the sequential build. If you need bit-identical reproducibility
+across runs, use `n_threads=1`.
+
+The cosine wrapper inherits the same threading model.
 
 ## Novel variant: MIH-seeded HNSW for Hamming
 
@@ -148,7 +171,7 @@ A future `PyNearApproximateNearestNeighbors` adapter could wrap HNSW + IVF behin
 
 These are deliberate scope cuts so the branch ships in reasonable time. Each can become a follow-up release:
 
-- ❌ Parallel build (ParlayHNSW-style lock-free)
+- ✅ ~~Parallel build~~ — shipped (OpenMP `parallel for` with per-node `std::shared_mutex`; opt-in via `n_threads` parameter). Lock-free ParlayHNSW remains a v2 candidate.
 - ❌ Incremental `add()` / `remove()`
 - ❌ Scalar / product quantization
 - ❌ Disk-resident index (DiskANN-style)

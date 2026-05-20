@@ -23,23 +23,34 @@ def section(title: str) -> None:
 
 
 def hnsw_l2_demo() -> None:
+    import os
     section("HNSWL2Index — float L2 ANN")
     rng = np.random.default_rng(42)
     db = rng.standard_normal((50_000, 128)).astype(np.float32)
     queries = rng.standard_normal((100, 128)).astype(np.float32)
 
+    # Sequential build (default, deterministic)
     idx = pynear.HNSWL2Index(M=16, ef_construction=200, ef_search=50)
     t0 = time.perf_counter()
     idx.set(db)
-    build_s = time.perf_counter() - t0
+    seq_build = time.perf_counter() - t0
+
+    # Parallel build (opt-in via n_threads)
+    nt = max(1, os.cpu_count() or 1)
+    idx_par = pynear.HNSWL2Index(M=16, ef_construction=200, ef_search=50, n_threads=nt)
+    t0 = time.perf_counter()
+    idx_par.set(db)
+    par_build = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    indices, distances = idx.searchKNN(queries, k=10)
+    indices, _ = idx.searchKNN(queries, k=10)
     query_s = time.perf_counter() - t0
 
-    print(f"  N=50_000  D=128  build={build_s:.2f}s  query={query_s*1000/len(queries):.2f}ms/query")
+    print(f"  N=50_000  D=128")
+    print(f"  build seq (nt=1):  {seq_build:.2f}s")
+    print(f"  build par (nt={nt}): {par_build:.2f}s   speedup={seq_build/par_build:.1f}x")
+    print(f"  query: {query_s*1000/len(queries):.3f}ms/query")
     print(f"  top-3 NN of query 0 (nearest-first): {list(indices[0])[::-1][:3]}")
-    print(f"  ef_search is runtime-tunable: idx.set_ef(200)")
 
 
 def hnsw_cosine_demo() -> None:

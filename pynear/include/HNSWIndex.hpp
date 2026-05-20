@@ -18,11 +18,20 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <memory>
+#include <mutex>
 #include <queue>
 #include <random>
+#include <shared_mutex>
 #include <stdexcept>
-#include <unordered_set>
 #include <vector>
+
+#ifdef _OPENMP
+#include <omp.h>
+#else
+inline int omp_get_max_threads() { return 1; }
+inline int omp_get_thread_num()  { return 0; }
+#endif
 
 #include "DistanceFunctions.hpp"
 
@@ -49,7 +58,8 @@ template <typename distT> struct DistNodeMax {
 template <typename T, typename distT, distT (*distance_fn)(const T&, const T&)>
 class HNSWIndex {
 public:
-    HNSWIndex(size_t M = 16, size_t ef_construction = 200, size_t ef_search = 50, uint64_t seed = 42)
+    HNSWIndex(size_t M = 16, size_t ef_construction = 200, size_t ef_search = 50,
+              uint64_t seed = 42, int n_threads = 1)
         : _M(M),
           _M_max0(2 * M),
           _ef_construction(ef_construction),
@@ -58,10 +68,15 @@ public:
           _entry_point(-1),
           _top_level(-1),
           _dim(0),
-          _rng(seed) {
+          _rng(seed),
+          _seed_used(seed),
+          _n_threads(n_threads) {
         if (M < 2) throw std::invalid_argument("M must be >= 2");
         if (ef_construction < 1) throw std::invalid_argument("ef_construction must be >= 1");
     }
+
+    int n_threads() const { return _n_threads; }
+    void set_n_threads(int n) { _n_threads = n; }
 
     void set_ef(size_t ef_search) { _ef_search = ef_search; }
     size_t ef_search() const { return _ef_search; }
@@ -100,10 +115,25 @@ public:
 
         _levels.assign(_examples.size(), 0);
         _adjacency.assign(_examples.size(), std::vector<std::vector<int32_t>>{});
+        init_thread_resources(_examples.size());
 
-        for (size_t i = 0; i < _examples.size(); i++) {
-            add_point(static_cast<int32_t>(i));
+        _during_build = true;
+        if (_n_threads <= 1) {
+            // Sequential build — fully deterministic given the seed.
+            for (size_t i = 0; i < _examples.size(); i++) {
+                add_point(static_cast<int32_t>(i));
+            }
+        } else {
+            // Parallel build. Per-node shared_mutexes protect adjacency
+            // modifications; reads in search_layer take shared locks via
+            // read_neighbours(). Graph topology is non-deterministic across
+            // runs but search quality is comparable to the sequential build.
+#pragma omp parallel for schedule(dynamic, 64) num_threads(_n_threads)
+            for (int64_t i = 0; i < (int64_t)_examples.size(); i++) {
+                add_point(static_cast<int32_t>(i));
+            }
         }
+        _during_build = false;
     }
 
     // Query: returns top-k indices and distances per query.
@@ -225,6 +255,7 @@ public:
         }
 
         _adjacency.assign(n, std::vector<std::vector<int32_t>>{});
+        init_thread_resources(n);
         for (size_t i = 0; i < n; i++) {
             int32_t start = adj_offsets[2 * i];
             int32_t nlayers = _levels[i] + 1;
@@ -252,6 +283,12 @@ public:
         _flat_backing.clear();
         _levels.clear();
         _adjacency.clear();
+        _visited_per_thread.clear();
+        _visited_version_per_thread.clear();
+        _rng_per_thread.clear();
+        _node_locks.reset();
+        _num_locks = 0;
+        _entry_lock.reset();
         _entry_point = -1;
         _top_level = -1;
         _dim = 0;
@@ -262,8 +299,9 @@ private:
 
     int32_t random_level() {
         std::uniform_real_distribution<double> u(0.0, 1.0);
+        auto& rng = _rng_per_thread.empty() ? _rng : _rng_per_thread[omp_get_thread_num()];
         double r;
-        do { r = u(_rng); } while (r <= 0.0);  // avoid log(0)
+        do { r = u(rng); } while (r <= 0.0);  // avoid log(0)
         return static_cast<int32_t>(-std::log(r) * _mL);
     }
 
@@ -275,9 +313,9 @@ private:
         bool changed = true;
         while (changed) {
             changed = false;
-            if (layer >= static_cast<int32_t>(_adjacency[current].size())) break;
-            const auto& neighbours = _adjacency[current][layer];
-            for (int32_t n : neighbours) {
+            NeighbourView nv = read_neighbours(current, layer);
+            for (size_t i = 0; i < nv.count; i++) {
+                int32_t n = nv.ptr[i];
                 distT d = distance_fn(query, _examples[n]);
                 if (d < current_d) {
                     current_d = d;
@@ -289,12 +327,38 @@ private:
         return current;
     }
 
+    // A neighbour view that's either:
+    //   - a borrowed pointer into _adjacency (post-build / non-locking path)
+    //   - an owned copy taken under a shared lock (build-time path)
+    // The two-mode design avoids copying neighbour lists on every visit at
+    // query time (saving an alloc + memcpy per node visited).
+    struct NeighbourView {
+        const int32_t* ptr = nullptr;
+        size_t count = 0;
+        std::vector<int32_t> owned;
+    };
+
+    NeighbourView read_neighbours(int32_t node, int32_t layer) const {
+        NeighbourView v;
+        if (_during_build && _num_locks > 0) {
+            std::shared_lock<std::shared_mutex> rlock(_node_locks[node]);
+            if (layer >= (int32_t)_adjacency[node].size()) return v;
+            v.owned = _adjacency[node][layer];
+            v.ptr = v.owned.data();
+            v.count = v.owned.size();
+            return v;
+        }
+        if (layer >= (int32_t)_adjacency[node].size()) return v;
+        v.ptr = _adjacency[node][layer].data();
+        v.count = _adjacency[node][layer].size();
+        return v;
+    }
+
     // Beam search at a given layer. Returns up to ef candidates ordered by
     // distance (any order in the heap; caller sorts).
     std::vector<DistNode<distT>>
     search_layer(const T& query, int32_t entry, size_t ef, int32_t layer) const {
-        std::unordered_set<int32_t> visited;
-        visited.reserve(ef * 4);
+        const uint32_t ver = next_visited_version();
 
         // Candidates min-heap (explore nearest first)
         std::priority_queue<DistNode<distT>,
@@ -308,7 +372,7 @@ private:
         distT d_entry = distance_fn(query, _examples[entry]);
         candidates.push({d_entry, entry});
         results.push({d_entry, entry});
-        visited.insert(entry);
+        visited_buf()[entry] = ver;
 
         while (!candidates.empty()) {
             DistNode<distT> cur = candidates.top();
@@ -319,27 +383,29 @@ private:
                 break;
             }
 
-            if (layer >= static_cast<int32_t>(_adjacency[cur.node_id].size())) continue;
-            const auto& neighbours = _adjacency[cur.node_id][layer];
+            NeighbourView nv = read_neighbours(cur.node_id, layer);
+            if (nv.count == 0) continue;
 
             // Prefetch the next few neighbours' vectors to reduce L3 misses.
 #if defined(__AVX__) || defined(__AVX2__)
-            for (size_t pi = 0; pi < neighbours.size() && pi < 4; pi++) {
+            for (size_t pi = 0; pi < nv.count && pi < 4; pi++) {
                 if constexpr (std::is_same_v<T, FlatSpan>) {
-                    _mm_prefetch(reinterpret_cast<const char*>(_examples[neighbours[pi]].ptr),
+                    _mm_prefetch(reinterpret_cast<const char*>(_examples[nv.ptr[pi]].ptr),
                                  _MM_HINT_T0);
                 }
             }
 #endif
 
-            for (size_t ni = 0; ni < neighbours.size(); ni++) {
-                int32_t n = neighbours[ni];
-                if (!visited.insert(n).second) continue;
+            auto& vis = visited_buf();
+            for (size_t ni = 0; ni < nv.count; ni++) {
+                int32_t n = nv.ptr[ni];
+                if (vis[n] == ver) continue;
+                vis[n] = ver;
 #if defined(__AVX__) || defined(__AVX2__)
-                if (ni + 4 < neighbours.size()) {
+                if (ni + 4 < nv.count) {
                     if constexpr (std::is_same_v<T, FlatSpan>) {
                         _mm_prefetch(
-                            reinterpret_cast<const char*>(_examples[neighbours[ni + 4]].ptr),
+                            reinterpret_cast<const char*>(_examples[nv.ptr[ni + 4]].ptr),
                             _MM_HINT_T0);
                     }
                 }
@@ -406,25 +472,48 @@ private:
     }
 
     // Insert one point at random level, link it via the α-heuristic.
+    //
+    // Thread-safety: callable concurrently from OpenMP threads. Writes to
+    // adjacency lists are protected by per-node std::shared_mutex; the
+    // entry-point/top-level globals are guarded by _entry_lock; reads inside
+    // search_layer also take shared locks via read_neighbours().
     void add_point(int32_t pidx) {
         int32_t level = random_level();
+
+        // Own adjacency setup. No lock needed because no other thread can
+        // reach pidx yet (pidx is unreachable from the graph until we add
+        // reverse edges below).
         _levels[pidx] = level;
         _adjacency[pidx].assign(level + 1, std::vector<int32_t>{});
+        for (int32_t l = 0; l <= level; l++) {
+            _adjacency[pidx][l].reserve(l == 0 ? _M_max0 : _M);
+        }
 
-        if (_entry_point < 0) {
-            _entry_point = pidx;
-            _top_level = level;
-            return;
+        // Snapshot entry point + top level under the entry lock. The greedy
+        // descent below uses this snapshot; if another thread updates the
+        // entry point afterwards, we still produce a valid (if slightly
+        // suboptimal) graph.
+        int32_t snap_entry;
+        int32_t snap_top;
+        {
+            std::lock_guard<std::mutex> elock(*_entry_lock);
+            if (_entry_point < 0) {
+                _entry_point = pidx;
+                _top_level = level;
+                return;
+            }
+            snap_entry = _entry_point;
+            snap_top = _top_level;
         }
 
         // Greedy descent from the top of the index down to level + 1.
-        int32_t current = _entry_point;
-        for (int32_t l = _top_level; l > level; l--) {
+        int32_t current = snap_entry;
+        for (int32_t l = snap_top; l > level; l--) {
             current = greedy_descent(_examples[pidx], current, l);
         }
 
         // From min(level, top_level) down to layer 0, build candidates and connect.
-        int32_t start_layer = std::min(level, _top_level);
+        int32_t start_layer = std::min(level, snap_top);
         for (int32_t l = start_layer; l >= 0; l--) {
             auto candidates = search_layer(_examples[pidx], current, _ef_construction, l);
             size_t M_max = (l == 0) ? _M_max0 : _M;
@@ -433,11 +522,18 @@ private:
                                                                      candidates,
                                                                      _M);
 
-            // Link new node → chosen.
+            // Link new node → chosen. No lock: this is our own node.
             _adjacency[pidx][l] = chosen;
 
-            // Link reverse edges; prune neighbour's adjacency if it now exceeds M_max.
+            // Link reverse edges; prune neighbour's adjacency if it now
+            // exceeds M_max. Per-node exclusive lock protects the modification.
             for (int32_t c : chosen) {
+                std::unique_lock<std::shared_mutex> wlock(_node_locks[c]);
+                if (l >= (int32_t)_adjacency[c].size()) {
+                    // Concurrent insertion of c may not have set up this
+                    // layer yet — skip the reverse edge in that case (very rare).
+                    continue;
+                }
                 auto& neigh_adj = _adjacency[c][l];
                 neigh_adj.push_back(pidx);
                 if (neigh_adj.size() > M_max) {
@@ -464,9 +560,13 @@ private:
             }
         }
 
-        if (level > _top_level) {
-            _top_level = level;
-            _entry_point = pidx;
+        if (level > snap_top) {
+            std::lock_guard<std::mutex> elock(*_entry_lock);
+            // Re-check under lock — another thread may have raised top_level too.
+            if (level > _top_level) {
+                _top_level = level;
+                _entry_point = pidx;
+            }
         }
     }
 
@@ -527,8 +627,7 @@ private:
     search_layer_with_seeds(const T& query, int32_t primary_entry,
                             const std::vector<int32_t>& extra_seeds,
                             size_t ef, int32_t layer) const {
-        std::unordered_set<int32_t> visited;
-        visited.reserve(ef * 4 + extra_seeds.size() + 1);
+        const uint32_t ver = next_visited_version();
 
         std::priority_queue<DistNode<distT>,
                             std::vector<DistNode<distT>>,
@@ -539,7 +638,8 @@ private:
 
         auto seed = [&](int32_t node) {
             if (node < 0 || node >= (int32_t)_examples.size()) return;
-            if (!visited.insert(node).second) return;
+            if (visited_buf()[node] == ver) return;
+            visited_buf()[node] = ver;
             distT d = distance_fn(query, _examples[node]);
             candidates.push({d, node});
             if (results.size() < ef || d < results.top().distance) {
@@ -555,10 +655,13 @@ private:
             DistNode<distT> cur = candidates.top();
             candidates.pop();
             if (results.size() >= ef && cur.distance > results.top().distance) break;
-            if (layer >= static_cast<int32_t>(_adjacency[cur.node_id].size())) continue;
-            const auto& neighbours = _adjacency[cur.node_id][layer];
-            for (int32_t n : neighbours) {
-                if (!visited.insert(n).second) continue;
+            NeighbourView nv = read_neighbours(cur.node_id, layer);
+            if (nv.count == 0) continue;
+            auto& vis = visited_buf();
+            for (size_t ni = 0; ni < nv.count; ni++) {
+                int32_t n = nv.ptr[ni];
+                if (visited_buf()[n] == ver) continue;
+                visited_buf()[n] = ver;
                 distT d = distance_fn(query, _examples[n]);
                 if (results.size() < ef || d < results.top().distance) {
                     candidates.push({d, n});
@@ -597,6 +700,60 @@ private:
 
     std::mt19937 _rng;
     uint64_t _seed_used = 42;
+    int _n_threads = 1;
+
+    // Versioned visited lists — one per thread so parallel build can run
+    // search_layer concurrently without trampling each other's state.
+    // For single-threaded search (post-build) we use slot 0.
+    mutable std::vector<std::vector<uint32_t>> _visited_per_thread;
+    mutable std::vector<uint32_t> _visited_version_per_thread;
+
+    // Per-thread RNGs for parallel random_level(). Each is seeded from
+    // (_seed_used + thread_id) to keep per-thread sequences distinct and
+    // a build deterministic for a given thread count.
+    mutable std::vector<std::mt19937> _rng_per_thread;
+
+    // Per-node read/write locks. Allocated as a raw array via unique_ptr
+    // because std::shared_mutex is non-movable (so std::vector won't work
+    // and the enclosing adapter class needs to stay movable for pybind11
+    // pickle). Only held during the parallel build phase; post-build search
+    // runs lock-free thanks to the `_during_build` flag below.
+    mutable std::unique_ptr<std::shared_mutex[]> _node_locks;
+    mutable size_t _num_locks = 0;
+    mutable std::unique_ptr<std::mutex> _entry_lock;
+    mutable bool _during_build = false;
+
+    uint32_t next_visited_version() const {
+        int tid = omp_get_thread_num();
+        auto& ver = _visited_version_per_thread[tid];
+        auto& vec = _visited_per_thread[tid];
+        ++ver;
+        if (ver == 0) {
+            std::fill(vec.begin(), vec.end(), 0u);
+            ver = 1;
+        }
+        return ver;
+    }
+
+    std::vector<uint32_t>& visited_buf() const {
+        return _visited_per_thread[omp_get_thread_num()];
+    }
+
+    void init_thread_resources(size_t n) {
+        int max_threads = std::max(1, omp_get_max_threads());
+        _visited_per_thread.assign(max_threads, std::vector<uint32_t>(n, 0u));
+        _visited_version_per_thread.assign(max_threads, 0u);
+        _rng_per_thread.clear();
+        _rng_per_thread.reserve(max_threads);
+        for (int t = 0; t < max_threads; t++) {
+            _rng_per_thread.emplace_back(static_cast<uint32_t>(_seed_used + (uint64_t)t * 7919));
+        }
+        // Allocate a raw array of shared_mutexes — they're non-movable so
+        // we can't store them by value in std::vector.
+        _node_locks = std::unique_ptr<std::shared_mutex[]>(new std::shared_mutex[n]);
+        _num_locks = n;
+        _entry_lock = std::make_unique<std::mutex>();
+    }
 };
 
 }  // namespace hnsw
