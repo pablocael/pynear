@@ -38,9 +38,52 @@ jobs:
         name: wheels-${{ matrix.os }}
         path: ./wheelhouse/*.whl
 
-  build-sdist:
-    needs: build-wheels
+  # Verify the AVX-512 distance kernels (gated by __AVX512F__) compile and
+  # produce correct results. Runs the full pytest suite under Intel SDE
+  # emulating Sapphire Rapids, so the AVX-512 code paths execute regardless
+  # of the GitHub runner's actual CPU. Perf numbers from SDE are meaningless
+  # (10-30x slower than native); this only catches correctness regressions.
+  test-avx512-sde:
     runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install Intel SDE
+      run: |
+        # Pinned SDE 9.38.0 — Intel maintains a stable URL for a while; if
+        # it 404s, bump the version. SDE is freely redistributable under
+        # Intel's End User License Agreement.
+        set -eux
+        SDE_VER=sde-external-9.38.0-2024-04-18-lin
+        wget -q "https://downloadmirror.intel.com/831748/${SDE_VER}.tar.xz"
+        tar xf "${SDE_VER}.tar.xz"
+        echo "$PWD/${SDE_VER}" >> "$GITHUB_PATH"
+        "${PWD}/${SDE_VER}/sde64" -version
+    - name: Install build deps
+      run: |
+        sudo apt update
+        sudo apt install -y build-essential libgomp1
+        python -m pip install --upgrade pip
+        python -m pip install numpy pybind11 pytest scikit-learn
+    - name: Build pynear with explicit AVX-512 flags
+      env:
+        # Force AVX-512 codegen so the __AVX512F__ paths actually compile in,
+        # overriding the default -march=native (which would pick the runner's
+        # actual CPU, possibly without AVX-512).
+        CFLAGS: "-march=skylake-avx512 -mavx512f -mavx512bw -mfma"
+        CXXFLAGS: "-march=skylake-avx512 -mavx512f -mavx512bw -mfma"
+      run: |
+        pip install -e . --no-build-isolation -v 2>&1 | tail -50
+    - name: Run pytest under SDE -spr (Sapphire Rapids emulation)
+      run: |
+        # -spr selects the Sapphire Rapids CPU model (AVX-512F + AVX-512BW + etc).
+        # We run the full HNSW test suite + the existing VPTree/IVF tests so
+        # any AVX-512 regression is caught.
+        sde64 -spr -- python -m pytest pynear/tests/ -q
+
+
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-python@v5
