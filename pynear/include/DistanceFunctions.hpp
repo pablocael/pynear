@@ -352,6 +352,71 @@ inline float dot_f_avx2(const float* q, const float* v, size_t d) {
     return r;
 }
 
+// 8-way batched dot product. Eight accumulators fully saturate the FMA
+// throughput on Intel Skylake+/AMD Zen+ (FMA latency 4 cycles × throughput
+// 2/cycle ⇒ 8 in-flight to keep both FMA ports busy every cycle).
+inline void batch_dot_f_avx2_8(const float* query, size_t d,
+                                const float* const* vectors,
+                                size_t n,
+                                float* out_dots) {
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256 a0 = _mm256_setzero_ps(), a1 = _mm256_setzero_ps();
+        __m256 a2 = _mm256_setzero_ps(), a3 = _mm256_setzero_ps();
+        __m256 a4 = _mm256_setzero_ps(), a5 = _mm256_setzero_ps();
+        __m256 a6 = _mm256_setzero_ps(), a7 = _mm256_setzero_ps();
+        const float* p0 = vectors[i + 0]; const float* p1 = vectors[i + 1];
+        const float* p2 = vectors[i + 2]; const float* p3 = vectors[i + 3];
+        const float* p4 = vectors[i + 4]; const float* p5 = vectors[i + 5];
+        const float* p6 = vectors[i + 6]; const float* p7 = vectors[i + 7];
+        size_t j = 0;
+        for (; j + 8 <= d; j += 8) {
+            __m256 q = _mm256_loadu_ps(query + j);
+            a0 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p0 + j), a0);
+            a1 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p1 + j), a1);
+            a2 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p2 + j), a2);
+            a3 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p3 + j), a3);
+            a4 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p4 + j), a4);
+            a5 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p5 + j), a5);
+            a6 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p6 + j), a6);
+            a7 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p7 + j), a7);
+        }
+        float r[8] = {sum8(a0), sum8(a1), sum8(a2), sum8(a3),
+                      sum8(a4), sum8(a5), sum8(a6), sum8(a7)};
+        const float* ps[8] = {p0, p1, p2, p3, p4, p5, p6, p7};
+        for (; j < d; j++) {
+            float qj = query[j];
+            for (int k = 0; k < 8; k++) r[k] += qj * ps[k][j];
+        }
+        for (int k = 0; k < 8; k++) out_dots[i + k] = r[k];
+    }
+    // Tail: < 8 vectors — use the 4-way batch and single fallback.
+    for (; i + 4 <= n; i += 4) {
+        __m256 s0 = _mm256_setzero_ps(), s1 = _mm256_setzero_ps();
+        __m256 s2 = _mm256_setzero_ps(), s3 = _mm256_setzero_ps();
+        const float* p0 = vectors[i + 0]; const float* p1 = vectors[i + 1];
+        const float* p2 = vectors[i + 2]; const float* p3 = vectors[i + 3];
+        size_t j = 0;
+        for (; j + 8 <= d; j += 8) {
+            __m256 q = _mm256_loadu_ps(query + j);
+            s0 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p0 + j), s0);
+            s1 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p1 + j), s1);
+            s2 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p2 + j), s2);
+            s3 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p3 + j), s3);
+        }
+        float r0 = sum8(s0), r1 = sum8(s1), r2 = sum8(s2), r3 = sum8(s3);
+        for (; j < d; j++) {
+            r0 += query[j] * p0[j]; r1 += query[j] * p1[j];
+            r2 += query[j] * p2[j]; r3 += query[j] * p3[j];
+        }
+        out_dots[i + 0] = r0; out_dots[i + 1] = r1;
+        out_dots[i + 2] = r2; out_dots[i + 3] = r3;
+    }
+    for (; i < n; i++) {
+        out_dots[i] = dot_f_avx2(query, vectors[i], d);
+    }
+}
+
 // 4-way batched dot product. Same pattern as batch_l2sq but using FMA
 // directly on q*v (one FMA per chunk instead of sub-then-square = two ops).
 // Caller composes ||q-v||² = q_norm_sq + v_norm_sq - 2 q·v.

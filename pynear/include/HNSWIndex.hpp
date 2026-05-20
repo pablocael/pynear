@@ -519,7 +519,7 @@ private:
                 // using precomputed _norms_sq[v]. One FMA per chunk (dot)
                 // instead of two (sub + square), so per-distance FLOPs halve.
                 float dots[MAX_BATCH];
-                batch_dot_f_avx2(query.ptr, query.sz, vptr, n_unvis, dots);
+                batch_dot_f_avx2_8(query.ptr, query.sz, vptr, n_unvis, dots);
                 float dists[MAX_BATCH];
                 for (size_t i = 0; i < n_unvis; i++) {
                     float d_sq = query_norm_sq + _norms_sq[unvis[i]] - 2.0f * dots[i];
