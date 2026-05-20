@@ -19,6 +19,7 @@
 #include <BinaryIVF.hpp>
 #include <BuiltinSerializers.hpp>
 #include <DistanceFunctions.hpp>
+#include <HNSWIndex.hpp>
 #include <ISerializable.hpp>
 #include <KMeans.hpp>
 #include <MIH.hpp>
@@ -303,6 +304,416 @@ public:
     vptree::VPTree<arrayf, float, dist_l2_f_avx2> tree;
 };
 
+// HNSWFloatNumpyAdapter — pybind11 wrapper around hnsw::HNSWIndex for float vectors.
+// Templated on the distance function, same pattern as VPTreeNumpyAdapter.
+template <distance_func_f distance> class HNSWFloatNumpyAdapter {
+public:
+    HNSWFloatNumpyAdapter(size_t M = 16,
+                          size_t ef_construction = 200,
+                          size_t ef_search = 50,
+                          uint64_t seed = 42)
+        : hnsw(M, ef_construction, ef_search, seed) {}
+
+    void set(py::array_t<float, py::array::c_style | py::array::forcecast> arr) {
+        auto buf = arr.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("set() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        const float* ptr = static_cast<const float*>(buf.ptr);
+        std::vector<arrayf> spans(n);
+        for (size_t i = 0; i < n; i++)
+            spans[i] = FlatSpan{ptr + i * d, d};
+        hnsw.set(spans);
+    }
+
+    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<float>>>
+    searchKNN(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k) {
+        auto buf = queries.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("searchKNN() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        const float* ptr = static_cast<const float*>(buf.ptr);
+        std::vector<arrayf> spans(n);
+        for (size_t i = 0; i < n; i++)
+            spans[i] = FlatSpan{ptr + i * d, d};
+
+        std::vector<std::vector<int64_t>> idx;
+        std::vector<std::vector<float>> dist;
+        hnsw.searchKNN(spans, k, idx, dist);
+        return std::make_tuple(std::move(idx), std::move(dist));
+    }
+
+    std::tuple<std::vector<int64_t>, std::vector<float>>
+    search1NN(py::array_t<float, py::array::c_style | py::array::forcecast> queries) {
+        auto buf = queries.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("search1NN() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        const float* ptr = static_cast<const float*>(buf.ptr);
+        std::vector<arrayf> spans(n);
+        for (size_t i = 0; i < n; i++)
+            spans[i] = FlatSpan{ptr + i * d, d};
+
+        std::vector<int64_t> idx;
+        std::vector<float> dist;
+        hnsw.search1NN(spans, idx, dist);
+        return std::make_tuple(std::move(idx), std::move(dist));
+    }
+
+    void set_ef(size_t ef_search) { hnsw.set_ef(ef_search); }
+    size_t ef_search() const { return hnsw.ef_search(); }
+    size_t size() const { return hnsw.size(); }
+    size_t dim() const { return hnsw.dim(); }
+
+    static py::tuple get_state(const HNSWFloatNumpyAdapter<distance>& p) {
+        std::vector<float> flat;
+        std::vector<int32_t> levels, flat_adj, adj_offsets;
+        int32_t entry, top_level;
+        size_t dim;
+        uint64_t seed;
+        p.hnsw.serialize(flat, levels, flat_adj, adj_offsets, entry, top_level, dim, seed);
+
+        py::bytes flat_bytes(reinterpret_cast<const char*>(flat.data()),
+                             flat.size() * sizeof(float));
+        py::bytes lvl_bytes(reinterpret_cast<const char*>(levels.data()),
+                            levels.size() * sizeof(int32_t));
+        py::bytes adj_bytes(reinterpret_cast<const char*>(flat_adj.data()),
+                            flat_adj.size() * sizeof(int32_t));
+        py::bytes off_bytes(reinterpret_cast<const char*>(adj_offsets.data()),
+                            adj_offsets.size() * sizeof(int32_t));
+
+        return py::make_tuple(flat_bytes, lvl_bytes, adj_bytes, off_bytes,
+                              entry, top_level, (uint64_t)dim, seed,
+                              (uint64_t)p.hnsw.M(),
+                              (uint64_t)p.hnsw.ef_construction(),
+                              (uint64_t)p.hnsw.ef_search());
+    }
+
+    static HNSWFloatNumpyAdapter<distance> set_state(py::tuple t) {
+        auto flat_bytes  = t[0].cast<py::bytes>();
+        auto lvl_bytes   = t[1].cast<py::bytes>();
+        auto adj_bytes   = t[2].cast<py::bytes>();
+        auto off_bytes   = t[3].cast<py::bytes>();
+        int32_t entry    = t[4].cast<int32_t>();
+        int32_t top_lvl  = t[5].cast<int32_t>();
+        uint64_t dim     = t[6].cast<uint64_t>();
+        uint64_t seed    = t[7].cast<uint64_t>();
+        size_t M         = t[8].cast<uint64_t>();
+        size_t ef_con    = t[9].cast<uint64_t>();
+        size_t ef_search = t[10].cast<uint64_t>();
+
+        std::string flat_str(flat_bytes);
+        std::vector<float> flat(flat_str.size() / sizeof(float));
+        std::memcpy(flat.data(), flat_str.data(), flat_str.size());
+
+        std::string lvl_str(lvl_bytes);
+        std::vector<int32_t> levels(lvl_str.size() / sizeof(int32_t));
+        std::memcpy(levels.data(), lvl_str.data(), lvl_str.size());
+
+        std::string adj_str(adj_bytes);
+        std::vector<int32_t> flat_adj(adj_str.size() / sizeof(int32_t));
+        std::memcpy(flat_adj.data(), adj_str.data(), adj_str.size());
+
+        std::string off_str(off_bytes);
+        std::vector<int32_t> adj_offsets(off_str.size() / sizeof(int32_t));
+        std::memcpy(adj_offsets.data(), off_str.data(), off_str.size());
+
+        HNSWFloatNumpyAdapter<distance> p(M, ef_con, ef_search, seed);
+        p.hnsw.deserialize(std::move(flat), std::move(levels), flat_adj, adj_offsets,
+                           entry, top_lvl, (size_t)dim, seed, M, ef_con, ef_search);
+        return p;
+    }
+
+    hnsw::HNSWIndex<arrayf, float, distance> hnsw;
+};
+
+// HNSWCosineNumpyAdapter — L2-normalises input + queries; reuses the L2 HNSW core.
+// Same identity as VPTreeCosineNumpyAdapter: for unit vectors,
+// ||u - v||^2 = 2 (1 - cos(u, v)), so argmin L2 == argmin cosine.
+// Returned distances are converted L2 -> cosine via d_cos = L2^2 / 2.
+class HNSWCosineNumpyAdapter {
+public:
+    HNSWCosineNumpyAdapter(size_t M = 16,
+                           size_t ef_construction = 200,
+                           size_t ef_search = 50,
+                           uint64_t seed = 42)
+        : hnsw(M, ef_construction, ef_search, seed) {}
+
+    static void normalize_rows(const float* src, float* dst, size_t n, size_t d) {
+        for (size_t i = 0; i < n; i++) {
+            const float* row = src + i * d;
+            float sumsq = 0.0f;
+            for (size_t j = 0; j < d; j++) sumsq += row[j] * row[j];
+            if (sumsq > 0.0f) {
+                float inv = 1.0f / std::sqrt(sumsq);
+                for (size_t j = 0; j < d; j++) dst[i * d + j] = row[j] * inv;
+            } else {
+                for (size_t j = 0; j < d; j++) dst[i * d + j] = 0.0f;
+            }
+        }
+    }
+
+    void set(py::array_t<float, py::array::c_style | py::array::forcecast> arr) {
+        auto buf = arr.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("set() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        const float* ptr = static_cast<const float*>(buf.ptr);
+        std::vector<float> normalized(n * d);
+        normalize_rows(ptr, normalized.data(), n, d);
+
+        std::vector<arrayf> spans(n);
+        for (size_t i = 0; i < n; i++)
+            spans[i] = FlatSpan{normalized.data() + i * d, d};
+        hnsw.set(spans);
+    }
+
+    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<float>>>
+    searchKNN(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k) {
+        auto buf = queries.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("searchKNN() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        const float* ptr = static_cast<const float*>(buf.ptr);
+        std::vector<float> qnorm(n * d);
+        normalize_rows(ptr, qnorm.data(), n, d);
+
+        std::vector<arrayf> spans(n);
+        for (size_t i = 0; i < n; i++)
+            spans[i] = FlatSpan{qnorm.data() + i * d, d};
+
+        std::vector<std::vector<int64_t>> idx;
+        std::vector<std::vector<float>> dist;
+        hnsw.searchKNN(spans, k, idx, dist);
+        // hnsw was built with dist_l2_f_avx2 which returns L2 (= sqrt of L2^2).
+        // Convert to cosine distance: d_cos = L2^2 / 2.
+        for (auto& row : dist) {
+            for (float& v : row) v = (v * v) * 0.5f;
+        }
+        return std::make_tuple(std::move(idx), std::move(dist));
+    }
+
+    std::tuple<std::vector<int64_t>, std::vector<float>>
+    search1NN(py::array_t<float, py::array::c_style | py::array::forcecast> queries) {
+        auto buf = queries.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("search1NN() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        const float* ptr = static_cast<const float*>(buf.ptr);
+        std::vector<float> qnorm(n * d);
+        normalize_rows(ptr, qnorm.data(), n, d);
+
+        std::vector<arrayf> spans(n);
+        for (size_t i = 0; i < n; i++)
+            spans[i] = FlatSpan{qnorm.data() + i * d, d};
+
+        std::vector<int64_t> idx;
+        std::vector<float> dist;
+        hnsw.search1NN(spans, idx, dist);
+        for (float& v : dist) v = (v * v) * 0.5f;
+        return std::make_tuple(std::move(idx), std::move(dist));
+    }
+
+    void set_ef(size_t ef_search) { hnsw.set_ef(ef_search); }
+    size_t ef_search() const { return hnsw.ef_search(); }
+    size_t size() const { return hnsw.size(); }
+    size_t dim() const { return hnsw.dim(); }
+
+    static py::tuple get_state(const HNSWCosineNumpyAdapter& p) {
+        std::vector<float> flat;
+        std::vector<int32_t> levels, flat_adj, adj_offsets;
+        int32_t entry, top_level;
+        size_t dim;
+        uint64_t seed;
+        p.hnsw.serialize(flat, levels, flat_adj, adj_offsets, entry, top_level, dim, seed);
+
+        py::bytes flat_bytes(reinterpret_cast<const char*>(flat.data()),
+                             flat.size() * sizeof(float));
+        py::bytes lvl_bytes(reinterpret_cast<const char*>(levels.data()),
+                            levels.size() * sizeof(int32_t));
+        py::bytes adj_bytes(reinterpret_cast<const char*>(flat_adj.data()),
+                            flat_adj.size() * sizeof(int32_t));
+        py::bytes off_bytes(reinterpret_cast<const char*>(adj_offsets.data()),
+                            adj_offsets.size() * sizeof(int32_t));
+
+        return py::make_tuple(flat_bytes, lvl_bytes, adj_bytes, off_bytes,
+                              entry, top_level, (uint64_t)dim, seed,
+                              (uint64_t)p.hnsw.M(),
+                              (uint64_t)p.hnsw.ef_construction(),
+                              (uint64_t)p.hnsw.ef_search());
+    }
+
+    static HNSWCosineNumpyAdapter set_state(py::tuple t) {
+        auto flat_bytes  = t[0].cast<py::bytes>();
+        auto lvl_bytes   = t[1].cast<py::bytes>();
+        auto adj_bytes   = t[2].cast<py::bytes>();
+        auto off_bytes   = t[3].cast<py::bytes>();
+        int32_t entry    = t[4].cast<int32_t>();
+        int32_t top_lvl  = t[5].cast<int32_t>();
+        uint64_t dim     = t[6].cast<uint64_t>();
+        uint64_t seed    = t[7].cast<uint64_t>();
+        size_t M         = t[8].cast<uint64_t>();
+        size_t ef_con    = t[9].cast<uint64_t>();
+        size_t ef_search = t[10].cast<uint64_t>();
+
+        std::string flat_str(flat_bytes);
+        std::vector<float> flat(flat_str.size() / sizeof(float));
+        std::memcpy(flat.data(), flat_str.data(), flat_str.size());
+
+        std::string lvl_str(lvl_bytes);
+        std::vector<int32_t> levels(lvl_str.size() / sizeof(int32_t));
+        std::memcpy(levels.data(), lvl_str.data(), lvl_str.size());
+
+        std::string adj_str(adj_bytes);
+        std::vector<int32_t> flat_adj(adj_str.size() / sizeof(int32_t));
+        std::memcpy(flat_adj.data(), adj_str.data(), adj_str.size());
+
+        std::string off_str(off_bytes);
+        std::vector<int32_t> adj_offsets(off_str.size() / sizeof(int32_t));
+        std::memcpy(adj_offsets.data(), off_str.data(), off_str.size());
+
+        HNSWCosineNumpyAdapter p(M, ef_con, ef_search, seed);
+        p.hnsw.deserialize(std::move(flat), std::move(levels), flat_adj, adj_offsets,
+                           entry, top_lvl, (size_t)dim, seed, M, ef_con, ef_search);
+        return p;
+    }
+
+    hnsw::HNSWIndex<arrayf, float, dist_l2_f_avx2> hnsw;
+};
+
+// HNSWBinaryNumpyAdapter — HNSW over Hamming distance.
+// Templated on the distance function so we can plug in the generic
+// dist_hamming or any fixed-width specialisation.
+template <distance_func_li distance> class HNSWBinaryNumpyAdapter {
+public:
+    HNSWBinaryNumpyAdapter(size_t M = 16,
+                           size_t ef_construction = 200,
+                           size_t ef_search = 50,
+                           uint64_t seed = 42)
+        : hnsw(M, ef_construction, ef_search, seed) {}
+
+    void set(const ndarrayli& data) { hnsw.set(data); }
+
+    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<int64_t>>>
+    searchKNN(const ndarrayli& queries, size_t k) {
+        std::vector<std::vector<int64_t>> idx, dist;
+        hnsw.searchKNN(queries, k, idx, dist);
+        return std::make_tuple(std::move(idx), std::move(dist));
+    }
+
+    std::tuple<std::vector<int64_t>, std::vector<int64_t>>
+    search1NN(const ndarrayli& queries) {
+        std::vector<int64_t> idx, dist;
+        hnsw.search1NN(queries, idx, dist);
+        return std::make_tuple(std::move(idx), std::move(dist));
+    }
+
+    void set_ef(size_t ef) { hnsw.set_ef(ef); }
+    size_t ef_search() const { return hnsw.ef_search(); }
+    size_t size() const { return hnsw.size(); }
+
+    hnsw::HNSWIndex<arrayli, int64_t, distance> hnsw;
+};
+
+// MIHSeededHNSWBinaryAdapter — the novel variant.
+//
+// Combines an HNSW graph over Hamming distance with a parallel
+// MIHBinaryIndex. On every query:
+//   1. MIH performs an exact lookup within Hamming radius `mih_radius`
+//      and returns up to ef_search candidates (in the small-radius regime
+//      this is guaranteed by MIH's pigeonhole property).
+//   2. Those candidates are passed as `extra_seeds` to HNSW's
+//      `search_one_with_seeds`. The layer-0 beam search runs from
+//      (HNSW entry node) ∪ (MIH seeds), so:
+//        - near-duplicate queries find their answers immediately via MIH;
+//        - larger-radius queries get HNSW graph robustness, but with a
+//          higher-quality starting set than the bare entry node.
+//
+// Reference: see docs/hnsw_design.md "Novel variant".
+class MIHSeededHNSWBinaryAdapter {
+public:
+    MIHSeededHNSWBinaryAdapter(size_t M = 16,
+                                size_t ef_construction = 200,
+                                size_t ef_search = 50,
+                                uint64_t seed = 42,
+                                int32_t mih_m = 8,
+                                int32_t mih_radius = 8)
+        : hnsw(M, ef_construction, ef_search, seed),
+          mih(mih_m),
+          _mih_radius(mih_radius) {}
+
+    void set(const ndarrayli& data) {
+        hnsw.set(data);
+        mih.set(data);
+    }
+
+    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<int64_t>>>
+    searchKNN(const ndarrayli& queries, size_t k) {
+        size_t nq = queries.size();
+        std::vector<std::vector<int64_t>> all_idx(nq), all_dist(nq);
+
+        for (size_t qi = 0; qi < nq; qi++) {
+            // 1. MIH small-radius lookup. We ask for up to ef_search candidates
+            //    so the seed set is as informative as possible without
+            //    being wasteful.
+            ndarrayli one_query{queries[qi]};
+            auto mih_res = mih.searchKNN(one_query, hnsw.ef_search(), _mih_radius);
+            const auto& mih_indices = std::get<0>(mih_res)[0];
+
+            std::vector<int32_t> seeds;
+            seeds.reserve(mih_indices.size());
+            for (int64_t s : mih_indices) {
+                if (s >= 0) seeds.push_back(static_cast<int32_t>(s));
+            }
+
+            // 2. HNSW beam search seeded with MIH candidates.
+            auto top = hnsw.search_one_with_seeds(queries[qi], k, seeds);
+
+            // 3. Flip to farthest-first within the top-k for pynear's
+            //    standard return convention.
+            all_idx[qi].reserve(top.size());
+            all_dist[qi].reserve(top.size());
+            for (auto it = top.rbegin(); it != top.rend(); ++it) {
+                all_idx[qi].push_back(it->node_id);
+                all_dist[qi].push_back(it->distance);
+            }
+        }
+        return std::make_tuple(std::move(all_idx), std::move(all_dist));
+    }
+
+    std::tuple<std::vector<int64_t>, std::vector<int64_t>>
+    search1NN(const ndarrayli& queries) {
+        auto [idx, dist] = searchKNN(queries, 1);
+        std::vector<int64_t> out_idx(queries.size(), -1);
+        std::vector<int64_t> out_dist(queries.size(), 0);
+        for (size_t i = 0; i < queries.size(); i++) {
+            if (!idx[i].empty()) {
+                out_idx[i] = idx[i].back();    // back = nearest in farthest-first
+                out_dist[i] = dist[i].back();
+            }
+        }
+        return std::make_tuple(std::move(out_idx), std::move(out_dist));
+    }
+
+    void set_ef(size_t ef) { hnsw.set_ef(ef); }
+    void set_mih_radius(int32_t r) { _mih_radius = r; }
+    int32_t mih_radius() const { return _mih_radius; }
+    size_t ef_search() const { return hnsw.ef_search(); }
+    size_t size() const { return hnsw.size(); }
+
+    hnsw::HNSWIndex<arrayli, int64_t, dist_hamming> hnsw;
+    MIHBinaryIndex mih;
+
+private:
+    int32_t _mih_radius;
+};
+
 template <distance_func_li distance> class VPTreeNumpyAdapterBinary {
 public:
     VPTreeNumpyAdapterBinary() = default;
@@ -531,6 +942,66 @@ PYBIND11_MODULE(_pynear, m) {
         .def("searchKNN", &VPTreeCosineNumpyAdapter::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
         .def("search1NN", &VPTreeCosineNumpyAdapter::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeCosineNumpyAdapter::get_state, &VPTreeCosineNumpyAdapter::set_state));
+
+    py::class_<HNSWFloatNumpyAdapter<dist_l2_f_avx2>>(m, "HNSWL2Index")
+        .def(py::init<size_t, size_t, size_t, uint64_t>(),
+             py::arg("M") = 16, py::arg("ef_construction") = 200,
+             py::arg("ef_search") = 50, py::arg("seed") = 42)
+        .def("set", &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::set, py::arg("vectors"))
+        .def("searchKNN", &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::searchKNN,
+             py::arg("vectors"), py::arg("k"))
+        .def("search1NN", &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::search1NN, py::arg("vectors"))
+        .def("set_ef", &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::set_ef, py::arg("ef_search"))
+        .def_property_readonly("ef_search", &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::ef_search)
+        .def_property_readonly("size", &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::size)
+        .def_property_readonly("dim", &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::dim)
+        .def(py::pickle(&HNSWFloatNumpyAdapter<dist_l2_f_avx2>::get_state,
+                        &HNSWFloatNumpyAdapter<dist_l2_f_avx2>::set_state));
+
+    py::class_<HNSWCosineNumpyAdapter>(m, "HNSWCosineIndex")
+        .def(py::init<size_t, size_t, size_t, uint64_t>(),
+             py::arg("M") = 16, py::arg("ef_construction") = 200,
+             py::arg("ef_search") = 50, py::arg("seed") = 42)
+        .def("set", &HNSWCosineNumpyAdapter::set, py::arg("vectors"))
+        .def("searchKNN", &HNSWCosineNumpyAdapter::searchKNN, py::arg("vectors"), py::arg("k"))
+        .def("search1NN", &HNSWCosineNumpyAdapter::search1NN, py::arg("vectors"))
+        .def("set_ef", &HNSWCosineNumpyAdapter::set_ef, py::arg("ef_search"))
+        .def_property_readonly("ef_search", &HNSWCosineNumpyAdapter::ef_search)
+        .def_property_readonly("size", &HNSWCosineNumpyAdapter::size)
+        .def_property_readonly("dim", &HNSWCosineNumpyAdapter::dim)
+        .def(py::pickle(&HNSWCosineNumpyAdapter::get_state,
+                        &HNSWCosineNumpyAdapter::set_state));
+
+    py::class_<HNSWBinaryNumpyAdapter<dist_hamming>>(m, "HNSWBinaryIndex")
+        .def(py::init<size_t, size_t, size_t, uint64_t>(),
+             py::arg("M") = 16, py::arg("ef_construction") = 200,
+             py::arg("ef_search") = 50, py::arg("seed") = 42)
+        .def("set", &HNSWBinaryNumpyAdapter<dist_hamming>::set, py::arg("vectors"))
+        .def("searchKNN", &HNSWBinaryNumpyAdapter<dist_hamming>::searchKNN,
+             py::arg("vectors"), py::arg("k"))
+        .def("search1NN", &HNSWBinaryNumpyAdapter<dist_hamming>::search1NN, py::arg("vectors"))
+        .def("set_ef", &HNSWBinaryNumpyAdapter<dist_hamming>::set_ef, py::arg("ef_search"))
+        .def_property_readonly("ef_search", &HNSWBinaryNumpyAdapter<dist_hamming>::ef_search)
+        .def_property_readonly("size", &HNSWBinaryNumpyAdapter<dist_hamming>::size);
+
+    py::class_<MIHSeededHNSWBinaryAdapter>(m, "MIHSeededHNSWBinaryIndex",
+        "Novel variant: HNSW over Hamming distance, layer-0 beam search seeded with "
+        "exact MIH lookups within a Hamming radius. Gives exact small-radius retrieval "
+        "AND HNSW robustness for larger queries in one index. See docs/hnsw_design.md.")
+        .def(py::init<size_t, size_t, size_t, uint64_t, int32_t, int32_t>(),
+             py::arg("M") = 16, py::arg("ef_construction") = 200,
+             py::arg("ef_search") = 50, py::arg("seed") = 42,
+             py::arg("mih_m") = 8, py::arg("mih_radius") = 8)
+        .def("set", &MIHSeededHNSWBinaryAdapter::set, py::arg("vectors"))
+        .def("searchKNN", &MIHSeededHNSWBinaryAdapter::searchKNN,
+             py::arg("vectors"), py::arg("k"))
+        .def("search1NN", &MIHSeededHNSWBinaryAdapter::search1NN, py::arg("vectors"))
+        .def("set_ef", &MIHSeededHNSWBinaryAdapter::set_ef, py::arg("ef_search"))
+        .def("set_mih_radius", &MIHSeededHNSWBinaryAdapter::set_mih_radius,
+             py::arg("radius"))
+        .def_property_readonly("mih_radius", &MIHSeededHNSWBinaryAdapter::mih_radius)
+        .def_property_readonly("ef_search", &MIHSeededHNSWBinaryAdapter::ef_search)
+        .def_property_readonly("size", &MIHSeededHNSWBinaryAdapter::size);
 
     py::class_<VPTreeNumpyAdapterBinary<dist_hamming_512>>(m, "VPTreeBinaryIndex512")
         .def(py::init<>())

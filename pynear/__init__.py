@@ -15,6 +15,10 @@ from _pynear import VPTreeBinaryIndex128
 from _pynear import VPTreeBinaryIndex256
 from _pynear import VPTreeBinaryIndex512
 from _pynear import VPTreeBinaryIndex as VPTreeBinaryIndexN
+from _pynear import HNSWBinaryIndex
+from _pynear import HNSWCosineIndex
+from _pynear import HNSWL2Index
+from _pynear import MIHSeededHNSWBinaryIndex
 from _pynear import VPTreeChebyshevIndex
 from _pynear import VPTreeCosineIndex
 from _pynear import VPTreeL1Index

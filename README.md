@@ -53,13 +53,14 @@ A metric-space KNN library with a C++ core. **VP-Trees** for exact search up to 
 | | PyNear | Faiss | Annoy | scikit-learn |
 |---|---|---|---|---|
 | **Metric agnostic** | ✅ L2, L1, L∞, cosine, Hamming | L2 / IP / cosine | L2 / cosine / Hamming | L2 / others |
+| **HNSW (incl. binary)** | ✅ + novel MIH-seeded variant for binary | ✅ | ❌ | ❌ |
 | **Binary / Hamming approx** | ✅ 257× faster than brute-force | ⚠️ slow build | ❌ | ❌ |
 | **scikit-learn drop-in** | ✅ adapter classes | ❌ | ❌ | — |
 | **Zero native deps** | ✅ NumPy only | ❌ compiled lib + optional GPU | ❌ | ❌ |
 
 [Full comparison →](./docs/comparison.md)
 
-PyNear covers the full spectrum: **VPTree** indices for guaranteed exact answers (2-D to ~256-D), **IVFFlatL2Index** / **IVFFlatCosineIndex** for fast approximate float search at 512–1024-D (text embeddings, RAG), and **MIHBinaryIndex** / **IVFFlatBinaryIndex** for approximate Hamming search on binary descriptors.
+PyNear covers the full spectrum: **VPTree** indices for guaranteed exact answers (2-D to ~256-D), **HNSW** and **IVFFlat** families for fast approximate float search at any dimensionality (text embeddings, RAG), and **MIH** / **MIH-seeded HNSW** for approximate Hamming search on binary descriptors.
 
 > New to KNN? See [docs/intro.md](./docs/intro.md) for a gentle, jargon-free introduction.
 
@@ -230,6 +231,10 @@ reg.score(X_test, y_test)    # R²
 | `IVFFlatCosineIndex` | Cosine | `float32` | Spherical K-Means + BLAS SGEMV; ideal for text embeddings |
 | `IVFFlatBinaryIndex` | Hamming | `uint8` | Binary K-Means IVF; faster build than Faiss binary IVF |
 | `MIHBinaryIndex` | Hamming | `uint8` | Multi-Index Hashing; 257× faster than brute-force at N=1M, d=512 |
+| `HNSWL2Index` | L2 (Euclidean) | `float32` | Paper-faithful HNSW (Malkov & Yashunin 2016); α-heuristic, prefetched SIMD distance |
+| `HNSWCosineIndex` | Cosine | `float32` | HNSW on L2-normalised vectors; ideal for RAG / text embeddings |
+| `HNSWBinaryIndex` | Hamming | `uint8` | HNSW with hardware popcount distance |
+| `MIHSeededHNSWBinaryIndex` | Hamming | `uint8` | **Novel** — HNSW beam search seeded by MIH lookups, exact for small-radius queries + graph-robust elsewhere ([design doc](./docs/hnsw_design.md)) |
 
 All VPTree and IVFFlat indices support `searchKNN(queries, k)`.
 `BKTreeBinaryIndex` supports `find_threshold(queries, threshold)` for range queries.
