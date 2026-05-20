@@ -123,6 +123,13 @@ public:
         _adjacency.assign(_examples.size(), std::vector<std::vector<int32_t>>{});
         _layer0_adj.assign(_examples.size() * _M_max0, -1);
         _layer0_count.assign(_examples.size(), 0);
+        if constexpr (std::is_same_v<T, FlatSpan>) {
+            // Precompute ||v_i||² for the dot-product distance trick.
+            _norms_sq.assign(_examples.size(), 0.0f);
+            for (size_t i = 0; i < _examples.size(); i++) {
+                _norms_sq[i] = vec_l2sq_avx2(_examples[i].ptr, _examples[i].sz);
+            }
+        }
         init_thread_resources(_examples.size());
 
         _during_build = true;
@@ -280,6 +287,14 @@ public:
         _adjacency.assign(n, std::vector<std::vector<int32_t>>{});
         _layer0_adj.assign(n * _M_max0, -1);
         _layer0_count.assign(n, 0);
+        if constexpr (std::is_same_v<T, FlatSpan>) {
+            // Re-populate precomputed norms after deserialise — they aren't
+            // serialised because they are a function of the vectors.
+            _norms_sq.assign(n, 0.0f);
+            for (size_t i = 0; i < n; i++) {
+                _norms_sq[i] = vec_l2sq_avx2(_examples[i].ptr, _examples[i].sz);
+            }
+        }
         init_thread_resources(n);
         for (size_t i = 0; i < n; i++) {
             int32_t start = adj_offsets[2 * i];
@@ -418,6 +433,13 @@ private:
         DistNodeMin<distT> min_cmp;
         DistNodeMax<distT> max_cmp;
 
+        // Precompute query norm squared (for the dot-product distance trick;
+        // only meaningful for the FlatSpan/float-L2 path).
+        float query_norm_sq = 0.0f;
+        if constexpr (std::is_same_v<T, FlatSpan>) {
+            query_norm_sq = vec_l2sq_avx2(query.ptr, query.sz);
+        }
+
         // Candidates: min-heap by distance (explore nearest first).
         // Results:    max-heap by distance (drop the farthest when full).
         std::vector<DistNode<distT>> candidates;
@@ -491,13 +513,18 @@ private:
                 }
                 if (n_unvis == 0) continue;
 
-                // (c) Squared L2 batch — no sqrt in the hot loop. The
-                // Python adapter sqrt's the final top-k for HNSWL2Index;
-                // the cosine adapter consumes squared L2 directly via
-                // d_cos = L2_sq / 2.
+                // (c) Dot-product batch: compute q·v for each unvisited
+                // neighbour, then reconstruct ||q-v||² via the identity
+                //   ||q-v||² = ||q||² + ||v||² − 2 q·v
+                // using precomputed _norms_sq[v]. One FMA per chunk (dot)
+                // instead of two (sub + square), so per-distance FLOPs halve.
+                float dots[MAX_BATCH];
+                batch_dot_f_avx2(query.ptr, query.sz, vptr, n_unvis, dots);
                 float dists[MAX_BATCH];
-                batch_l2sq_f_avx2(query.ptr, query.sz, vptr,
-                                  n_unvis, dists);
+                for (size_t i = 0; i < n_unvis; i++) {
+                    float d_sq = query_norm_sq + _norms_sq[unvis[i]] - 2.0f * dots[i];
+                    dists[i] = d_sq < 0.0f ? 0.0f : d_sq;  // guard against fp noise
+                }
                 _dist_calls += n_unvis;
 
                 for (size_t i = 0; i < n_unvis; i++) {
@@ -856,6 +883,11 @@ private:
 
     std::vector<T> _examples;
     std::vector<float> _flat_backing;            // owns the raw vectors when T = FlatSpan
+    // Precomputed ||v_i||² for the dot-product distance trick:
+    // ||q − v||² = ||q||² + ||v||² − 2 q·v. Halves the FMA count per
+    // distance vs sub-then-square. Only populated for the float-vector
+    // template instantiation (FlatSpan); empty otherwise.
+    std::vector<float> _norms_sq;
     std::vector<int32_t> _levels;                // _levels[i] = max layer for node i
 
     // Layer 0 lives in a contiguous flat buffer for cache locality on

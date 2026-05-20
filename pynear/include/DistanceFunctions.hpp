@@ -301,6 +301,99 @@ static inline __m128 masked_read(int d, const float *x) {
     // cannot use AVX2 _mm_mask_set1_epi32
 }
 
+// Squared sum of one vector — ||v||². Used to precompute per-DB norms.
+inline float vec_l2sq_avx2(const float* v, size_t d) {
+    __m256 s0 = _mm256_setzero_ps();
+    __m256 s1 = _mm256_setzero_ps();
+    __m256 s2 = _mm256_setzero_ps();
+    __m256 s3 = _mm256_setzero_ps();
+    while (d >= 32) {
+        __m256 v0 = _mm256_loadu_ps(v +  0);
+        __m256 v1 = _mm256_loadu_ps(v +  8);
+        __m256 v2 = _mm256_loadu_ps(v + 16);
+        __m256 v3 = _mm256_loadu_ps(v + 24);
+        s0 = _mm256_fmadd_ps(v0, v0, s0);
+        s1 = _mm256_fmadd_ps(v1, v1, s1);
+        s2 = _mm256_fmadd_ps(v2, v2, s2);
+        s3 = _mm256_fmadd_ps(v3, v3, s3);
+        v += 32; d -= 32;
+    }
+    while (d >= 8) {
+        __m256 vv = _mm256_loadu_ps(v); v += 8;
+        s0 = _mm256_fmadd_ps(vv, vv, s0);
+        d -= 8;
+    }
+    __m256 sum = _mm256_add_ps(_mm256_add_ps(s0, s1), _mm256_add_ps(s2, s3));
+    float r = sum8(sum);
+    for (size_t j = 0; j < d; j++) r += v[j] * v[j];
+    return r;
+}
+
+// Dot product q·v with 4-way FMA ILP.
+inline float dot_f_avx2(const float* q, const float* v, size_t d) {
+    __m256 s0 = _mm256_setzero_ps();
+    __m256 s1 = _mm256_setzero_ps();
+    __m256 s2 = _mm256_setzero_ps();
+    __m256 s3 = _mm256_setzero_ps();
+    while (d >= 32) {
+        s0 = _mm256_fmadd_ps(_mm256_loadu_ps(q +  0), _mm256_loadu_ps(v +  0), s0);
+        s1 = _mm256_fmadd_ps(_mm256_loadu_ps(q +  8), _mm256_loadu_ps(v +  8), s1);
+        s2 = _mm256_fmadd_ps(_mm256_loadu_ps(q + 16), _mm256_loadu_ps(v + 16), s2);
+        s3 = _mm256_fmadd_ps(_mm256_loadu_ps(q + 24), _mm256_loadu_ps(v + 24), s3);
+        q += 32; v += 32; d -= 32;
+    }
+    while (d >= 8) {
+        s0 = _mm256_fmadd_ps(_mm256_loadu_ps(q), _mm256_loadu_ps(v), s0);
+        q += 8; v += 8; d -= 8;
+    }
+    __m256 sum = _mm256_add_ps(_mm256_add_ps(s0, s1), _mm256_add_ps(s2, s3));
+    float r = sum8(sum);
+    for (size_t j = 0; j < d; j++) r += q[j] * v[j];
+    return r;
+}
+
+// 4-way batched dot product. Same pattern as batch_l2sq but using FMA
+// directly on q*v (one FMA per chunk instead of sub-then-square = two ops).
+// Caller composes ||q-v||² = q_norm_sq + v_norm_sq - 2 q·v.
+inline void batch_dot_f_avx2(const float* query, size_t d,
+                              const float* const* vectors,
+                              size_t n,
+                              float* out_dots) {
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        __m256 s0 = _mm256_setzero_ps();
+        __m256 s1 = _mm256_setzero_ps();
+        __m256 s2 = _mm256_setzero_ps();
+        __m256 s3 = _mm256_setzero_ps();
+        const float* p0 = vectors[i + 0];
+        const float* p1 = vectors[i + 1];
+        const float* p2 = vectors[i + 2];
+        const float* p3 = vectors[i + 3];
+        size_t j = 0;
+        for (; j + 8 <= d; j += 8) {
+            __m256 q = _mm256_loadu_ps(query + j);
+            s0 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p0 + j), s0);
+            s1 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p1 + j), s1);
+            s2 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p2 + j), s2);
+            s3 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p3 + j), s3);
+        }
+        float r0 = sum8(s0), r1 = sum8(s1), r2 = sum8(s2), r3 = sum8(s3);
+        for (; j < d; j++) {
+            r0 += query[j] * p0[j];
+            r1 += query[j] * p1[j];
+            r2 += query[j] * p2[j];
+            r3 += query[j] * p3[j];
+        }
+        out_dots[i + 0] = r0;
+        out_dots[i + 1] = r1;
+        out_dots[i + 2] = r2;
+        out_dots[i + 3] = r3;
+    }
+    for (; i < n; i++) {
+        out_dots[i] = dot_f_avx2(query, vectors[i], d);
+    }
+}
+
 // Squared L2 — same memory and FMA pattern as L2, no final sqrt.
 // Used internally by HNSW where ordering is preserved by squared distance
 // and we save ~10 cycle sqrt latency per distance (~2.5 ns at 4 GHz).
