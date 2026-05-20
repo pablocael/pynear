@@ -49,6 +49,26 @@ Without this heuristic, recall collapses at high dimensions because the graph be
 
 Memory budget per point at layer 0: `dim * 4 bytes (vector) + 2*M * 4 bytes (edges) + ~8 bytes overhead`. For `d=128, M=16`: ~656 bytes/point → ~625 MB for 1M points.
 
+#### SIMD paths
+
+| CPU class | Path taken | Notes |
+|---|---|---|
+| AVX-512F (Zen 4, Sapphire Rapids, Xeon Gold) | AVX-512 float + int8 kernels | Selected when `__AVX512F__` is defined at compile time. About 2× distance throughput vs AVX2 — 16 floats / 64 int8 lanes per op. |
+| AVX2 (Haswell+, Zen+, Arrow Lake, Alder Lake) | AVX2 fallback with 8-way batched FMA | Default path on most x86-64 hardware. |
+| No AVX2 (very old x86 or non-x86) | Scalar fallback | Works, slow. |
+
+The `setup.py` uses `-march=native` for development builds — so building from
+source on an AVX-512-capable CPU gets the AVX-512 path automatically. PyPI
+wheels are compiled in cibuildwheel's Skylake-class containers and only
+include the AVX2 path. AVX-512 users wanting the fast path should:
+
+```bash
+pip install --no-binary :all: pynear
+```
+
+Runtime CPUID dispatch (to ship one wheel with both paths) is a future
+enhancement.
+
 #### Query-latency notes
 
 Profiling against Faiss with identical params (N=20k, d=128, M=16,

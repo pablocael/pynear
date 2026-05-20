@@ -686,6 +686,88 @@ inline float dist_l2sq_f_avx2(const arrayf &p1, const arrayf &p2) {
     return dist_l2sq_raw_avx2(p1.data(), p2.data(), p1.size());
 }
 
+// ─── AVX-512 paths (gated on __AVX512F__) ──────────────────────────────────
+// Compile only when the target CPU supports AVX-512F. On Zen 4 / Sapphire
+// Rapids / Xeon Gold these halve the distance-compute time versus AVX2 by
+// processing 16 floats per op (vs 8). The AVX2 paths above remain the
+// fallback for older hardware (and for Arrow Lake / Alder Lake clients
+// which removed AVX-512 from the consumer line).
+
+#if defined(__AVX512F__)
+
+inline float sum16(__m512 v) {
+    return _mm512_reduce_add_ps(v);
+}
+
+// 8-way batched dot product on AVX-512 — eight 512-bit accumulators saturate
+// both FMA ports on Zen 4 (FMA latency 4 cycles × throughput 2/cycle ⇒ 8
+// in-flight).
+inline void batch_dot_f_avx512_8(const float* query, size_t d,
+                                  const float* const* vectors,
+                                  size_t n,
+                                  float* out_dots) {
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m512 a0 = _mm512_setzero_ps(), a1 = _mm512_setzero_ps();
+        __m512 a2 = _mm512_setzero_ps(), a3 = _mm512_setzero_ps();
+        __m512 a4 = _mm512_setzero_ps(), a5 = _mm512_setzero_ps();
+        __m512 a6 = _mm512_setzero_ps(), a7 = _mm512_setzero_ps();
+        const float* p[8];
+        for (int k = 0; k < 8; k++) p[k] = vectors[i + k];
+        size_t j = 0;
+        for (; j + 16 <= d; j += 16) {
+            __m512 q = _mm512_loadu_ps(query + j);
+            a0 = _mm512_fmadd_ps(q, _mm512_loadu_ps(p[0] + j), a0);
+            a1 = _mm512_fmadd_ps(q, _mm512_loadu_ps(p[1] + j), a1);
+            a2 = _mm512_fmadd_ps(q, _mm512_loadu_ps(p[2] + j), a2);
+            a3 = _mm512_fmadd_ps(q, _mm512_loadu_ps(p[3] + j), a3);
+            a4 = _mm512_fmadd_ps(q, _mm512_loadu_ps(p[4] + j), a4);
+            a5 = _mm512_fmadd_ps(q, _mm512_loadu_ps(p[5] + j), a5);
+            a6 = _mm512_fmadd_ps(q, _mm512_loadu_ps(p[6] + j), a6);
+            a7 = _mm512_fmadd_ps(q, _mm512_loadu_ps(p[7] + j), a7);
+        }
+        float r[8] = {sum16(a0), sum16(a1), sum16(a2), sum16(a3),
+                      sum16(a4), sum16(a5), sum16(a6), sum16(a7)};
+        for (; j < d; j++) {
+            float qj = query[j];
+            for (int k = 0; k < 8; k++) r[k] += qj * p[k][j];
+        }
+        for (int k = 0; k < 8; k++) out_dots[i + k] = r[k];
+    }
+    // Tail: fall through to the AVX2 path for any remaining < 8 vectors.
+    if (i < n) {
+        batch_dot_f_avx2(query, d, vectors + i, n - i, out_dots + i);
+    }
+}
+
+// AVX-512 SQ8 distance — uses _mm512 int paths. 64 int8 lanes per op vs
+// AVX2's 32. Same int16 widen → sub → madd chain.
+inline int32_t dist_l2sq_sq8_avx512(const int8_t* x, const int8_t* y, size_t d) {
+    __m512i acc = _mm512_setzero_si512();
+    size_t i = 0;
+    for (; i + 64 <= d; i += 64) {
+        __m512i vx = _mm512_loadu_si512(reinterpret_cast<const void*>(x + i));
+        __m512i vy = _mm512_loadu_si512(reinterpret_cast<const void*>(y + i));
+        // Widen int8 → int16 in two halves.
+        __m512i diff_lo = _mm512_sub_epi16(
+            _mm512_cvtepi8_epi16(_mm512_extracti64x4_epi64(vx, 0)),
+            _mm512_cvtepi8_epi16(_mm512_extracti64x4_epi64(vy, 0)));
+        __m512i diff_hi = _mm512_sub_epi16(
+            _mm512_cvtepi8_epi16(_mm512_extracti64x4_epi64(vx, 1)),
+            _mm512_cvtepi8_epi16(_mm512_extracti64x4_epi64(vy, 1)));
+        acc = _mm512_add_epi32(acc, _mm512_madd_epi16(diff_lo, diff_lo));
+        acc = _mm512_add_epi32(acc, _mm512_madd_epi16(diff_hi, diff_hi));
+    }
+    int32_t result = _mm512_reduce_add_epi32(acc);
+    for (; i < d; i++) {
+        int32_t diff = static_cast<int32_t>(x[i]) - static_cast<int32_t>(y[i]);
+        result += diff * diff;
+    }
+    return result;
+}
+
+#endif  // __AVX512F__
+
 // 4-way batched L2 distance — compute distance(query, v[i]) for i in [0, n)
 // processing 4 neighbours in parallel to expose instruction-level parallelism.
 // Four independent FMA chains hide the FMA latency (~5 cycles on Skylake+)

@@ -504,8 +504,17 @@ private:
                 if (n_unvis == 0) continue;
 
                 int32_t dists_i32[MAX_BATCH];
+#if defined(__AVX512F__)
+                // AVX-512 SQ8: 64 int8 lanes/op (vs AVX2's 32), ~2× throughput
+                // on supporting hardware. We dispatch one-at-a-time because
+                // the single-distance AVX-512 kernel is already very wide.
+                for (size_t bi = 0; bi < n_unvis; bi++) {
+                    dists_i32[bi] = dist_l2sq_sq8_avx512(query.ptr, vptr[bi], query.sz);
+                }
+#else
                 batch_l2sq_sq8_avx2(query.ptr, query.sz, vptr,
                                     n_unvis, dists_i32);
+#endif
                 _dist_calls += n_unvis;
 
                 for (size_t i = 0; i < n_unvis; i++) {
@@ -573,7 +582,13 @@ private:
                 // using precomputed _norms_sq[v]. One FMA per chunk (dot)
                 // instead of two (sub + square), so per-distance FLOPs halve.
                 float dots[MAX_BATCH];
+#if defined(__AVX512F__)
+                // AVX-512 path: 16 floats/op, 8 accumulators saturate FMA
+                // throughput on Zen 4 / Sapphire Rapids / Xeon Gold.
+                batch_dot_f_avx512_8(query.ptr, query.sz, vptr, n_unvis, dots);
+#else
                 batch_dot_f_avx2_8(query.ptr, query.sz, vptr, n_unvis, dots);
+#endif
                 float dists[MAX_BATCH];
                 for (size_t i = 0; i < n_unvis; i++) {
                     float d_sq = query_norm_sq + _norms_sq[unvis[i]] - 2.0f * dots[i];
