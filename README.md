@@ -52,50 +52,24 @@ A metric-space KNN library with a C++ core. **VP-Trees** for exact search up to 
 
 | | PyNear | Faiss | Annoy | scikit-learn |
 |---|---|---|---|---|
-| **Exact results** | ✅ VPTree always | ✅ flat index | ❌ approximate | ✅ |
-| **Approximate (fast, tunable)** | ✅ IVFFlatL2Index | ✅ IVF | ✅ | ❌ |
-| **Metric agnostic** | ✅ L2, L1, L∞, Hamming | L2 / inner product | L2 / cosine / Hamming | L2 / others |
-| **Low-dim sweet spot** | ✅ | ❌ | ❌ | ❌ |
-| **High-dim (512-D – 1024-D)** | ✅ IVFFlatL2Index | ✅ | ✅ | ❌ |
-| **Binary / Hamming exact** | ✅ hardware popcount | ✅ | ✅ | ❌ |
-| **Binary / Hamming approx** | ✅ MIH + IVFFlat | ⚠️ slow build | ❌ | ❌ |
-| **Threshold / range search** | ✅ BKTree | ❌ | ❌ | ❌ |
-| **Pickle serialization** | ✅ | ❌ | ✅ | ✅ |
-| **No extra native deps** | ✅ NumPy only | ❌ compiled lib + optional GPU | ❌ | ❌ |
-| **scikit-learn compatible API** | ✅ drop-in adapters | ❌ | ❌ | — |
+| **Metric agnostic** | ✅ L2, L1, L∞, Hamming | L2 / IP | L2 / cosine / Hamming | L2 / others |
+| **Binary / Hamming approx** | ✅ 257× faster than brute-force | ⚠️ slow build | ❌ | ❌ |
+| **scikit-learn drop-in** | ✅ adapter classes | ❌ | ❌ | — |
+| **Zero native deps** | ✅ NumPy only | ❌ compiled lib + optional GPU | ❌ | ❌ |
 
-PyNear covers the full spectrum: use **VPTree** indices when you need
-guaranteed exact answers (2-D to ~256-D), **IVFFlatL2Index** for fast
-approximate float search on high-dimensional data (512-D to 1024-D), or
-**MIHBinaryIndex** / **IVFFlatBinaryIndex** for approximate Hamming search
-on binary descriptors — achieving up to **257× speedup** over exact
-binary brute-force at N=1M, d=512 with 100% Recall@10.
+[Full comparison →](./docs/comparison.md)
 
-#### For the Layman
+PyNear covers the full spectrum: **VPTree** indices for guaranteed exact answers (2-D to ~256-D), **IVFFlatL2Index** for fast approximate float search at 512–1024-D, and **MIHBinaryIndex** / **IVFFlatBinaryIndex** for approximate Hamming search on binary descriptors.
 
- K-Nearest Neighbours (KNN) is simply the idea of finding the k most similar items to a given query in a collection.
+> New to KNN? See [docs/intro.md](./docs/intro.md) for a gentle, jargon-free introduction.
 
-  Think of it like asking: "given this song I like, what are the 5 most similar songs in my library?" The algorithm measures the "distance" between items
-  (how different they are) and returns the closest ones.
+### What people build with PyNear
 
-  The two key parameters are:
-  - k — how many neighbours to return (e.g. the 5 most similar)
-  - distance metric — how "similarity" is measured (e.g. Euclidean, Manhattan, Hamming)
-
-  Everything else — VP-Trees, SIMD, approximate search — is just engineering to make that search fast at scale.
-
-##### Main applications of KNN search 
-
-  1. Image retrieval — finding visually similar images by searching nearest neighbours in an embedding space (e.g. face recognition, reverse image
-  search).
-  2. Recommendation systems — suggesting similar items (products, songs, articles) by finding the closest user or item embeddings.
-  3. Anomaly detection — flagging data points whose nearest neighbours are unusually distant as potential outliers or fraud cases.
-  4. Semantic search — retrieving documents or passages whose dense vector representations are closest to a query embedding (e.g. RAG pipelines).
-  5. Broad-phase collision detection — quickly finding candidate object pairs that might be colliding by looking up the nearest neighbours of each object's
-   bounding volume, before running the expensive narrow-phase test.
-  6. Soft body / cloth simulation — finding the nearest mesh vertices or particles to resolve contact constraints and self-collision.
-  7. Particle systems (SPH, fluid sim) — each particle needs to know its neighbours within a radius to compute pressure and density forces.
-
+| | | |
+|:---|:---|:---|
+| **Image / video dedup** | **Drop-in for sklearn** | **Interactive visualisation** |
+| Encode with perceptual hash / ORB / SimHash, index with `MIHBinaryIndex`, find near-duplicates **257× faster** than brute-force. | Swap `sklearn.neighbors.KNeighborsClassifier` for `PyNearKNeighborsClassifier`. Same API, same results, faster. | Two desktop demos: a 1M-point KNN explorer and a live Voronoi diagram you can drag seeds in. |
+| → [`demo_binary.py`](./demo_binary.py) | → [Migration guide](#migrating-from-scikit-learn) | → [`demo/`](./demo) |
 
 ---
 
@@ -264,55 +238,9 @@ recall and tuning `n_probe` for your dataset.
 
 #### Why approximate search? The curse of dimensionality
 
-Tree-based exact search relies on pruning: a branch is discarded when its
-closest possible point is provably farther than the current best candidate.
-This pruning becomes ineffective as dimensionality grows — a phenomenon rooted
-in a fundamental geometric property of high-dimensional spaces.
+Tree pruning loses traction as dimensionality grows: in high-$n$ spaces, nearly all points concentrate in a thin shell near the boundary and distances between any two points become almost equal, leaving the tree nothing to prune. That's why exact tree search offers diminishing returns beyond $d \approx 256$ and why approximate methods (IVF-style probing) take over.
 
-**Volume concentration near the boundary.**
-Consider $N$ points drawn uniformly at random inside an $n$-dimensional ball
-of radius $R$. A point at distance $r$ from the origin is closer to the
-boundary than to the origin whenever $R - r < r$, i.e. $r > R/2$.
-The fraction of the ball's volume satisfying this condition is:
-
-$$F(n) = \frac{V_n(R) - V_n\left(\tfrac{R}{2}\right)}{V_n(R)} = 1 - \left(\frac{1}{2}\right)^{n}$$
-
-where $V_n(r) = \dfrac{\pi^{n/2}}{\Gamma\left(\tfrac{n}{2}+1\right)} r^n$ is
-the volume of an $n$-ball of radius $r$. Because $V_n$ scales as $r^n$, the
-ratio simplifies cleanly to $1 - 2^{-n}$, independent of $R$.
-
-**Median distance from the origin.**
-The median distance $r_m$ is the radius such that exactly half the volume lies
-within it:
-
-$$\frac{V_n(r_m)}{V_n(R)} = \frac{1}{2}
-\;\Longrightarrow\;
-\left(\frac{r_m}{R}\right)^n = \frac{1}{2}
-\;\Longrightarrow\;
-r_m = R \cdot 2^{-1/n}$$
-
-As $n \to \infty$, $r_m \to R$: the typical point is arbitrarily close to
-the surface of the ball.
-
-**Numerical illustration:**
-
-| Dimensionality $n$ | Points closer to border than origin $F(n)$ | Median distance $r_m / R$ |
-|:------------------:|:-------------------------------------------:|:-------------------------:|
-| 1                  | 50.0 %                                      | 0.500                     |
-| 2                  | 75.0 %                                      | 0.707                     |
-| 5                  | 96.9 %                                      | 0.871                     |
-| 10                 | 99.9 %                                      | 0.933                     |
-| 100                | ≈ 100 %                                     | 0.993                     |
-
-**Consequence for KNN trees.**
-When $n$ is large, nearly all points are concentrated in a thin shell near
-the boundary, and the distances between any two points become almost equal.
-With no contrast in distances, a tree has nothing to prune — every branch
-must be explored — and search degrades to exhaustive linear scan, $O(N)$.
-This is the fundamental reason why exact tree search offers diminishing
-returns beyond $d \approx 256$, and why approximate methods such as
-**IVFFlatL2Index** (probing only a fraction of clusters) or Faiss IVF are
-necessary at high dimensionalities.
+[Full derivation, with volume integrals and a numerical illustration →](./docs/approximate.md#why-approximate-search-the-curse-of-dimensionality)
 
 ### Pickle serialisation
 
@@ -374,17 +302,13 @@ See [docs/demos.md](./docs/demos.md) for full details.
 
 ## Benchmarks
 
-[**Benchmark Report (PDF)**](./docs/benchmarks.pdf)
+![QPS vs Recall@10 on SIFT1M binary](results/binary_benchmark_qps.png)
 
-A formal evaluation of PyNear against Faiss, scikit-learn, and Annoy across
-Euclidean, Manhattan, and Hamming distance metrics, dimensionalities from
-2-D to 1024-D, and both exact and approximate search modes. Includes
-TikZ-rendered latency charts, a recall–latency Pareto analysis of
-IVFFlatL2Index vs Faiss IndexIVFFlat, and approximate binary-descriptor
-benchmarks showing MIHBinaryIndex achieving **257× speedup** over
-Faiss exact binary brute-force at N=1M, d=512 with 100% Recall@10.
+> Approximate Hamming search on 1M × 128-bit SIFT descriptors. `MIHBinaryIndex` and `IVFFlatBinaryIndex` both reach 100% Recall@10 at >35× the throughput of brute-force.
 
-To run a quick standalone benchmark:
+[**Full benchmark report (PDF)**](./docs/benchmarks.pdf) — formal evaluation against Faiss, scikit-learn, and Annoy across L2 / L1 / Hamming, dimensionalities from 2-D to 1024-D, both exact and approximate modes. Includes the recall–latency Pareto analysis and the **257× speedup** result over Faiss binary brute-force at N=1M, d=512.
+
+Quick standalone run:
 
 ```console
 python bench_run.py
@@ -400,8 +324,6 @@ Performance of pynear's approximate Hamming-distance indices on the
 1,000,000 × 128-dim float SIFT descriptors sign-quantised to **128-bit binary**
 (16 bytes/descriptor).  Ground truth computed by exact brute-force Hamming k-NN
 over 500 queries, k=10.  Machine: Intel(R) Core(TM) Ultra 9 285K.
-
-![QPS vs Recall@10](results/binary_benchmark_qps.png)
 
 | Index               | Configuration         | Build (s) | ms / query | QPS | Recall@10 |
 | ------------------- | --------------------- | --------- | ---------- | --- | --------- |
@@ -481,3 +403,13 @@ Build and run `vptree-tests.exe` from the generated solution.
 ```console
 make fmt
 ```
+
+---
+
+## Star history
+
+<a href="https://star-history.com/#pablocael/pynear&Date">
+  <img src="https://api.star-history.com/svg?repos=pablocael/pynear&type=Date" alt="Star history of pablocael/pynear">
+</a>
+
+If pynear saved you time, consider [starring the repo](https://github.com/pablocael/pynear/stargazers) — it's the cheapest way to support the project and helps others discover it.
