@@ -447,37 +447,60 @@ private:
             auto& vis = visited_buf();
 
             if constexpr (std::is_same_v<T, FlatSpan>) {
-                // Float-vector fast path: filter to unvisited, then batch
-                // distance with 4-way SIMD. Saves ~30 % of query time vs
-                // calling dist_l2_f_avx2 once per neighbour — the batch
-                // exposes ILP that the per-call version cannot.
-                // Buffer size covers M up to 256 (M_max0 = 512). Larger M
-                // is exotic; we fall back to the generic path if exceeded.
+                // Float-vector fast path. Three layered optimisations,
+                // following Faiss's HNSW.cpp pattern:
+                //
+                //   (a) Pre-pass over the neighbour list that prefetches
+                //       each visited-array entry into L1. This is what
+                //       Faiss does (`vt.prefetch(v1)`) — for typical
+                //       neighbour counts (M_max0 = 32) all visited entries
+                //       fit in a few cache lines; prefetching them ahead
+                //       hides the L2/L3 visited-check latency.
+                //   (b) Filter to unvisited and prefetch each unvisited
+                //       vector's first cache line.
+                //   (c) Single 4-way batched SIMD distance call.
                 constexpr size_t MAX_BATCH = 512;
+                const size_t cap = std::min(nv.count, MAX_BATCH);
+
+#if defined(__AVX__) || defined(__AVX2__)
+                // (a) prefetch visited-array entries.
+                for (size_t ni = 0; ni < cap; ni++) {
+                    _mm_prefetch(
+                        reinterpret_cast<const char*>(&vis[nv.ptr[ni]]),
+                        _MM_HINT_T0);
+                }
+#endif
+
                 int32_t unvis[MAX_BATCH];
                 const float* vptr[MAX_BATCH];
                 size_t n_unvis = 0;
-                const size_t cap = std::min(nv.count, MAX_BATCH);
                 for (size_t ni = 0; ni < cap; ni++) {
                     int32_t n = nv.ptr[ni];
                     if (vis[n] == ver) continue;
                     vis[n] = ver;
                     unvis[n_unvis] = n;
                     vptr[n_unvis] = _examples[n].ptr;
+#if defined(__AVX__) || defined(__AVX2__)
+                    // (b) prefetch this unvisited vector's first cache line
+                    // — the rest will stream in via HW prefetcher once the
+                    // load pattern is established.
+                    _mm_prefetch(reinterpret_cast<const char*>(vptr[n_unvis]),
+                                 _MM_HINT_T0);
+#endif
                     n_unvis++;
                 }
                 if (n_unvis == 0) continue;
 
+                // (c) Squared L2 batch — no sqrt in the hot loop. The
+                // Python adapter sqrt's the final top-k for HNSWL2Index;
+                // the cosine adapter consumes squared L2 directly via
+                // d_cos = L2_sq / 2.
                 float dists[MAX_BATCH];
-                // HNSW pipelines use the squared-L2 internal kernel (no sqrt
-                // in the hot loop) and the Python adapter applies sqrt only
-                // to the final top-k. Cosine adapter consumes squared L2
-                // directly (d_cos = L2_sq / 2).
                 batch_l2sq_f_avx2(query.ptr, query.sz, vptr,
                                   n_unvis, dists);
                 _dist_calls += n_unvis;
 
-                for (int i = 0; i < n_unvis; i++) {
+                for (size_t i = 0; i < n_unvis; i++) {
                     distT d = dists[i];
                     int32_t n = unvis[i];
                     if (results.size() < ef || d < results.front().distance) {
