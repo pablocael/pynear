@@ -115,6 +115,8 @@ public:
 
         _levels.assign(_examples.size(), 0);
         _adjacency.assign(_examples.size(), std::vector<std::vector<int32_t>>{});
+        _layer0_adj.assign(_examples.size() * _M_max0, -1);
+        _layer0_count.assign(_examples.size(), 0);
         init_thread_resources(_examples.size());
 
         _during_build = true;
@@ -206,15 +208,30 @@ public:
         adj_offsets.clear();
         adj_offsets.reserve(2 * _adjacency.size());
 
+        // Reconstitute the per-node "layer 0 + upper" view for pickle.
+        // Layer 0 lives in the flat buffer; upper layers in the nested vector.
         for (size_t i = 0; i < _adjacency.size(); i++) {
             adj_offsets.push_back(static_cast<int32_t>(flat_adj.size()));
             int32_t before = static_cast<int32_t>(flat_adj.size());
             int32_t nlayers = static_cast<int32_t>(_adjacency[i].size());
+            // sizes header — layer 0 size from flat buffer, upper from nested
             for (int32_t l = 0; l < nlayers; l++) {
-                flat_adj.push_back(static_cast<int32_t>(_adjacency[i][l].size()));
+                if (l == 0) {
+                    flat_adj.push_back(_layer0_count[i]);
+                } else {
+                    flat_adj.push_back(static_cast<int32_t>(_adjacency[i][l].size()));
+                }
             }
+            // edge lists — same source as the sizes header above
             for (int32_t l = 0; l < nlayers; l++) {
-                for (int32_t e : _adjacency[i][l]) flat_adj.push_back(e);
+                if (l == 0) {
+                    int32_t cnt = _layer0_count[i];
+                    for (int32_t k = 0; k < cnt; k++) {
+                        flat_adj.push_back(_layer0_adj[(size_t)i * _M_max0 + k]);
+                    }
+                } else {
+                    for (int32_t e : _adjacency[i][l]) flat_adj.push_back(e);
+                }
             }
             adj_offsets.push_back(static_cast<int32_t>(flat_adj.size()) - before);
         }
@@ -255,6 +272,8 @@ public:
         }
 
         _adjacency.assign(n, std::vector<std::vector<int32_t>>{});
+        _layer0_adj.assign(n * _M_max0, -1);
+        _layer0_count.assign(n, 0);
         init_thread_resources(n);
         for (size_t i = 0; i < n; i++) {
             int32_t start = adj_offsets[2 * i];
@@ -266,9 +285,16 @@ public:
                 layer_sizes[l] = flat_adj[cursor++];
             }
             for (int32_t l = 0; l < nlayers; l++) {
-                _adjacency[i][l].reserve(layer_sizes[l]);
-                for (int32_t e = 0; e < layer_sizes[l]; e++) {
-                    _adjacency[i][l].push_back(flat_adj[cursor++]);
+                if (l == 0) {
+                    _layer0_count[i] = layer_sizes[0];
+                    for (int32_t e = 0; e < layer_sizes[0]; e++) {
+                        _layer0_adj[i * _M_max0 + e] = flat_adj[cursor++];
+                    }
+                } else {
+                    _adjacency[i][l].reserve(layer_sizes[l]);
+                    for (int32_t e = 0; e < layer_sizes[l]; e++) {
+                        _adjacency[i][l].push_back(flat_adj[cursor++]);
+                    }
                 }
             }
         }
@@ -283,6 +309,8 @@ public:
         _flat_backing.clear();
         _levels.clear();
         _adjacency.clear();
+        _layer0_adj.clear();
+        _layer0_count.clear();
         _visited_per_thread.clear();
         _visited_version_per_thread.clear();
         _rng_per_thread.clear();
@@ -340,6 +368,25 @@ private:
 
     NeighbourView read_neighbours(int32_t node, int32_t layer) const {
         NeighbourView v;
+        // Layer 0 — flat buffer, cache-friendly, the hot path for queries.
+        if (layer == 0) {
+            if (_layer0_adj.empty()) return v;
+            if (_during_build && _num_locks > 0) {
+                std::shared_lock<std::shared_mutex> rlock(_node_locks[node]);
+                int32_t cnt = _layer0_count[node];
+                v.owned.assign(
+                    _layer0_adj.data() + (size_t)node * _M_max0,
+                    _layer0_adj.data() + (size_t)node * _M_max0 + cnt);
+                v.ptr = v.owned.data();
+                v.count = v.owned.size();
+                return v;
+            }
+            v.ptr = _layer0_adj.data() + (size_t)node * _M_max0;
+            v.count = static_cast<size_t>(_layer0_count[node]);
+            return v;
+        }
+
+        // Upper layers — nested vector path.
         if (_during_build && _num_locks > 0) {
             std::shared_lock<std::shared_mutex> rlock(_node_locks[node]);
             if (layer >= (int32_t)_adjacency[node].size()) return v;
@@ -354,39 +401,43 @@ private:
         return v;
     }
 
-    // Beam search at a given layer. Returns up to ef candidates ordered by
-    // distance (any order in the heap; caller sorts).
+    // Beam search at a given layer. Uses raw std::vector + std::push_heap /
+    // std::pop_heap so we control the underlying allocation (reserve to
+    // avoid reallocations in the inner loop). std::priority_queue hides its
+    // container and reallocates on growth.
     std::vector<DistNode<distT>>
     search_layer(const T& query, int32_t entry, size_t ef, int32_t layer) const {
         const uint32_t ver = next_visited_version();
 
-        // Candidates min-heap (explore nearest first)
-        std::priority_queue<DistNode<distT>,
-                            std::vector<DistNode<distT>>,
-                            DistNodeMin<distT>> candidates;
-        // Results max-heap (drop farthest when we exceed ef)
-        std::priority_queue<DistNode<distT>,
-                            std::vector<DistNode<distT>>,
-                            DistNodeMax<distT>> results;
+        DistNodeMin<distT> min_cmp;
+        DistNodeMax<distT> max_cmp;
+
+        // Candidates: min-heap by distance (explore nearest first).
+        // Results:    max-heap by distance (drop the farthest when full).
+        std::vector<DistNode<distT>> candidates;
+        std::vector<DistNode<distT>> results;
+        candidates.reserve(ef * 2 + 8);
+        results.reserve(ef + 1);
 
         distT d_entry = distance_fn(query, _examples[entry]);
-        candidates.push({d_entry, entry});
-        results.push({d_entry, entry});
+        candidates.push_back({d_entry, entry});
+        std::push_heap(candidates.begin(), candidates.end(), min_cmp);
+        results.push_back({d_entry, entry});
+        std::push_heap(results.begin(), results.end(), max_cmp);
         visited_buf()[entry] = ver;
 
         while (!candidates.empty()) {
-            DistNode<distT> cur = candidates.top();
-            candidates.pop();
-            // Stopping condition: if current candidate is farther than the worst
-            // result and we already have ef results, no further exploration helps.
-            if (results.size() >= ef && cur.distance > results.top().distance) {
+            DistNode<distT> cur = candidates.front();
+            std::pop_heap(candidates.begin(), candidates.end(), min_cmp);
+            candidates.pop_back();
+
+            if (results.size() >= ef && cur.distance > results.front().distance) {
                 break;
             }
 
             NeighbourView nv = read_neighbours(cur.node_id, layer);
             if (nv.count == 0) continue;
 
-            // Prefetch the next few neighbours' vectors to reduce L3 misses.
 #if defined(__AVX__) || defined(__AVX2__)
             for (size_t pi = 0; pi < nv.count && pi < 4; pi++) {
                 if constexpr (std::is_same_v<T, FlatSpan>) {
@@ -411,27 +462,36 @@ private:
                 }
 #endif
                 distT d = distance_fn(query, _examples[n]);
-                if (results.size() < ef || d < results.top().distance) {
-                    candidates.push({d, n});
-                    results.push({d, n});
-                    if (results.size() > ef) results.pop();
+                if (results.size() < ef || d < results.front().distance) {
+                    candidates.push_back({d, n});
+                    std::push_heap(candidates.begin(), candidates.end(), min_cmp);
+                    results.push_back({d, n});
+                    std::push_heap(results.begin(), results.end(), max_cmp);
+                    if (results.size() > ef) {
+                        std::pop_heap(results.begin(), results.end(), max_cmp);
+                        results.pop_back();
+                    }
                 }
             }
         }
 
-        std::vector<DistNode<distT>> out;
-        out.reserve(results.size());
-        while (!results.empty()) {
-            out.push_back(results.top());
-            results.pop();
-        }
-        return out;  // farthest-first (popped from max-heap)
+        // Results are in heap order; caller does the final sort.
+        return results;
     }
 
     // α-heuristic from §4 of the HNSW paper. Selects up to M items from
-    // candidates such that for every selected pair (p, q), the inserted point
-    // is closer to both than they are to each other — biases toward
-    // long-range, "navigable" edges.
+    // `candidates` such that for every selected pair (p, q), the inserted
+    // point is closer to both than they are to each other — biases toward
+    // long-range, "navigable" edges that give the graph its small-world
+    // property.
+    //
+    // Two variants from algorithm 4 of the paper:
+    //  - extendCandidates: also consider neighbours of candidates. We skip
+    //    this; it's expensive and Faiss/hnswlib don't enable it by default.
+    //  - keepPrunedConnections: after the heuristic, if |selected| < M,
+    //    pad up to M from the rejected pool (nearest-first). Without this,
+    //    nodes can end up with fewer than M edges and recall drops measurably
+    //    at every ef. We enable it — matches Faiss/hnswlib defaults.
     std::vector<int32_t>
     select_neighbours_heuristic(const T& query,
                                 std::vector<DistNode<distT>> candidates,
@@ -439,7 +499,6 @@ private:
         if (candidates.size() <= M) {
             std::vector<int32_t> ids;
             ids.reserve(candidates.size());
-            // Sort nearest-first
             std::sort(candidates.begin(), candidates.end(),
                       [](const DistNode<distT>& a, const DistNode<distT>& b) {
                           return a.distance < b.distance;
@@ -448,14 +507,16 @@ private:
             return ids;
         }
 
-        // Sort nearest-first and apply the α-heuristic.
         std::sort(candidates.begin(), candidates.end(),
                   [](const DistNode<distT>& a, const DistNode<distT>& b) {
                       return a.distance < b.distance;
                   });
 
         std::vector<int32_t> selected;
+        std::vector<DistNode<distT>> rejected;
         selected.reserve(M);
+        rejected.reserve(candidates.size());
+
         for (const auto& c : candidates) {
             if (selected.size() >= M) break;
             bool keep = true;
@@ -466,7 +527,16 @@ private:
                     break;
                 }
             }
-            if (keep) selected.push_back(c.node_id);
+            if (keep) {
+                selected.push_back(c.node_id);
+            } else {
+                rejected.push_back(c);
+            }
+        }
+        // keepPrunedConnections — pad to M from the nearest rejected candidates.
+        for (const auto& c : rejected) {
+            if (selected.size() >= M) break;
+            selected.push_back(c.node_id);
         }
         return selected;
     }
@@ -484,9 +554,11 @@ private:
         // reach pidx yet (pidx is unreachable from the graph until we add
         // reverse edges below).
         _levels[pidx] = level;
+        // Upper layers go into the nested vector. Layer 0 lives in
+        // _layer0_adj (flat) and is initialised to count=0 by set().
         _adjacency[pidx].assign(level + 1, std::vector<int32_t>{});
-        for (int32_t l = 0; l <= level; l++) {
-            _adjacency[pidx][l].reserve(l == 0 ? _M_max0 : _M);
+        for (int32_t l = 1; l <= level; l++) {
+            _adjacency[pidx][l].reserve(_M);
         }
 
         // Snapshot entry point + top level under the entry lock. The greedy
@@ -523,26 +595,51 @@ private:
                                                                      _M);
 
             // Link new node → chosen. No lock: this is our own node.
-            _adjacency[pidx][l] = chosen;
+            if (l == 0) {
+                for (size_t i = 0; i < chosen.size(); i++) {
+                    _layer0_adj[(size_t)pidx * _M_max0 + i] = chosen[i];
+                }
+                _layer0_count[pidx] = static_cast<int32_t>(chosen.size());
+            } else {
+                _adjacency[pidx][l] = chosen;
+            }
 
             // Link reverse edges; prune neighbour's adjacency if it now
             // exceeds M_max. Per-node exclusive lock protects the modification.
             for (int32_t c : chosen) {
                 std::unique_lock<std::shared_mutex> wlock(_node_locks[c]);
-                if (l >= (int32_t)_adjacency[c].size()) {
-                    // Concurrent insertion of c may not have set up this
-                    // layer yet — skip the reverse edge in that case (very rare).
-                    continue;
-                }
-                auto& neigh_adj = _adjacency[c][l];
-                neigh_adj.push_back(pidx);
-                if (neigh_adj.size() > M_max) {
-                    std::vector<DistNode<distT>> nc;
-                    nc.reserve(neigh_adj.size());
-                    for (int32_t n : neigh_adj) {
-                        nc.push_back({distance_fn(_examples[c], _examples[n]), n});
+                if (l == 0) {
+                    int32_t& cnt = _layer0_count[c];
+                    if (cnt < (int32_t)_M_max0) {
+                        _layer0_adj[(size_t)c * _M_max0 + cnt] = pidx;
+                        cnt++;
+                    } else {
+                        // Slot full — apply α-heuristic over existing edges + new one.
+                        std::vector<DistNode<distT>> nc;
+                        nc.reserve(_M_max0 + 1);
+                        for (int32_t i = 0; i < cnt; i++) {
+                            int32_t n = _layer0_adj[(size_t)c * _M_max0 + i];
+                            nc.push_back({distance_fn(_examples[c], _examples[n]), n});
+                        }
+                        nc.push_back({distance_fn(_examples[c], _examples[pidx]), pidx});
+                        auto kept = select_neighbours_heuristic(_examples[c], nc, _M_max0);
+                        for (size_t i = 0; i < kept.size(); i++) {
+                            _layer0_adj[(size_t)c * _M_max0 + i] = kept[i];
+                        }
+                        cnt = static_cast<int32_t>(kept.size());
                     }
-                    _adjacency[c][l] = select_neighbours_heuristic(_examples[c], nc, M_max);
+                } else {
+                    if (l >= (int32_t)_adjacency[c].size()) continue;
+                    auto& neigh_adj = _adjacency[c][l];
+                    neigh_adj.push_back(pidx);
+                    if (neigh_adj.size() > _M) {
+                        std::vector<DistNode<distT>> nc;
+                        nc.reserve(neigh_adj.size());
+                        for (int32_t n : neigh_adj) {
+                            nc.push_back({distance_fn(_examples[c], _examples[n]), n});
+                        }
+                        _adjacency[c][l] = select_neighbours_heuristic(_examples[c], nc, _M);
+                    }
                 }
             }
 
@@ -629,22 +726,29 @@ private:
                             size_t ef, int32_t layer) const {
         const uint32_t ver = next_visited_version();
 
-        std::priority_queue<DistNode<distT>,
-                            std::vector<DistNode<distT>>,
-                            DistNodeMin<distT>> candidates;
-        std::priority_queue<DistNode<distT>,
-                            std::vector<DistNode<distT>>,
-                            DistNodeMax<distT>> results;
+        DistNodeMin<distT> min_cmp;
+        DistNodeMax<distT> max_cmp;
 
+        std::vector<DistNode<distT>> candidates;
+        std::vector<DistNode<distT>> results;
+        candidates.reserve(ef * 2 + extra_seeds.size() + 8);
+        results.reserve(ef + 1);
+
+        auto& vis = visited_buf();
         auto seed = [&](int32_t node) {
             if (node < 0 || node >= (int32_t)_examples.size()) return;
-            if (visited_buf()[node] == ver) return;
-            visited_buf()[node] = ver;
+            if (vis[node] == ver) return;
+            vis[node] = ver;
             distT d = distance_fn(query, _examples[node]);
-            candidates.push({d, node});
-            if (results.size() < ef || d < results.top().distance) {
-                results.push({d, node});
-                if (results.size() > ef) results.pop();
+            candidates.push_back({d, node});
+            std::push_heap(candidates.begin(), candidates.end(), min_cmp);
+            if (results.size() < ef || d < results.front().distance) {
+                results.push_back({d, node});
+                std::push_heap(results.begin(), results.end(), max_cmp);
+                if (results.size() > ef) {
+                    std::pop_heap(results.begin(), results.end(), max_cmp);
+                    results.pop_back();
+                }
             }
         };
 
@@ -652,32 +756,30 @@ private:
         for (int32_t s : extra_seeds) seed(s);
 
         while (!candidates.empty()) {
-            DistNode<distT> cur = candidates.top();
-            candidates.pop();
-            if (results.size() >= ef && cur.distance > results.top().distance) break;
+            DistNode<distT> cur = candidates.front();
+            std::pop_heap(candidates.begin(), candidates.end(), min_cmp);
+            candidates.pop_back();
+            if (results.size() >= ef && cur.distance > results.front().distance) break;
             NeighbourView nv = read_neighbours(cur.node_id, layer);
             if (nv.count == 0) continue;
-            auto& vis = visited_buf();
             for (size_t ni = 0; ni < nv.count; ni++) {
                 int32_t n = nv.ptr[ni];
-                if (visited_buf()[n] == ver) continue;
-                visited_buf()[n] = ver;
+                if (vis[n] == ver) continue;
+                vis[n] = ver;
                 distT d = distance_fn(query, _examples[n]);
-                if (results.size() < ef || d < results.top().distance) {
-                    candidates.push({d, n});
-                    results.push({d, n});
-                    if (results.size() > ef) results.pop();
+                if (results.size() < ef || d < results.front().distance) {
+                    candidates.push_back({d, n});
+                    std::push_heap(candidates.begin(), candidates.end(), min_cmp);
+                    results.push_back({d, n});
+                    std::push_heap(results.begin(), results.end(), max_cmp);
+                    if (results.size() > ef) {
+                        std::pop_heap(results.begin(), results.end(), max_cmp);
+                        results.pop_back();
+                    }
                 }
             }
         }
-
-        std::vector<DistNode<distT>> out;
-        out.reserve(results.size());
-        while (!results.empty()) {
-            out.push_back(results.top());
-            results.pop();
-        }
-        return out;
+        return results;
     }
 
     // ─── State ──────────────────────────────────────────────────────────────
@@ -695,8 +797,18 @@ private:
     std::vector<T> _examples;
     std::vector<float> _flat_backing;            // owns the raw vectors when T = FlatSpan
     std::vector<int32_t> _levels;                // _levels[i] = max layer for node i
+
+    // Layer 0 lives in a contiguous flat buffer for cache locality on
+    // queries. Each node owns a fixed-size slot of _M_max0 int32 IDs at
+    // offset `node * _M_max0`; the actual edge count is in _layer0_count.
+    // This is the single biggest cache-locality win on the query path.
+    std::vector<int32_t> _layer0_adj;            // size = N * _M_max0
+    std::vector<int32_t> _layer0_count;          // size = N
+
+    // Upper layers (layer >= 1) stay as nested vectors — sparse, less critical.
+    // _adjacency[node].size() == _levels[node] + 1; index 0 is unused.
     std::vector<std::vector<std::vector<int32_t>>> _adjacency;
-        // _adjacency[node][layer] = neighbour IDs at that layer
+        // _adjacency[node][layer] = neighbour IDs at that layer (only layer >= 1)
 
     std::mt19937 _rng;
     uint64_t _seed_used = 42;
