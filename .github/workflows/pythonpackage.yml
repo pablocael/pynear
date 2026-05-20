@@ -67,7 +67,7 @@ jobs:
         # __AVX512F__-gated symbol — that way the compiler is forced to
         # instantiate the AVX-512 templates.
         cat > /tmp/avx512_check.cpp <<'EOF'
-        #include "pynear/include/DistanceFunctions.hpp"
+        #include "DistanceFunctions.hpp"
         int main() {
         #if defined(__AVX512F__)
             int8_t x[64] = {0}, y[64] = {0};
@@ -87,6 +87,7 @@ jobs:
         EOF
         g++ -O3 -std=c++17 \
             -march=skylake-avx512 -mavx512f -mavx512bw -mfma \
+            -I pynear/include \
             -c /tmp/avx512_check.cpp -o /tmp/avx512_check.o
         echo "AVX-512 kernels compiled successfully."
 
