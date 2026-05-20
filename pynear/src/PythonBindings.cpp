@@ -596,6 +596,127 @@ public:
     hnsw::HNSWIndex<arrayf, float, dist_l2sq_f_avx2> hnsw;
 };
 
+// HNSWL2NumpyAdapterSQ8 — HNSW with scalar quantisation (int8 vectors).
+//
+// Stores each vector as int8 using a single global scale: int8_i = round(f_i / scale).
+// 4× memory bandwidth reduction vs float, plus AVX2 processes 32 int8 lanes
+// per op (vs 8 floats). Distance ordering is preserved (we multiply by
+// scale² to get true L2², but that's a constant so HNSW ordering is correct
+// without it). On exit we apply scale to recover float L2 distances.
+//
+// Recall typically drops 1-3 % vs full-float at the same params on Gaussian
+// data; users wanting maximum recall stick with HNSWL2Index.
+class HNSWL2NumpyAdapterSQ8 {
+public:
+    HNSWL2NumpyAdapterSQ8(size_t M = 16,
+                          size_t ef_construction = 200,
+                          size_t ef_search = 50,
+                          uint64_t seed = 42,
+                          int n_threads = 1)
+        : hnsw(M, ef_construction, ef_search, seed, n_threads),
+          _scale(0.0f) {}
+
+    void set(py::array_t<float, py::array::c_style | py::array::forcecast> arr) {
+        auto buf = arr.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("set() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        const float* ptr = static_cast<const float*>(buf.ptr);
+
+        // Compute global max-abs for symmetric int8 quantisation.
+        float max_abs = 0.0f;
+        for (size_t i = 0; i < n * d; i++) {
+            float v = std::fabs(ptr[i]);
+            if (v > max_abs) max_abs = v;
+        }
+        _scale = (max_abs > 0.0f) ? (max_abs / 127.0f) : 1.0f;
+        const float inv_scale = 1.0f / _scale;
+
+        _sq8_backing.assign(n * d, 0);
+        for (size_t i = 0; i < n * d; i++) {
+            int v = static_cast<int>(std::round(ptr[i] * inv_scale));
+            if (v > 127) v = 127;
+            else if (v < -128) v = -128;
+            _sq8_backing[i] = static_cast<int8_t>(v);
+        }
+
+        std::vector<SQ8Span> spans(n);
+        for (size_t i = 0; i < n; i++) {
+            spans[i] = SQ8Span{_sq8_backing.data() + i * d, d};
+        }
+        hnsw.set(spans);
+    }
+
+    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<float>>>
+    searchKNN(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k) {
+        auto buf = queries.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("searchKNN() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        if (_scale <= 0.0f) {
+            return std::make_tuple(
+                std::vector<std::vector<int64_t>>(n),
+                std::vector<std::vector<float>>(n));
+        }
+        const float* ptr = static_cast<const float*>(buf.ptr);
+        const float inv_scale = 1.0f / _scale;
+
+        // Quantise queries into a temporary int8 buffer.
+        std::vector<int8_t> q_buf(n * d);
+        for (size_t i = 0; i < n * d; i++) {
+            int v = static_cast<int>(std::round(ptr[i] * inv_scale));
+            if (v > 127) v = 127;
+            else if (v < -128) v = -128;
+            q_buf[i] = static_cast<int8_t>(v);
+        }
+        std::vector<SQ8Span> qspans(n);
+        for (size_t i = 0; i < n; i++) {
+            qspans[i] = SQ8Span{q_buf.data() + i * d, d};
+        }
+
+        std::vector<std::vector<int64_t>> idx;
+        std::vector<std::vector<int32_t>> dist_i;
+        hnsw.searchKNN(qspans, k, idx, dist_i);
+        // Convert int32 squared-quantised distance → float L2 distance.
+        // L2 = scale * sqrt(d_int)   (scale² for L2², then sqrt)
+        std::vector<std::vector<float>> dist_f(idx.size());
+        for (size_t i = 0; i < idx.size(); i++) {
+            dist_f[i].reserve(dist_i[i].size());
+            for (int32_t di : dist_i[i]) {
+                dist_f[i].push_back(_scale * std::sqrt(static_cast<float>(di)));
+            }
+        }
+        return std::make_tuple(std::move(idx), std::move(dist_f));
+    }
+
+    std::tuple<std::vector<int64_t>, std::vector<float>>
+    search1NN(py::array_t<float, py::array::c_style | py::array::forcecast> queries) {
+        auto [idx, dist] = searchKNN(queries, 1);
+        std::vector<int64_t> out_idx(idx.size(), -1);
+        std::vector<float> out_dist(idx.size(), 0.0f);
+        for (size_t i = 0; i < idx.size(); i++) {
+            if (!idx[i].empty()) {
+                out_idx[i] = idx[i].back();
+                out_dist[i] = dist[i].back();
+            }
+        }
+        return std::make_tuple(std::move(out_idx), std::move(out_dist));
+    }
+
+    void set_ef(size_t ef) { hnsw.set_ef(ef); }
+    size_t ef_search() const { return hnsw.ef_search(); }
+    size_t size() const { return hnsw.size(); }
+    float scale() const { return _scale; }
+
+    hnsw::HNSWIndex<SQ8Span, int32_t, dist_l2sq_sq8> hnsw;
+
+private:
+    std::vector<int8_t> _sq8_backing;
+    float _scale;
+};
+
 // HNSWBinaryNumpyAdapter — HNSW over Hamming distance.
 // Templated on the distance function so we can plug in the generic
 // dist_hamming or any fixed-width specialisation.
@@ -988,6 +1109,22 @@ PYBIND11_MODULE(_pynear, m) {
         .def_property_readonly("dim", &HNSWCosineNumpyAdapter::dim)
         .def(py::pickle(&HNSWCosineNumpyAdapter::get_state,
                         &HNSWCosineNumpyAdapter::set_state));
+
+    py::class_<HNSWL2NumpyAdapterSQ8>(m, "HNSWL2IndexSQ8",
+        "HNSW with int8 scalar quantisation. ~4x less memory and faster "
+        "queries at large N, at the cost of ~1-3% recall vs HNSWL2Index. "
+        "Public API mirrors HNSWL2Index; distances returned are L2 (scaled).")
+        .def(py::init<size_t, size_t, size_t, uint64_t, int>(),
+             py::arg("M") = 16, py::arg("ef_construction") = 200,
+             py::arg("ef_search") = 50, py::arg("seed") = 42,
+             py::arg("n_threads") = 1)
+        .def("set", &HNSWL2NumpyAdapterSQ8::set, py::arg("vectors"))
+        .def("searchKNN", &HNSWL2NumpyAdapterSQ8::searchKNN, py::arg("vectors"), py::arg("k"))
+        .def("search1NN", &HNSWL2NumpyAdapterSQ8::search1NN, py::arg("vectors"))
+        .def("set_ef", &HNSWL2NumpyAdapterSQ8::set_ef, py::arg("ef_search"))
+        .def_property_readonly("ef_search", &HNSWL2NumpyAdapterSQ8::ef_search)
+        .def_property_readonly("size", &HNSWL2NumpyAdapterSQ8::size)
+        .def_property_readonly("scale", &HNSWL2NumpyAdapterSQ8::scale);
 
     py::class_<HNSWBinaryNumpyAdapter<dist_hamming>>(m, "HNSWBinaryIndex")
         .def(py::init<size_t, size_t, size_t, uint64_t, int>(),

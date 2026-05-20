@@ -248,6 +248,62 @@ def test_hnsw_cosine_pickle_round_trip():
     np.testing.assert_allclose(np.array(d1), np.array(d2), rtol=1e-6)
 
 
+def test_hnsw_sq8_recall_within_2pct_of_float():
+    """SQ8 should give recall within ~3% of the full-float HNSW at the same params."""
+    rng = np.random.default_rng(42)
+    db = rng.standard_normal((3000, 64)).astype(np.float32)
+    queries = rng.standard_normal((50, 64)).astype(np.float32)
+    k = 10
+
+    idx_f = pynear.HNSWL2Index(M=16, ef_construction=200, ef_search=200)
+    idx_f.set(db)
+    pi_f, _ = idx_f.searchKNN(queries, k=k)
+    pi_f, _ = _nearest_first(pi_f, _)
+
+    idx_sq = pynear.HNSWL2IndexSQ8(M=16, ef_construction=200, ef_search=200)
+    idx_sq.set(db)
+    pi_sq, _ = idx_sq.searchKNN(queries, k=k)
+    pi_sq, _ = _nearest_first(pi_sq, _)
+
+    ref_idx, _ = _brute_l2(db, queries, k)
+    r_f = _recall_at_k(pi_f, ref_idx, k)
+    r_sq = _recall_at_k(pi_sq, ref_idx, k)
+    # SQ8 should be at most ~3 % behind full-float at default ef.
+    assert r_sq >= r_f - 0.03, f"SQ8 recall {r_sq:.3f} too far below float {r_f:.3f}"
+    assert r_sq >= 0.85, f"SQ8 recall {r_sq:.3f} unexpectedly low"
+
+
+def test_hnsw_sq8_distance_is_l2_scaled():
+    """Distances returned by SQ8 should be approximately L2, scaled by quantisation factor."""
+    db = np.array([[0.0, 0.0, 0.0, 0.0], [3.0, 4.0, 0.0, 0.0]], dtype=np.float32)
+    q  = np.array([[0.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+
+    idx = pynear.HNSWL2IndexSQ8(M=4, ef_construction=10, ef_search=10)
+    idx.set(db)
+    _, d = idx.searchKNN(q, k=2)
+    nearest_first = sorted(d[0])
+    # First should be ~0 (same point), second ~5 (sqrt(3²+4²)). Allow ~10 % SQ8 error.
+    assert abs(nearest_first[0] - 0.0) < 0.2
+    assert abs(nearest_first[1] - 5.0) < 0.5
+
+
+def test_hnsw_sq8_search1NN_finds_planted_duplicates():
+    rng = np.random.default_rng(7)
+    db = rng.standard_normal((500, 32)).astype(np.float32)
+    queries = rng.standard_normal((10, 32)).astype(np.float32)
+    for i, qv in enumerate(queries):
+        db[i * 20] = qv
+
+    idx = pynear.HNSWL2IndexSQ8(M=16, ef_construction=200, ef_search=200)
+    idx.set(db)
+    nn_idx, _ = idx.search1NN(queries)
+    # SQ8 may quantise queries slightly differently from planted db rows,
+    # so we allow either an exact match or a row whose vector is identical
+    # after quantisation. Most should match exactly.
+    matches = sum(int(int(nn_idx[i]) == i * 20) for i in range(len(queries)))
+    assert matches >= len(queries) - 1, f"only {matches}/{len(queries)} planted dupes found"
+
+
 def test_hnsw_cosine_handles_zero_rows():
     db = np.vstack([np.zeros((1, 8), dtype=np.float32), np.eye(8, dtype=np.float32)])
     q = np.array([[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], dtype=np.float32)

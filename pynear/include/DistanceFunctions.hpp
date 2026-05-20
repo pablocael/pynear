@@ -33,6 +33,17 @@ struct FlatSpan {
     const float* data() const { return ptr; }
 };
 
+// SQ8 — pointer to a vector of int8 values produced by scalar quantisation
+// of the original floats. Carries no scale itself; the SQ8 owner (e.g.
+// HNSWL2IndexSQ8) holds the global scale and scales final distances back
+// to L2 if it wants them in float space. For ordering inside HNSW the
+// scale is constant and can be omitted.
+struct SQ8Span {
+    const int8_t* ptr;
+    size_t sz;
+    size_t size() const { return sz; }
+};
+
 using arrayd = std::vector<double>;
 using arrayf = FlatSpan;
 using arrayli = std::vector<uint8_t>;
@@ -299,6 +310,129 @@ static inline __m128 masked_read(int d, const float *x) {
     }
     return _mm_load_ps(buf);
     // cannot use AVX2 _mm_mask_set1_epi32
+}
+
+// ─── int8 (SQ8) distance kernels ────────────────────────────────────────────
+// Process 32 int8 lanes per AVX2 op (4 × wider than float). Combined with the
+// 4 × memory-bandwidth reduction this is the biggest single perf lever we
+// have on Skylake-era hardware. Result is int32 sum-of-squared-diffs in the
+// quantised space; callers compose final L2 by multiplying by global scale².
+
+inline int32_t dist_l2sq_sq8_avx2(const int8_t* x, const int8_t* y, size_t d) {
+#if (defined(__AVX__) || defined(__AVX2__))
+    __m256i acc = _mm256_setzero_si256();
+    size_t i = 0;
+    for (; i + 32 <= d; i += 32) {
+        __m256i vx = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(x + i));
+        __m256i vy = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(y + i));
+        // Widen int8 → int16 in two halves so we can subtract without
+        // saturation surprises (int8 - int8 can underflow int8 range).
+        __m256i diff_lo = _mm256_sub_epi16(
+            _mm256_cvtepi8_epi16(_mm256_extracti128_si256(vx, 0)),
+            _mm256_cvtepi8_epi16(_mm256_extracti128_si256(vy, 0)));
+        __m256i diff_hi = _mm256_sub_epi16(
+            _mm256_cvtepi8_epi16(_mm256_extracti128_si256(vx, 1)),
+            _mm256_cvtepi8_epi16(_mm256_extracti128_si256(vy, 1)));
+        // madd_epi16(a, a) computes pairwise a*a then adds adjacent pairs
+        // → 8 int32 lanes, each holding the sum of two squared diffs.
+        acc = _mm256_add_epi32(acc, _mm256_madd_epi16(diff_lo, diff_lo));
+        acc = _mm256_add_epi32(acc, _mm256_madd_epi16(diff_hi, diff_hi));
+    }
+    // Reduce 8 int32 lanes to a scalar.
+    alignas(32) int32_t buf[8];
+    _mm256_store_si256(reinterpret_cast<__m256i*>(buf), acc);
+    int32_t result = 0;
+    for (int j = 0; j < 8; j++) result += buf[j];
+    // Scalar tail.
+    for (; i < d; i++) {
+        int32_t diff = static_cast<int32_t>(x[i]) - static_cast<int32_t>(y[i]);
+        result += diff * diff;
+    }
+    return result;
+#else
+    int32_t result = 0;
+    for (size_t i = 0; i < d; i++) {
+        int32_t diff = static_cast<int32_t>(x[i]) - static_cast<int32_t>(y[i]);
+        result += diff * diff;
+    }
+    return result;
+#endif
+}
+
+// Wrapper matching the HNSWIndex distance-function-pointer signature.
+inline int32_t dist_l2sq_sq8(const SQ8Span& p1, const SQ8Span& p2) {
+    return dist_l2sq_sq8_avx2(p1.ptr, p2.ptr, p1.sz);
+}
+
+// 4-way batched SQ8 L2² distance — compute distance(query, v[i]) for i ∈ [0,n).
+// 4 independent int32 accumulators expose ILP across the madd_epi16 chain.
+inline void batch_l2sq_sq8_avx2(const int8_t* query, size_t d,
+                                const int8_t* const* vectors,
+                                size_t n,
+                                int32_t* out) {
+#if (defined(__AVX__) || defined(__AVX2__))
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        __m256i a0 = _mm256_setzero_si256();
+        __m256i a1 = _mm256_setzero_si256();
+        __m256i a2 = _mm256_setzero_si256();
+        __m256i a3 = _mm256_setzero_si256();
+        const int8_t* p0 = vectors[i + 0];
+        const int8_t* p1 = vectors[i + 1];
+        const int8_t* p2 = vectors[i + 2];
+        const int8_t* p3 = vectors[i + 3];
+        size_t j = 0;
+        for (; j + 32 <= d; j += 32) {
+            __m256i q = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(query + j));
+            __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p0 + j));
+            __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p1 + j));
+            __m256i v2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p2 + j));
+            __m256i v3 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p3 + j));
+
+            __m256i q_lo = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(q, 0));
+            __m256i q_hi = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(q, 1));
+
+            #define ACCUM(acc, v) do {                                                              \
+                __m256i d_lo = _mm256_sub_epi16(q_lo,                                               \
+                    _mm256_cvtepi8_epi16(_mm256_extracti128_si256(v, 0)));                          \
+                __m256i d_hi = _mm256_sub_epi16(q_hi,                                               \
+                    _mm256_cvtepi8_epi16(_mm256_extracti128_si256(v, 1)));                          \
+                (acc) = _mm256_add_epi32((acc), _mm256_madd_epi16(d_lo, d_lo));                     \
+                (acc) = _mm256_add_epi32((acc), _mm256_madd_epi16(d_hi, d_hi));                     \
+            } while (0)
+
+            ACCUM(a0, v0);
+            ACCUM(a1, v1);
+            ACCUM(a2, v2);
+            ACCUM(a3, v3);
+
+            #undef ACCUM
+        }
+        alignas(32) int32_t b0[8], b1[8], b2[8], b3[8];
+        _mm256_store_si256(reinterpret_cast<__m256i*>(b0), a0);
+        _mm256_store_si256(reinterpret_cast<__m256i*>(b1), a1);
+        _mm256_store_si256(reinterpret_cast<__m256i*>(b2), a2);
+        _mm256_store_si256(reinterpret_cast<__m256i*>(b3), a3);
+        int32_t r0 = 0, r1 = 0, r2 = 0, r3 = 0;
+        for (int k = 0; k < 8; k++) { r0 += b0[k]; r1 += b1[k]; r2 += b2[k]; r3 += b3[k]; }
+        for (; j < d; j++) {
+            int32_t qd = query[j];
+            int32_t t;
+            t = qd - p0[j]; r0 += t * t;
+            t = qd - p1[j]; r1 += t * t;
+            t = qd - p2[j]; r2 += t * t;
+            t = qd - p3[j]; r3 += t * t;
+        }
+        out[i + 0] = r0; out[i + 1] = r1; out[i + 2] = r2; out[i + 3] = r3;
+    }
+    for (; i < n; i++) {
+        out[i] = dist_l2sq_sq8_avx2(query, vectors[i], d);
+    }
+#else
+    for (size_t i = 0; i < n; i++) {
+        out[i] = dist_l2sq_sq8_avx2(query, vectors[i], d);
+    }
+#endif
 }
 
 // Squared sum of one vector — ||v||². Used to precompute per-DB norms.

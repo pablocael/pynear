@@ -114,6 +114,11 @@ public:
             for (size_t i = 0; i < n; i++) {
                 _examples[i] = FlatSpan{_flat_backing.data() + i * _dim, _dim};
             }
+        } else if constexpr (std::is_same_v<T, SQ8Span>) {
+            // SQ8Span: caller (Python adapter) owns the int8 backing storage
+            // and passes spans pointing into it. We just hold the spans.
+            _dim = data[0].sz;
+            _examples = data;
         } else {
             _examples = data;
             _dim = (data.empty() ? 0 : data[0].size());
@@ -468,7 +473,56 @@ private:
 
             auto& vis = visited_buf();
 
-            if constexpr (std::is_same_v<T, FlatSpan>) {
+            if constexpr (std::is_same_v<T, SQ8Span>) {
+                // SQ8 fast path: int8 storage, int32 distance via
+                // batch_l2sq_sq8_avx2 (32 lanes per AVX2 op, 4× wider than
+                // float). Per-vector data is 4× smaller too — much friendlier
+                // to L2/L3 cache.
+                constexpr size_t MAX_BATCH = 512;
+                const size_t cap = std::min(nv.count, MAX_BATCH);
+#if defined(__AVX__) || defined(__AVX2__)
+                for (size_t ni = 0; ni < cap; ni++) {
+                    _mm_prefetch(reinterpret_cast<const char*>(&vis[nv.ptr[ni]]),
+                                 _MM_HINT_T0);
+                }
+#endif
+                int32_t unvis[MAX_BATCH];
+                const int8_t* vptr[MAX_BATCH];
+                size_t n_unvis = 0;
+                for (size_t ni = 0; ni < cap; ni++) {
+                    int32_t n = nv.ptr[ni];
+                    if (vis[n] == ver) continue;
+                    vis[n] = ver;
+                    unvis[n_unvis] = n;
+                    vptr[n_unvis] = _examples[n].ptr;
+#if defined(__AVX__) || defined(__AVX2__)
+                    _mm_prefetch(reinterpret_cast<const char*>(vptr[n_unvis]),
+                                 _MM_HINT_T0);
+#endif
+                    n_unvis++;
+                }
+                if (n_unvis == 0) continue;
+
+                int32_t dists_i32[MAX_BATCH];
+                batch_l2sq_sq8_avx2(query.ptr, query.sz, vptr,
+                                    n_unvis, dists_i32);
+                _dist_calls += n_unvis;
+
+                for (size_t i = 0; i < n_unvis; i++) {
+                    distT d = static_cast<distT>(dists_i32[i]);
+                    int32_t n = unvis[i];
+                    if (results.size() < ef || d < results.front().distance) {
+                        candidates.push_back({d, n});
+                        std::push_heap(candidates.begin(), candidates.end(), min_cmp);
+                        results.push_back({d, n});
+                        std::push_heap(results.begin(), results.end(), max_cmp);
+                        if (results.size() > ef) {
+                            std::pop_heap(results.begin(), results.end(), max_cmp);
+                            results.pop_back();
+                        }
+                    }
+                }
+            } else if constexpr (std::is_same_v<T, FlatSpan>) {
                 // Float-vector fast path. Three layered optimisations,
                 // following Faiss's HNSW.cpp pattern:
                 //
