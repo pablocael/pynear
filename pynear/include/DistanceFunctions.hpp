@@ -985,9 +985,231 @@ float dist_chebyshev_f_avx2(const arrayf &p1, const arrayf &p2) {
     return max_distance;
 }
 
-#else // !(__AVX__ || __AVX2__) — scalar fallbacks for non-x86 platforms (e.g. arm64)
-       // and for x86 cross-compile builds where -mavx isn't passed (macos
-       // cibuildwheel arm64→x86_64 path falls here).
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+// ─── NEON paths (Apple Silicon M-series, AWS Graviton, generic ARM64) ─────
+// NEON gives us 4×float32 or 16×int8 per vector op — 2-4× faster than the
+// scalar fallback. The "_avx2" suffix is a misnomer here (we're on ARM)
+// but kept to match the symbol names referenced by HNSWIndex.hpp's
+// if-constexpr branches; ifdefs aside the API surface is identical.
+
+#include <arm_neon.h>
+
+double dist_l2_d_avx2(const arrayd &p1, const arrayd &p2) { return dist_l2_d(p1, p2); }
+float  dist_l1_f_avx2(const arrayf &p1, const arrayf &p2) { return dist_l1_f(p1, p2); }
+float  dist_chebyshev_f_avx2(const arrayf &p1, const arrayf &p2) { return dist_chebyshev_f(p1, p2); }
+
+inline float horiz_sum_f32x4(float32x4_t v) {
+    // vaddvq_f32 is the natural choice on ARMv8; available everywhere we
+    // target so no need for the manual lane-pair reduction.
+    return vaddvq_f32(v);
+}
+
+inline float dist_l2_f_avx2(const arrayf &p1, const arrayf &p2) {
+    size_t d = p1.size();
+    const float* x = p1.data();
+    const float* y = p2.data();
+    float32x4_t s0 = vdupq_n_f32(0.0f), s1 = vdupq_n_f32(0.0f);
+    float32x4_t s2 = vdupq_n_f32(0.0f), s3 = vdupq_n_f32(0.0f);
+    // 16 floats per iteration (4 NEON 4-lane vectors × 4 accumulators) —
+    // exposes ILP the same way as the AVX2 4-acc kernel.
+    while (d >= 16) {
+        float32x4_t x0 = vld1q_f32(x),     x1 = vld1q_f32(x + 4);
+        float32x4_t x2 = vld1q_f32(x + 8), x3 = vld1q_f32(x + 12);
+        float32x4_t y0 = vld1q_f32(y),     y1 = vld1q_f32(y + 4);
+        float32x4_t y2 = vld1q_f32(y + 8), y3 = vld1q_f32(y + 12);
+        float32x4_t d0 = vsubq_f32(x0, y0), d1 = vsubq_f32(x1, y1);
+        float32x4_t d2 = vsubq_f32(x2, y2), d3 = vsubq_f32(x3, y3);
+        s0 = vfmaq_f32(s0, d0, d0); s1 = vfmaq_f32(s1, d1, d1);
+        s2 = vfmaq_f32(s2, d2, d2); s3 = vfmaq_f32(s3, d3, d3);
+        x += 16; y += 16; d -= 16;
+    }
+    while (d >= 4) {
+        float32x4_t xv = vld1q_f32(x), yv = vld1q_f32(y);
+        float32x4_t dv = vsubq_f32(xv, yv);
+        s0 = vfmaq_f32(s0, dv, dv);
+        x += 4; y += 4; d -= 4;
+    }
+    float r = horiz_sum_f32x4(vaddq_f32(vaddq_f32(s0, s1), vaddq_f32(s2, s3)));
+    for (size_t i = 0; i < d; i++) { float t = x[i] - y[i]; r += t * t; }
+    return std::sqrt(r);
+}
+
+inline float dist_l2sq_raw_avx2(const float* x, const float* y, size_t d) {
+    float32x4_t s0 = vdupq_n_f32(0.0f), s1 = vdupq_n_f32(0.0f);
+    float32x4_t s2 = vdupq_n_f32(0.0f), s3 = vdupq_n_f32(0.0f);
+    while (d >= 16) {
+        float32x4_t x0 = vld1q_f32(x),     x1 = vld1q_f32(x + 4);
+        float32x4_t x2 = vld1q_f32(x + 8), x3 = vld1q_f32(x + 12);
+        float32x4_t d0 = vsubq_f32(x0, vld1q_f32(y));
+        float32x4_t d1 = vsubq_f32(x1, vld1q_f32(y + 4));
+        float32x4_t d2 = vsubq_f32(x2, vld1q_f32(y + 8));
+        float32x4_t d3 = vsubq_f32(x3, vld1q_f32(y + 12));
+        s0 = vfmaq_f32(s0, d0, d0); s1 = vfmaq_f32(s1, d1, d1);
+        s2 = vfmaq_f32(s2, d2, d2); s3 = vfmaq_f32(s3, d3, d3);
+        x += 16; y += 16; d -= 16;
+    }
+    while (d >= 4) {
+        float32x4_t dv = vsubq_f32(vld1q_f32(x), vld1q_f32(y));
+        s0 = vfmaq_f32(s0, dv, dv);
+        x += 4; y += 4; d -= 4;
+    }
+    float r = horiz_sum_f32x4(vaddq_f32(vaddq_f32(s0, s1), vaddq_f32(s2, s3)));
+    for (size_t i = 0; i < d; i++) { float t = x[i] - y[i]; r += t * t; }
+    return r;
+}
+
+inline float dist_l2sq_f_avx2(const arrayf& p1, const arrayf& p2) {
+    return dist_l2sq_raw_avx2(p1.data(), p2.data(), p1.size());
+}
+
+inline float vec_l2sq_avx2(const float* v, size_t d) {
+    float32x4_t s0 = vdupq_n_f32(0.0f), s1 = vdupq_n_f32(0.0f);
+    float32x4_t s2 = vdupq_n_f32(0.0f), s3 = vdupq_n_f32(0.0f);
+    while (d >= 16) {
+        float32x4_t v0 = vld1q_f32(v),     v1 = vld1q_f32(v + 4);
+        float32x4_t v2 = vld1q_f32(v + 8), v3 = vld1q_f32(v + 12);
+        s0 = vfmaq_f32(s0, v0, v0); s1 = vfmaq_f32(s1, v1, v1);
+        s2 = vfmaq_f32(s2, v2, v2); s3 = vfmaq_f32(s3, v3, v3);
+        v += 16; d -= 16;
+    }
+    while (d >= 4) {
+        float32x4_t vv = vld1q_f32(v);
+        s0 = vfmaq_f32(s0, vv, vv);
+        v += 4; d -= 4;
+    }
+    float r = horiz_sum_f32x4(vaddq_f32(vaddq_f32(s0, s1), vaddq_f32(s2, s3)));
+    for (size_t i = 0; i < d; i++) r += v[i] * v[i];
+    return r;
+}
+
+inline float dot_f_avx2(const float* q, const float* v, size_t d) {
+    float32x4_t s0 = vdupq_n_f32(0.0f), s1 = vdupq_n_f32(0.0f);
+    float32x4_t s2 = vdupq_n_f32(0.0f), s3 = vdupq_n_f32(0.0f);
+    while (d >= 16) {
+        s0 = vfmaq_f32(s0, vld1q_f32(q),     vld1q_f32(v));
+        s1 = vfmaq_f32(s1, vld1q_f32(q + 4), vld1q_f32(v + 4));
+        s2 = vfmaq_f32(s2, vld1q_f32(q + 8), vld1q_f32(v + 8));
+        s3 = vfmaq_f32(s3, vld1q_f32(q + 12), vld1q_f32(v + 12));
+        q += 16; v += 16; d -= 16;
+    }
+    while (d >= 4) {
+        s0 = vfmaq_f32(s0, vld1q_f32(q), vld1q_f32(v));
+        q += 4; v += 4; d -= 4;
+    }
+    float r = horiz_sum_f32x4(vaddq_f32(vaddq_f32(s0, s1), vaddq_f32(s2, s3)));
+    for (size_t i = 0; i < d; i++) r += q[i] * v[i];
+    return r;
+}
+
+inline void batch_dot_f_avx2(const float* query, size_t d,
+                              const float* const* vectors,
+                              size_t n,
+                              float* out_dots) {
+    for (size_t i = 0; i < n; i++) out_dots[i] = dot_f_avx2(query, vectors[i], d);
+}
+
+// 8-way batched dot: same shape as the AVX2 version but with NEON 4-lane ops.
+// On ARMv8 there are 32 NEON registers, so the 8-accumulator inner loop has
+// plenty of room.
+inline void batch_dot_f_avx2_8(const float* query, size_t d,
+                                const float* const* vectors,
+                                size_t n,
+                                float* out_dots) {
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        float32x4_t a0 = vdupq_n_f32(0), a1 = vdupq_n_f32(0);
+        float32x4_t a2 = vdupq_n_f32(0), a3 = vdupq_n_f32(0);
+        float32x4_t a4 = vdupq_n_f32(0), a5 = vdupq_n_f32(0);
+        float32x4_t a6 = vdupq_n_f32(0), a7 = vdupq_n_f32(0);
+        const float* p[8];
+        for (int k = 0; k < 8; k++) p[k] = vectors[i + k];
+        size_t j = 0;
+        for (; j + 4 <= d; j += 4) {
+            float32x4_t q = vld1q_f32(query + j);
+            a0 = vfmaq_f32(a0, q, vld1q_f32(p[0] + j));
+            a1 = vfmaq_f32(a1, q, vld1q_f32(p[1] + j));
+            a2 = vfmaq_f32(a2, q, vld1q_f32(p[2] + j));
+            a3 = vfmaq_f32(a3, q, vld1q_f32(p[3] + j));
+            a4 = vfmaq_f32(a4, q, vld1q_f32(p[4] + j));
+            a5 = vfmaq_f32(a5, q, vld1q_f32(p[5] + j));
+            a6 = vfmaq_f32(a6, q, vld1q_f32(p[6] + j));
+            a7 = vfmaq_f32(a7, q, vld1q_f32(p[7] + j));
+        }
+        float r[8] = {horiz_sum_f32x4(a0), horiz_sum_f32x4(a1),
+                      horiz_sum_f32x4(a2), horiz_sum_f32x4(a3),
+                      horiz_sum_f32x4(a4), horiz_sum_f32x4(a5),
+                      horiz_sum_f32x4(a6), horiz_sum_f32x4(a7)};
+        for (; j < d; j++) {
+            float qj = query[j];
+            for (int k = 0; k < 8; k++) r[k] += qj * p[k][j];
+        }
+        for (int k = 0; k < 8; k++) out_dots[i + k] = r[k];
+    }
+    for (; i < n; i++) out_dots[i] = dot_f_avx2(query, vectors[i], d);
+}
+
+inline void batch_l2_f_avx2(const float* query, size_t d,
+                             const float* const* vectors,
+                             size_t n,
+                             float* out) {
+    for (size_t i = 0; i < n; i++) {
+        out[i] = std::sqrt(dist_l2sq_raw_avx2(query, vectors[i], d));
+    }
+}
+
+inline void batch_l2sq_f_avx2(const float* query, size_t d,
+                               const float* const* vectors,
+                               size_t n,
+                               float* out) {
+    for (size_t i = 0; i < n; i++) {
+        out[i] = dist_l2sq_raw_avx2(query, vectors[i], d);
+    }
+}
+
+// SQ8 NEON: 16 int8 lanes per op. Widen to int16, subtract, multiply
+// pairwise via vmlal_s16 and accumulate as int32x4_t.
+inline int32_t dist_l2sq_sq8_avx2(const int8_t* x, const int8_t* y, size_t d) {
+    int32x4_t acc = vdupq_n_s32(0);
+    size_t i = 0;
+    while (i + 16 <= d) {
+        int8x16_t vx = vld1q_s8(x + i);
+        int8x16_t vy = vld1q_s8(y + i);
+        // Widen low / high halves to int16x8_t, then subtract.
+        int16x8_t d_lo = vsubq_s16(vmovl_s8(vget_low_s8(vx)),
+                                   vmovl_s8(vget_low_s8(vy)));
+        int16x8_t d_hi = vsubq_s16(vmovl_s8(vget_high_s8(vx)),
+                                   vmovl_s8(vget_high_s8(vy)));
+        // diff * diff into int32 lanes — accumulate.
+        acc = vmlal_s16(acc, vget_low_s16(d_lo),  vget_low_s16(d_lo));
+        acc = vmlal_s16(acc, vget_high_s16(d_lo), vget_high_s16(d_lo));
+        acc = vmlal_s16(acc, vget_low_s16(d_hi),  vget_low_s16(d_hi));
+        acc = vmlal_s16(acc, vget_high_s16(d_hi), vget_high_s16(d_hi));
+        i += 16;
+    }
+    int32_t result = vaddvq_s32(acc);
+    for (; i < d; i++) {
+        int32_t t = static_cast<int32_t>(x[i]) - static_cast<int32_t>(y[i]);
+        result += t * t;
+    }
+    return result;
+}
+
+inline int32_t dist_l2sq_sq8(const SQ8Span& p1, const SQ8Span& p2) {
+    return dist_l2sq_sq8_avx2(p1.ptr, p2.ptr, p1.sz);
+}
+
+inline void batch_l2sq_sq8_avx2(const int8_t* query, size_t d,
+                                 const int8_t* const* vectors,
+                                 size_t n,
+                                 int32_t* out) {
+    for (size_t i = 0; i < n; i++) {
+        out[i] = dist_l2sq_sq8_avx2(query, vectors[i], d);
+    }
+}
+
+#else // !(__AVX__ || __AVX2__) && !__ARM_NEON — scalar fallbacks for any
+       // other platform, and for x86 cross-compile builds where -mavx
+       // isn't passed (macos cibuildwheel arm64→x86_64 path falls here).
 
 double dist_l2_d_avx2(const arrayd &p1, const arrayd &p2) { return dist_l2_d(p1, p2); }
 float  dist_l2_f_avx2(const arrayf &p1, const arrayf &p2) { return dist_l2_f(p1, p2); }
