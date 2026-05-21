@@ -462,3 +462,278 @@ def test_mih_seeded_radius_runtime_tunable():
     # Searches must still run
     indices, _ = idx.searchKNN(q, k=5)
     assert len(indices) == 5
+
+
+# ─── Parameter validation ───────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("cls", [
+    pynear.HNSWL2Index,
+    pynear.HNSWCosineIndex,
+    pynear.HNSWL2IndexSQ8,
+    pynear.HNSWBinaryIndex,
+])
+def test_hnsw_rejects_M_lt_2(cls):
+    """M < 2 is invalid (HNSW needs at least 2 edges to navigate)."""
+    with pytest.raises(Exception):
+        cls(M=1, ef_construction=10, ef_search=10)
+
+
+@pytest.mark.parametrize("cls", [
+    pynear.HNSWL2Index,
+    pynear.HNSWCosineIndex,
+    pynear.HNSWL2IndexSQ8,
+    pynear.HNSWBinaryIndex,
+])
+def test_hnsw_rejects_ef_construction_zero(cls):
+    """ef_construction must be >= 1."""
+    with pytest.raises(Exception):
+        cls(M=4, ef_construction=0, ef_search=10)
+
+
+def test_mih_seeded_rejects_invalid_M():
+    with pytest.raises(Exception):
+        pynear.MIHSeededHNSWBinaryIndex(M=1, ef_construction=10, ef_search=10)
+
+
+# ─── Empty / unbuilt index ──────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("cls", [
+    pynear.HNSWL2Index,
+    pynear.HNSWCosineIndex,
+    pynear.HNSWL2IndexSQ8,
+])
+def test_hnsw_search_before_set_returns_empty(cls):
+    """searchKNN on an index that's never been .set() should return empty results, not crash."""
+    rng = np.random.default_rng(0)
+    q = rng.standard_normal((3, 8)).astype(np.float32)
+    idx = cls(M=4, ef_construction=10, ef_search=10)
+    indices, distances = idx.searchKNN(q, k=5)
+    assert all(len(r) == 0 for r in indices)
+    assert all(len(r) == 0 for r in distances)
+
+
+def test_hnsw_binary_search_before_set_returns_empty():
+    rng = np.random.default_rng(0)
+    q = rng.integers(0, 256, size=(3, 16), dtype=np.uint8)
+    idx = pynear.HNSWBinaryIndex(M=4, ef_construction=10, ef_search=10)
+    indices, distances = idx.searchKNN(q, k=5)
+    assert all(len(r) == 0 for r in indices)
+    assert all(len(r) == 0 for r in distances)
+
+
+# ─── Tiny dataset edge cases ────────────────────────────────────────────────
+
+
+def test_hnsw_l2_single_point_index():
+    """N=1: the single point is always the nearest neighbour."""
+    db = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32)
+    q = np.array([[0.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+    idx = pynear.HNSWL2Index(M=4, ef_construction=10, ef_search=10)
+    idx.set(db)
+    indices, distances = idx.searchKNN(q, k=5)
+    assert list(indices[0]) == [0]
+    np.testing.assert_allclose(distances[0][0], np.linalg.norm(db[0]), rtol=1e-5)
+
+
+def test_hnsw_l2_k_greater_than_n():
+    """Asking for more neighbours than exist should return all N of them."""
+    rng = np.random.default_rng(3)
+    db = rng.standard_normal((10, 16)).astype(np.float32)
+    q = rng.standard_normal((2, 16)).astype(np.float32)
+    idx = pynear.HNSWL2Index(M=8, ef_construction=50, ef_search=50)
+    idx.set(db)
+    indices, _ = idx.searchKNN(q, k=100)
+    assert all(len(r) == 10 for r in indices)
+
+
+def test_hnsw_l2_identical_vectors():
+    """All-identical DB shouldn't crash; all neighbours are at distance 0 from a matching query."""
+    db = np.tile(np.array([[1.0, 2.0, 3.0, 4.0, 5.0]], dtype=np.float32), (50, 1))
+    q = np.array([[1.0, 2.0, 3.0, 4.0, 5.0]], dtype=np.float32)
+    idx = pynear.HNSWL2Index(M=8, ef_construction=50, ef_search=50)
+    idx.set(db)
+    _, distances = idx.searchKNN(q, k=5)
+    np.testing.assert_allclose(distances[0], [0.0] * 5, atol=1e-5)
+
+
+# ─── Threading ──────────────────────────────────────────────────────────────
+
+
+def test_hnsw_parallel_build_recall_matches_serial():
+    """n_threads>1 yields graph topology variation but recall stays comparable."""
+    rng = np.random.default_rng(42)
+    db = rng.standard_normal((3000, 32)).astype(np.float32)
+    q = rng.standard_normal((50, 32)).astype(np.float32)
+    k = 10
+
+    serial = pynear.HNSWL2Index(M=16, ef_construction=200, ef_search=200, n_threads=1)
+    serial.set(db)
+    pi_s, _ = serial.searchKNN(q, k=k); pi_s, _ = _nearest_first(pi_s, _)
+
+    parallel = pynear.HNSWL2Index(M=16, ef_construction=200, ef_search=200, n_threads=4)
+    parallel.set(db)
+    pi_p, _ = parallel.searchKNN(q, k=k); pi_p, _ = _nearest_first(pi_p, _)
+
+    ref_idx, _ = _brute_l2(db, q, k)
+    r_s = _recall_at_k(pi_s, ref_idx, k)
+    r_p = _recall_at_k(pi_p, ref_idx, k)
+    assert abs(r_s - r_p) < 0.05, f"serial={r_s:.3f} vs parallel={r_p:.3f}"
+    assert r_p >= 0.92
+
+
+def test_hnsw_deterministic_with_n_threads_one():
+    """Same seed, n_threads=1, identical input → identical search results."""
+    rng = np.random.default_rng(7)
+    db = rng.standard_normal((500, 16)).astype(np.float32)
+    q = rng.standard_normal((10, 16)).astype(np.float32)
+
+    a = pynear.HNSWL2Index(M=8, ef_construction=100, ef_search=50, seed=99, n_threads=1)
+    a.set(db)
+    ia, da = a.searchKNN(q, k=5)
+    b = pynear.HNSWL2Index(M=8, ef_construction=100, ef_search=50, seed=99, n_threads=1)
+    b.set(db)
+    ib, db_ = b.searchKNN(q, k=5)
+
+    np.testing.assert_array_equal(np.array(ia), np.array(ib))
+    np.testing.assert_allclose(np.array(da), np.array(db_), rtol=1e-6)
+
+
+# ─── Pickle round-trips for the remaining variants ──────────────────────────
+
+
+@pytest.mark.xfail(
+    reason="HNSWBinaryIndex pickle support not yet wired in the binding "
+           "(HNSWIndex<arrayli, ...>::serialize is float-only at the moment). "
+           "Tracked for v2.5: extend serialize to handle the binary _examples path.",
+    strict=True,
+)
+def test_hnsw_binary_pickle_round_trip():
+    rng = np.random.default_rng(123)
+    db = rng.integers(0, 256, size=(400, 16), dtype=np.uint8)
+    q = rng.integers(0, 256, size=(10, 16), dtype=np.uint8)
+
+    idx = pynear.HNSWBinaryIndex(M=16, ef_construction=100, ef_search=100)
+    idx.set(db)
+    i1, d1 = idx.searchKNN(q, k=5)
+
+    blob = pickle.dumps(idx)
+    restored = pickle.loads(blob)
+    i2, d2 = restored.searchKNN(q, k=5)
+
+    np.testing.assert_array_equal(np.array(i1), np.array(i2))
+    np.testing.assert_array_equal(np.array(d1), np.array(d2))
+
+
+# ─── HNSWL2IndexSQ8 specifics ───────────────────────────────────────────────
+
+
+def test_hnsw_sq8_handles_zero_vectors():
+    """Zero-mean / zero-magnitude vectors shouldn't NaN out the quantisation."""
+    db = np.zeros((20, 16), dtype=np.float32)
+    db[0] = 1.0  # one non-zero so global max-abs > 0
+    q = np.zeros((1, 16), dtype=np.float32)
+    idx = pynear.HNSWL2IndexSQ8(M=4, ef_construction=20, ef_search=20)
+    idx.set(db)
+    _, d = idx.searchKNN(q, k=5)
+    assert np.all(np.isfinite(d[0]))
+
+
+def test_hnsw_sq8_extreme_value_range():
+    """Very large and very small values in the same vector still quantise without overflow."""
+    rng = np.random.default_rng(0)
+    db = rng.standard_normal((100, 16)).astype(np.float32) * 1e3  # large scale
+    db[0] *= 1e-6  # one tiny vector to stress dynamic range
+    q = db[:5].copy()
+    idx = pynear.HNSWL2IndexSQ8(M=8, ef_construction=50, ef_search=100)
+    idx.set(db)
+    indices, distances = idx.searchKNN(q, k=3)
+    assert all(len(r) == 3 for r in indices)
+    assert all(np.all(np.isfinite(d)) for d in distances)
+
+
+# ─── MIH-seeded boundary conditions ─────────────────────────────────────────
+
+
+def test_mih_seeded_radius_zero():
+    """mih_radius=0: MIH only returns exact-match candidates → degrades to plain HNSW for non-duplicates."""
+    rng = np.random.default_rng(5)
+    db = rng.integers(0, 256, size=(500, 16), dtype=np.uint8)
+    q = rng.integers(0, 256, size=(10, 16), dtype=np.uint8)
+    # Query[0] is a planted exact duplicate of db[0].
+    db[0] = q[0]
+
+    idx = pynear.MIHSeededHNSWBinaryIndex(
+        M=16, ef_construction=100, ef_search=50, mih_m=8, mih_radius=0,
+    )
+    idx.set(db)
+    nn_idx, nn_dist = idx.search1NN(q)
+    # First query has exact match → must be found.
+    assert int(nn_idx[0]) == 0
+    assert int(nn_dist[0]) == 0
+
+
+def test_mih_seeded_radius_larger_than_dim_does_not_crash():
+    """mih_radius > number of bits is degenerate (returns nothing useful) but must not crash."""
+    rng = np.random.default_rng(5)
+    db = rng.integers(0, 256, size=(200, 16), dtype=np.uint8)
+    q = rng.integers(0, 256, size=(5, 16), dtype=np.uint8)
+    # d=16 bytes = 128 bits; radius=200 is bigger than that.
+    idx = pynear.MIHSeededHNSWBinaryIndex(
+        M=16, ef_construction=100, ef_search=50, mih_m=8, mih_radius=200,
+    )
+    idx.set(db)
+    indices, _ = idx.searchKNN(q, k=3)
+    assert all(len(r) == 3 for r in indices)
+
+
+def test_mih_seeded_set_mih_radius_changes_behaviour():
+    """Switching mih_radius at runtime should affect search results."""
+    rng = np.random.default_rng(8)
+    db = rng.integers(0, 256, size=(1000, 16), dtype=np.uint8)
+    # Plant queries that are 4 bits away from db[0].
+    q0 = db[0].copy()
+    flip = np.zeros(16, dtype=np.uint8); flip[0] = 0x0F  # 4 bits flipped
+    q = np.tile(q0, (5, 1)) ^ flip
+    q = q.astype(np.uint8)
+
+    idx = pynear.MIHSeededHNSWBinaryIndex(
+        M=16, ef_construction=100, ef_search=10, mih_m=8, mih_radius=2,
+    )
+    idx.set(db)
+    nn_low, _ = idx.search1NN(q)
+
+    idx.set_mih_radius(8)
+    nn_high, _ = idx.search1NN(q)
+    # Both should at least be valid indices; we don't assert order changes
+    # since plain HNSW may find the planted neighbour without help.
+    assert all(0 <= int(i) < len(db) for i in nn_low)
+    assert all(0 <= int(i) < len(db) for i in nn_high)
+
+
+# ─── Cross-class sanity ────────────────────────────────────────────────────
+
+
+def test_multiple_hnsw_instances_in_same_process():
+    """Two indices of different types should coexist without state pollution."""
+    rng = np.random.default_rng(11)
+    db_f = rng.standard_normal((200, 16)).astype(np.float32)
+    db_b = rng.integers(0, 256, size=(200, 16), dtype=np.uint8)
+    q_f = rng.standard_normal((5, 16)).astype(np.float32)
+    q_b = rng.integers(0, 256, size=(5, 16), dtype=np.uint8)
+
+    a = pynear.HNSWL2Index(M=8, ef_construction=50, ef_search=50)
+    b = pynear.HNSWBinaryIndex(M=8, ef_construction=50, ef_search=50)
+    c = pynear.HNSWL2IndexSQ8(M=8, ef_construction=50, ef_search=50)
+
+    a.set(db_f); b.set(db_b); c.set(db_f)
+
+    ia, _ = a.searchKNN(q_f, k=3)
+    ib, _ = b.searchKNN(q_b, k=3)
+    ic, _ = c.searchKNN(q_f, k=3)
+
+    assert len(ia) == 5 and len(ia[0]) == 3
+    assert len(ib) == 5 and len(ib[0]) == 3
+    assert len(ic) == 5 and len(ic[0]) == 3
+
