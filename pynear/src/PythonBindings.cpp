@@ -377,15 +377,14 @@ public:
     size_t dim() const { return hnsw.dim(); }
 
     static py::tuple get_state(const HNSWFloatNumpyAdapter<distance>& p) {
-        std::vector<float> flat;
+        std::vector<uint8_t> flat;
         std::vector<int32_t> levels, flat_adj, adj_offsets;
         int32_t entry, top_level;
         size_t dim;
         uint64_t seed;
         p.hnsw.serialize(flat, levels, flat_adj, adj_offsets, entry, top_level, dim, seed);
 
-        py::bytes flat_bytes(reinterpret_cast<const char*>(flat.data()),
-                             flat.size() * sizeof(float));
+        py::bytes flat_bytes(reinterpret_cast<const char*>(flat.data()), flat.size());
         py::bytes lvl_bytes(reinterpret_cast<const char*>(levels.data()),
                             levels.size() * sizeof(int32_t));
         py::bytes adj_bytes(reinterpret_cast<const char*>(flat_adj.data()),
@@ -414,7 +413,7 @@ public:
         size_t ef_search = t[10].cast<uint64_t>();
 
         std::string flat_str(flat_bytes);
-        std::vector<float> flat(flat_str.size() / sizeof(float));
+        std::vector<uint8_t> flat(flat_str.size());
         std::memcpy(flat.data(), flat_str.data(), flat_str.size());
 
         std::string lvl_str(lvl_bytes);
@@ -535,15 +534,14 @@ public:
     size_t dim() const { return hnsw.dim(); }
 
     static py::tuple get_state(const HNSWCosineNumpyAdapter& p) {
-        std::vector<float> flat;
+        std::vector<uint8_t> flat;
         std::vector<int32_t> levels, flat_adj, adj_offsets;
         int32_t entry, top_level;
         size_t dim;
         uint64_t seed;
         p.hnsw.serialize(flat, levels, flat_adj, adj_offsets, entry, top_level, dim, seed);
 
-        py::bytes flat_bytes(reinterpret_cast<const char*>(flat.data()),
-                             flat.size() * sizeof(float));
+        py::bytes flat_bytes(reinterpret_cast<const char*>(flat.data()), flat.size());
         py::bytes lvl_bytes(reinterpret_cast<const char*>(levels.data()),
                             levels.size() * sizeof(int32_t));
         py::bytes adj_bytes(reinterpret_cast<const char*>(flat_adj.data()),
@@ -572,7 +570,7 @@ public:
         size_t ef_search = t[10].cast<uint64_t>();
 
         std::string flat_str(flat_bytes);
-        std::vector<float> flat(flat_str.size() / sizeof(float));
+        std::vector<uint8_t> flat(flat_str.size());
         std::memcpy(flat.data(), flat_str.data(), flat_str.size());
 
         std::string lvl_str(lvl_bytes);
@@ -748,6 +746,64 @@ public:
     void set_ef(size_t ef) { hnsw.set_ef(ef); }
     size_t ef_search() const { return hnsw.ef_search(); }
     size_t size() const { return hnsw.size(); }
+
+    static py::tuple get_state(const HNSWBinaryNumpyAdapter<distance>& p) {
+        std::vector<uint8_t> flat;
+        std::vector<int32_t> levels, flat_adj, adj_offsets;
+        int32_t entry, top_level;
+        size_t dim;
+        uint64_t seed;
+        p.hnsw.serialize(flat, levels, flat_adj, adj_offsets, entry, top_level, dim, seed);
+
+        py::bytes flat_bytes(reinterpret_cast<const char*>(flat.data()), flat.size());
+        py::bytes lvl_bytes(reinterpret_cast<const char*>(levels.data()),
+                            levels.size() * sizeof(int32_t));
+        py::bytes adj_bytes(reinterpret_cast<const char*>(flat_adj.data()),
+                            flat_adj.size() * sizeof(int32_t));
+        py::bytes off_bytes(reinterpret_cast<const char*>(adj_offsets.data()),
+                            adj_offsets.size() * sizeof(int32_t));
+
+        return py::make_tuple(flat_bytes, lvl_bytes, adj_bytes, off_bytes,
+                              entry, top_level, (uint64_t)dim, seed,
+                              (uint64_t)p.hnsw.M(),
+                              (uint64_t)p.hnsw.ef_construction(),
+                              (uint64_t)p.hnsw.ef_search());
+    }
+
+    static HNSWBinaryNumpyAdapter<distance> set_state(py::tuple t) {
+        auto flat_bytes  = t[0].cast<py::bytes>();
+        auto lvl_bytes   = t[1].cast<py::bytes>();
+        auto adj_bytes   = t[2].cast<py::bytes>();
+        auto off_bytes   = t[3].cast<py::bytes>();
+        int32_t entry    = t[4].cast<int32_t>();
+        int32_t top_lvl  = t[5].cast<int32_t>();
+        uint64_t dim     = t[6].cast<uint64_t>();
+        uint64_t seed    = t[7].cast<uint64_t>();
+        size_t M         = t[8].cast<uint64_t>();
+        size_t ef_con    = t[9].cast<uint64_t>();
+        size_t ef_search = t[10].cast<uint64_t>();
+
+        std::string flat_str(flat_bytes);
+        std::vector<uint8_t> flat(flat_str.size());
+        std::memcpy(flat.data(), flat_str.data(), flat_str.size());
+
+        std::string lvl_str(lvl_bytes);
+        std::vector<int32_t> levels(lvl_str.size() / sizeof(int32_t));
+        std::memcpy(levels.data(), lvl_str.data(), lvl_str.size());
+
+        std::string adj_str(adj_bytes);
+        std::vector<int32_t> flat_adj(adj_str.size() / sizeof(int32_t));
+        std::memcpy(flat_adj.data(), adj_str.data(), adj_str.size());
+
+        std::string off_str(off_bytes);
+        std::vector<int32_t> adj_offsets(off_str.size() / sizeof(int32_t));
+        std::memcpy(adj_offsets.data(), off_str.data(), off_str.size());
+
+        HNSWBinaryNumpyAdapter<distance> p(M, ef_con, ef_search, seed);
+        p.hnsw.deserialize(std::move(flat), std::move(levels), flat_adj, adj_offsets,
+                           entry, top_lvl, (size_t)dim, seed, M, ef_con, ef_search);
+        return p;
+    }
 
     hnsw::HNSWIndex<arrayli, int64_t, distance> hnsw;
 };
@@ -1137,7 +1193,9 @@ PYBIND11_MODULE(_pynear, m) {
         .def("search1NN", &HNSWBinaryNumpyAdapter<dist_hamming>::search1NN, py::arg("vectors"))
         .def("set_ef", &HNSWBinaryNumpyAdapter<dist_hamming>::set_ef, py::arg("ef_search"))
         .def_property_readonly("ef_search", &HNSWBinaryNumpyAdapter<dist_hamming>::ef_search)
-        .def_property_readonly("size", &HNSWBinaryNumpyAdapter<dist_hamming>::size);
+        .def_property_readonly("size", &HNSWBinaryNumpyAdapter<dist_hamming>::size)
+        .def(py::pickle(&HNSWBinaryNumpyAdapter<dist_hamming>::get_state,
+                        &HNSWBinaryNumpyAdapter<dist_hamming>::set_state));
 
     py::class_<MIHSeededHNSWBinaryAdapter>(m, "MIHSeededHNSWBinaryIndex",
         "Novel variant: HNSW over Hamming distance, layer-0 beam search seeded with "

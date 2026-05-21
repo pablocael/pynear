@@ -603,12 +603,6 @@ def test_hnsw_deterministic_with_n_threads_one():
 # ─── Pickle round-trips for the remaining variants ──────────────────────────
 
 
-@pytest.mark.xfail(
-    reason="HNSWBinaryIndex pickle support not yet wired in the binding "
-           "(HNSWIndex<arrayli, ...>::serialize is float-only at the moment). "
-           "Tracked for v2.5: extend serialize to handle the binary _examples path.",
-    strict=True,
-)
 def test_hnsw_binary_pickle_round_trip():
     rng = np.random.default_rng(123)
     db = rng.integers(0, 256, size=(400, 16), dtype=np.uint8)

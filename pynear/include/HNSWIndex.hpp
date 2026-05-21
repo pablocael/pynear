@@ -200,8 +200,11 @@ public:
     }
 
     // Serialisation helpers — caller (Python binding) assembles bytes.
-    // Flatten adjacency into one int32 stream + an offset table.
-    void serialize(std::vector<float>& flat,
+    // `flat_bytes` carries the raw vector data with no per-element type
+    // — for T=FlatSpan it's float-as-bytes, for T=arrayli it's uint8_t
+    // bytes. This way the same serialize/deserialize works for the
+    // float L2/cosine pipelines and the binary Hamming pipeline.
+    void serialize(std::vector<uint8_t>& flat_bytes,
                    std::vector<int32_t>& levels,
                    std::vector<int32_t>& flat_adj,
                    std::vector<int32_t>& adj_offsets,
@@ -209,7 +212,24 @@ public:
                    int32_t& top_level,
                    size_t& dim_out,
                    uint64_t& seed_out) const {
-        flat = _flat_backing;
+        if constexpr (std::is_same_v<T, FlatSpan>) {
+            flat_bytes.resize(_flat_backing.size() * sizeof(float));
+            std::memcpy(flat_bytes.data(), _flat_backing.data(), flat_bytes.size());
+        } else if constexpr (std::is_same_v<T, arrayli>) {
+            // Binary vectors live in _examples (each is a std::vector<uint8_t>).
+            // Flatten row-major into the single byte buffer.
+            size_t n = _examples.size();
+            flat_bytes.resize(n * _dim);
+            for (size_t i = 0; i < n; i++) {
+                std::memcpy(flat_bytes.data() + i * _dim,
+                            _examples[i].data(),
+                            _dim);
+            }
+        } else {
+            // Other types (e.g. SQ8Span) need their own backing handled by the
+            // Python adapter — leave flat_bytes empty here.
+            flat_bytes.clear();
+        }
         levels = _levels;
         entry = _entry_point;
         top_level = _top_level;
@@ -255,7 +275,7 @@ public:
         }
     }
 
-    void deserialize(std::vector<float>&& flat,
+    void deserialize(std::vector<uint8_t>&& flat_bytes,
                      std::vector<int32_t>&& levels,
                      const std::vector<int32_t>& flat_adj,
                      const std::vector<int32_t>& adj_offsets,
@@ -275,7 +295,6 @@ public:
         _seed_used = seed;
         _rng.seed(seed);
 
-        _flat_backing = std::move(flat);
         _levels = std::move(levels);
         _entry_point = entry;
         _top_level = top_level;
@@ -284,8 +303,18 @@ public:
         size_t n = _levels.size();
         _examples.resize(n);
         if constexpr (std::is_same_v<T, FlatSpan>) {
+            // Bytes → float backing.
+            _flat_backing.resize(flat_bytes.size() / sizeof(float));
+            std::memcpy(_flat_backing.data(), flat_bytes.data(), flat_bytes.size());
             for (size_t i = 0; i < n; i++) {
                 _examples[i] = FlatSpan{_flat_backing.data() + i * _dim, _dim};
+            }
+        } else if constexpr (std::is_same_v<T, arrayli>) {
+            // Bytes → per-vector arrayli rows.
+            for (size_t i = 0; i < n; i++) {
+                _examples[i].assign(
+                    flat_bytes.data() + i * _dim,
+                    flat_bytes.data() + (i + 1) * _dim);
             }
         }
 
