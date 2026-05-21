@@ -96,6 +96,10 @@ PyNear covers the full spectrum: **VPTree** indices for guaranteed exact answers
 
 When in doubt: **`HNSWCosineIndex` for embeddings, `MIHBinaryIndex` for binary, `VPTreeL2Index` for exact**.
 
+> 📖 **For HNSW specifically** — including the `add()` / `remove()` /
+> `rebuild()` mutation API, filtered search, parameter tuning, and a
+> per-variant decision guide — see [**`docs/hnsw.md`**](./docs/hnsw.md).
+
 ---
 
 ## Installation
