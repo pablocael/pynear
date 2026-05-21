@@ -359,6 +359,54 @@ So `rebuild()` is mostly for memory reclamation, not speed.
 
 ---
 
+## ShardedHNSWIndex — many indices, one handle
+
+For multi-tenant SaaS, per-category catalogues, or any "many small
+partitions" workload, `pynear.ShardedHNSWIndex` wraps N independent
+HNSW indices behind one API. Each shard is a normal pynear HNSW
+underneath — pickled to its own file in a directory.
+
+```python
+import pynear, numpy as np
+
+shards = pynear.ShardedHNSWIndex(
+    index_cls=pynear.HNSWCosineIndex,
+    M=16, ef_construction=200, ef_search=64,
+)
+# Build N shards from one vector batch + per-row labels
+shards.set(vectors, shard_keys=tenant_ids)
+
+# Single-tenant query — only one shard scanned (fastest)
+hits, dists = shards.searchKNN(query, k=10, shard="tenant_42")
+
+# Cross-tenant query — all shards in parallel, top-k merged
+hits, dists = shards.searchKNN(query, k=10)
+
+# Per-shard mutation
+shards.add(more_vectors, shard="tenant_42")
+shards.remove(node_id=7, shard="tenant_42")
+shards.rebuild(shard="tenant_42")
+
+# Persist to a directory of .pkl files + manifest.json
+shards.save("./tenants/")
+shards2 = pynear.ShardedHNSWIndex.load("./tenants/")
+```
+
+Use it for:
+- **Tenant isolation** — search within one tenant at native speed
+- **Faster incremental rebuilds** — only the affected shard rebuilds
+- **Parallel build** — one OS thread per shard for free
+- **Manageable persistence** — one .pkl per shard, copy/version/ship individually
+
+Don't use it for:
+- **Memory reduction** — shards still live in RAM (use SQ8 quantisation
+  for that, or wait for v2.5+ mmap support)
+- **Higher recall** — a single large HNSW gives slightly better recall
+  than N×smaller ones (typically < 2 % difference)
+- **Very selective filters** — for tenant-shaped filters, sharding is
+  the right answer; for content filters (`category="shoes"`), use the
+  `filter` kwarg on `searchKNN` directly
+
 ## Related
 
 - [`docs/hnsw_design.md`](./hnsw_design.md) — algorithm internals, the
