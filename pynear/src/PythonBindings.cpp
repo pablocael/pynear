@@ -376,13 +376,30 @@ public:
     size_t size() const { return hnsw.size(); }
     size_t dim() const { return hnsw.dim(); }
 
+    std::vector<int32_t> add(py::array_t<float, py::array::c_style | py::array::forcecast> arr) {
+        auto buf = arr.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("add() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        const float* ptr = static_cast<const float*>(buf.ptr);
+        std::vector<arrayf> spans(n);
+        for (size_t i = 0; i < n; i++)
+            spans[i] = FlatSpan{ptr + i * d, d};
+        return hnsw.add(spans);
+    }
+
+    void remove_node(int32_t node_id) { hnsw.remove(node_id); }
+    size_t num_deleted() const { return hnsw.num_deleted(); }
+    std::vector<int32_t> rebuild() { return hnsw.rebuild(); }
+
     static py::tuple get_state(const HNSWFloatNumpyAdapter<distance>& p) {
-        std::vector<uint8_t> flat;
+        std::vector<uint8_t> flat, deleted;
         std::vector<int32_t> levels, flat_adj, adj_offsets;
         int32_t entry, top_level;
         size_t dim;
         uint64_t seed;
-        p.hnsw.serialize(flat, levels, flat_adj, adj_offsets, entry, top_level, dim, seed);
+        p.hnsw.serialize(flat, levels, flat_adj, adj_offsets, entry, top_level, dim, seed, deleted);
 
         py::bytes flat_bytes(reinterpret_cast<const char*>(flat.data()), flat.size());
         py::bytes lvl_bytes(reinterpret_cast<const char*>(levels.data()),
@@ -391,12 +408,14 @@ public:
                             flat_adj.size() * sizeof(int32_t));
         py::bytes off_bytes(reinterpret_cast<const char*>(adj_offsets.data()),
                             adj_offsets.size() * sizeof(int32_t));
+        py::bytes del_bytes(reinterpret_cast<const char*>(deleted.data()), deleted.size());
 
         return py::make_tuple(flat_bytes, lvl_bytes, adj_bytes, off_bytes,
                               entry, top_level, (uint64_t)dim, seed,
                               (uint64_t)p.hnsw.M(),
                               (uint64_t)p.hnsw.ef_construction(),
-                              (uint64_t)p.hnsw.ef_search());
+                              (uint64_t)p.hnsw.ef_search(),
+                              del_bytes);
     }
 
     static HNSWFloatNumpyAdapter<distance> set_state(py::tuple t) {
@@ -428,9 +447,17 @@ public:
         std::vector<int32_t> adj_offsets(off_str.size() / sizeof(int32_t));
         std::memcpy(adj_offsets.data(), off_str.data(), off_str.size());
 
+        // Tombstones — optional tail field for backward-compat with pre-tombstone pickles.
+        std::vector<uint8_t> deleted;
+        if (py::len(t) > 11) {
+            std::string del_str(t[11].cast<py::bytes>());
+            deleted.assign(del_str.begin(), del_str.end());
+        }
+
         HNSWFloatNumpyAdapter<distance> p(M, ef_con, ef_search, seed);
         p.hnsw.deserialize(std::move(flat), std::move(levels), flat_adj, adj_offsets,
-                           entry, top_lvl, (size_t)dim, seed, M, ef_con, ef_search);
+                           entry, top_lvl, (size_t)dim, seed, M, ef_con, ef_search,
+                           std::move(deleted));
         return p;
     }
 
@@ -533,13 +560,32 @@ public:
     size_t size() const { return hnsw.size(); }
     size_t dim() const { return hnsw.dim(); }
 
+    std::vector<int32_t> add(py::array_t<float, py::array::c_style | py::array::forcecast> arr) {
+        auto buf = arr.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("add() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        const float* ptr = static_cast<const float*>(buf.ptr);
+        std::vector<float> normalized(n * d);
+        normalize_rows(ptr, normalized.data(), n, d);
+        std::vector<arrayf> spans(n);
+        for (size_t i = 0; i < n; i++)
+            spans[i] = FlatSpan{normalized.data() + i * d, d};
+        return hnsw.add(spans);
+    }
+
+    void remove_node(int32_t node_id) { hnsw.remove(node_id); }
+    size_t num_deleted() const { return hnsw.num_deleted(); }
+    std::vector<int32_t> rebuild() { return hnsw.rebuild(); }
+
     static py::tuple get_state(const HNSWCosineNumpyAdapter& p) {
-        std::vector<uint8_t> flat;
+        std::vector<uint8_t> flat, deleted;
         std::vector<int32_t> levels, flat_adj, adj_offsets;
         int32_t entry, top_level;
         size_t dim;
         uint64_t seed;
-        p.hnsw.serialize(flat, levels, flat_adj, adj_offsets, entry, top_level, dim, seed);
+        p.hnsw.serialize(flat, levels, flat_adj, adj_offsets, entry, top_level, dim, seed, deleted);
 
         py::bytes flat_bytes(reinterpret_cast<const char*>(flat.data()), flat.size());
         py::bytes lvl_bytes(reinterpret_cast<const char*>(levels.data()),
@@ -548,12 +594,14 @@ public:
                             flat_adj.size() * sizeof(int32_t));
         py::bytes off_bytes(reinterpret_cast<const char*>(adj_offsets.data()),
                             adj_offsets.size() * sizeof(int32_t));
+        py::bytes del_bytes(reinterpret_cast<const char*>(deleted.data()), deleted.size());
 
         return py::make_tuple(flat_bytes, lvl_bytes, adj_bytes, off_bytes,
                               entry, top_level, (uint64_t)dim, seed,
                               (uint64_t)p.hnsw.M(),
                               (uint64_t)p.hnsw.ef_construction(),
-                              (uint64_t)p.hnsw.ef_search());
+                              (uint64_t)p.hnsw.ef_search(),
+                              del_bytes);
     }
 
     static HNSWCosineNumpyAdapter set_state(py::tuple t) {
@@ -585,9 +633,16 @@ public:
         std::vector<int32_t> adj_offsets(off_str.size() / sizeof(int32_t));
         std::memcpy(adj_offsets.data(), off_str.data(), off_str.size());
 
+        std::vector<uint8_t> deleted;
+        if (py::len(t) > 11) {
+            std::string del_str(t[11].cast<py::bytes>());
+            deleted.assign(del_str.begin(), del_str.end());
+        }
+
         HNSWCosineNumpyAdapter p(M, ef_con, ef_search, seed);
         p.hnsw.deserialize(std::move(flat), std::move(levels), flat_adj, adj_offsets,
-                           entry, top_lvl, (size_t)dim, seed, M, ef_con, ef_search);
+                           entry, top_lvl, (size_t)dim, seed, M, ef_con, ef_search,
+                           std::move(deleted));
         return p;
     }
 
@@ -708,13 +763,48 @@ public:
     size_t size() const { return hnsw.size(); }
     float scale() const { return _scale; }
 
+    std::vector<int32_t> add(py::array_t<float, py::array::c_style | py::array::forcecast> arr) {
+        auto buf = arr.request();
+        if (buf.ndim != 2)
+            throw std::runtime_error("add() expects a 2D float32 array of shape (n, d)");
+        size_t n = (size_t)buf.shape[0];
+        size_t d = (size_t)buf.shape[1];
+        const float* ptr = static_cast<const float*>(buf.ptr);
+        // If the index is empty, seed the scale via set(). Otherwise we
+        // must reuse the existing scale (rescaling would invalidate prior
+        // quantisations).
+        if (size() == 0) {
+            set(arr);
+            std::vector<int32_t> ids(n);
+            for (size_t i = 0; i < n; i++) ids[i] = static_cast<int32_t>(i);
+            return ids;
+        }
+        const float inv_scale = 1.0f / _scale;
+        std::vector<int8_t> quantised(n * d);
+        for (size_t i = 0; i < n * d; i++) {
+            int v = static_cast<int>(std::round(ptr[i] * inv_scale));
+            if (v > 127) v = 127;
+            else if (v < -128) v = -128;
+            quantised[i] = static_cast<int8_t>(v);
+        }
+        std::vector<SQ8Span> spans(n);
+        for (size_t i = 0; i < n; i++) {
+            spans[i] = SQ8Span{quantised.data() + i * d, d};
+        }
+        return hnsw.add(spans);
+    }
+
+    void remove_node(int32_t node_id) { hnsw.remove(node_id); }
+    size_t num_deleted() const { return hnsw.num_deleted(); }
+    std::vector<int32_t> rebuild() { return hnsw.rebuild(); }
+
     static py::tuple get_state(const HNSWL2NumpyAdapterSQ8& p) {
-        std::vector<uint8_t> flat;
+        std::vector<uint8_t> flat, deleted;
         std::vector<int32_t> levels, flat_adj, adj_offsets;
         int32_t entry, top_level;
         size_t dim;
         uint64_t seed;
-        p.hnsw.serialize(flat, levels, flat_adj, adj_offsets, entry, top_level, dim, seed);
+        p.hnsw.serialize(flat, levels, flat_adj, adj_offsets, entry, top_level, dim, seed, deleted);
 
         py::bytes flat_bytes(reinterpret_cast<const char*>(flat.data()), flat.size());
         py::bytes lvl_bytes(reinterpret_cast<const char*>(levels.data()),
@@ -723,13 +813,16 @@ public:
                             flat_adj.size() * sizeof(int32_t));
         py::bytes off_bytes(reinterpret_cast<const char*>(adj_offsets.data()),
                             adj_offsets.size() * sizeof(int32_t));
+        py::bytes del_bytes(reinterpret_cast<const char*>(deleted.data()), deleted.size());
 
+        // Tuple layout: [...common fields..., scale (11), deleted (12)].
         return py::make_tuple(flat_bytes, lvl_bytes, adj_bytes, off_bytes,
                               entry, top_level, (uint64_t)dim, seed,
                               (uint64_t)p.hnsw.M(),
                               (uint64_t)p.hnsw.ef_construction(),
                               (uint64_t)p.hnsw.ef_search(),
-                              p._scale);  // SQ8-specific tail field
+                              p._scale,
+                              del_bytes);
     }
 
     static HNSWL2NumpyAdapterSQ8 set_state(py::tuple t) {
@@ -762,10 +855,17 @@ public:
         std::vector<int32_t> adj_offsets(off_str.size() / sizeof(int32_t));
         std::memcpy(adj_offsets.data(), off_str.data(), off_str.size());
 
+        std::vector<uint8_t> deleted;
+        if (py::len(t) > 12) {
+            std::string del_str(t[12].cast<py::bytes>());
+            deleted.assign(del_str.begin(), del_str.end());
+        }
+
         HNSWL2NumpyAdapterSQ8 p(M, ef_con, ef_search, seed);
         p._scale = scale;
         p.hnsw.deserialize(std::move(flat), std::move(levels), flat_adj, adj_offsets,
-                           entry, top_lvl, (size_t)dim, seed, M, ef_con, ef_search);
+                           entry, top_lvl, (size_t)dim, seed, M, ef_con, ef_search,
+                           std::move(deleted));
         return p;
     }
 
@@ -809,13 +909,18 @@ public:
     size_t ef_search() const { return hnsw.ef_search(); }
     size_t size() const { return hnsw.size(); }
 
+    std::vector<int32_t> add(const ndarrayli& data) { return hnsw.add(data); }
+    void remove_node(int32_t node_id) { hnsw.remove(node_id); }
+    size_t num_deleted() const { return hnsw.num_deleted(); }
+    std::vector<int32_t> rebuild() { return hnsw.rebuild(); }
+
     static py::tuple get_state(const HNSWBinaryNumpyAdapter<distance>& p) {
-        std::vector<uint8_t> flat;
+        std::vector<uint8_t> flat, deleted;
         std::vector<int32_t> levels, flat_adj, adj_offsets;
         int32_t entry, top_level;
         size_t dim;
         uint64_t seed;
-        p.hnsw.serialize(flat, levels, flat_adj, adj_offsets, entry, top_level, dim, seed);
+        p.hnsw.serialize(flat, levels, flat_adj, adj_offsets, entry, top_level, dim, seed, deleted);
 
         py::bytes flat_bytes(reinterpret_cast<const char*>(flat.data()), flat.size());
         py::bytes lvl_bytes(reinterpret_cast<const char*>(levels.data()),
@@ -824,12 +929,14 @@ public:
                             flat_adj.size() * sizeof(int32_t));
         py::bytes off_bytes(reinterpret_cast<const char*>(adj_offsets.data()),
                             adj_offsets.size() * sizeof(int32_t));
+        py::bytes del_bytes(reinterpret_cast<const char*>(deleted.data()), deleted.size());
 
         return py::make_tuple(flat_bytes, lvl_bytes, adj_bytes, off_bytes,
                               entry, top_level, (uint64_t)dim, seed,
                               (uint64_t)p.hnsw.M(),
                               (uint64_t)p.hnsw.ef_construction(),
-                              (uint64_t)p.hnsw.ef_search());
+                              (uint64_t)p.hnsw.ef_search(),
+                              del_bytes);
     }
 
     static HNSWBinaryNumpyAdapter<distance> set_state(py::tuple t) {
@@ -861,9 +968,16 @@ public:
         std::vector<int32_t> adj_offsets(off_str.size() / sizeof(int32_t));
         std::memcpy(adj_offsets.data(), off_str.data(), off_str.size());
 
+        std::vector<uint8_t> deleted;
+        if (py::len(t) > 11) {
+            std::string del_str(t[11].cast<py::bytes>());
+            deleted.assign(del_str.begin(), del_str.end());
+        }
+
         HNSWBinaryNumpyAdapter<distance> p(M, ef_con, ef_search, seed);
         p.hnsw.deserialize(std::move(flat), std::move(levels), flat_adj, adj_offsets,
-                           entry, top_lvl, (size_t)dim, seed, M, ef_con, ef_search);
+                           entry, top_lvl, (size_t)dim, seed, M, ef_con, ef_search,
+                           std::move(deleted));
         return p;
     }
 
@@ -1207,9 +1321,13 @@ PYBIND11_MODULE(_pynear, m) {
              [](const HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>& a){ return a.hnsw.dist_calls(); })
         .def("reset_dist_calls",
              [](HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>& a){ a.hnsw.reset_dist_calls(); })
+        .def("add", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::add, py::arg("vectors"))
+        .def("remove", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::remove_node, py::arg("node_id"))
+        .def("rebuild", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::rebuild)
         .def_property_readonly("ef_search", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::ef_search)
         .def_property_readonly("size", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::size)
         .def_property_readonly("dim", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::dim)
+        .def_property_readonly("num_deleted", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::num_deleted)
         .def(py::pickle(&HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::get_state,
                         &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::set_state));
 
@@ -1222,9 +1340,13 @@ PYBIND11_MODULE(_pynear, m) {
         .def("searchKNN", &HNSWCosineNumpyAdapter::searchKNN, py::arg("vectors"), py::arg("k"))
         .def("search1NN", &HNSWCosineNumpyAdapter::search1NN, py::arg("vectors"))
         .def("set_ef", &HNSWCosineNumpyAdapter::set_ef, py::arg("ef_search"))
+        .def("add", &HNSWCosineNumpyAdapter::add, py::arg("vectors"))
+        .def("remove", &HNSWCosineNumpyAdapter::remove_node, py::arg("node_id"))
+        .def("rebuild", &HNSWCosineNumpyAdapter::rebuild)
         .def_property_readonly("ef_search", &HNSWCosineNumpyAdapter::ef_search)
         .def_property_readonly("size", &HNSWCosineNumpyAdapter::size)
         .def_property_readonly("dim", &HNSWCosineNumpyAdapter::dim)
+        .def_property_readonly("num_deleted", &HNSWCosineNumpyAdapter::num_deleted)
         .def(py::pickle(&HNSWCosineNumpyAdapter::get_state,
                         &HNSWCosineNumpyAdapter::set_state));
 
@@ -1240,9 +1362,13 @@ PYBIND11_MODULE(_pynear, m) {
         .def("searchKNN", &HNSWL2NumpyAdapterSQ8::searchKNN, py::arg("vectors"), py::arg("k"))
         .def("search1NN", &HNSWL2NumpyAdapterSQ8::search1NN, py::arg("vectors"))
         .def("set_ef", &HNSWL2NumpyAdapterSQ8::set_ef, py::arg("ef_search"))
+        .def("add", &HNSWL2NumpyAdapterSQ8::add, py::arg("vectors"))
+        .def("remove", &HNSWL2NumpyAdapterSQ8::remove_node, py::arg("node_id"))
+        .def("rebuild", &HNSWL2NumpyAdapterSQ8::rebuild)
         .def_property_readonly("ef_search", &HNSWL2NumpyAdapterSQ8::ef_search)
         .def_property_readonly("size", &HNSWL2NumpyAdapterSQ8::size)
         .def_property_readonly("scale", &HNSWL2NumpyAdapterSQ8::scale)
+        .def_property_readonly("num_deleted", &HNSWL2NumpyAdapterSQ8::num_deleted)
         .def(py::pickle(&HNSWL2NumpyAdapterSQ8::get_state,
                         &HNSWL2NumpyAdapterSQ8::set_state));
 
@@ -1256,8 +1382,12 @@ PYBIND11_MODULE(_pynear, m) {
              py::arg("vectors"), py::arg("k"))
         .def("search1NN", &HNSWBinaryNumpyAdapter<dist_hamming>::search1NN, py::arg("vectors"))
         .def("set_ef", &HNSWBinaryNumpyAdapter<dist_hamming>::set_ef, py::arg("ef_search"))
+        .def("add", &HNSWBinaryNumpyAdapter<dist_hamming>::add, py::arg("vectors"))
+        .def("remove", &HNSWBinaryNumpyAdapter<dist_hamming>::remove_node, py::arg("node_id"))
+        .def("rebuild", &HNSWBinaryNumpyAdapter<dist_hamming>::rebuild)
         .def_property_readonly("ef_search", &HNSWBinaryNumpyAdapter<dist_hamming>::ef_search)
         .def_property_readonly("size", &HNSWBinaryNumpyAdapter<dist_hamming>::size)
+        .def_property_readonly("num_deleted", &HNSWBinaryNumpyAdapter<dist_hamming>::num_deleted)
         .def(py::pickle(&HNSWBinaryNumpyAdapter<dist_hamming>::get_state,
                         &HNSWBinaryNumpyAdapter<dist_hamming>::set_state));
 

@@ -751,3 +751,202 @@ def test_multiple_hnsw_instances_in_same_process():
     assert len(ib) == 5 and len(ib[0]) == 3
     assert len(ic) == 5 and len(ic[0]) == 3
 
+
+# ─── Incremental mutation API (add / remove / rebuild) ──────────────────────
+
+
+def test_hnsw_l2_add_extends_index():
+    rng = np.random.default_rng(0)
+    db = rng.standard_normal((200, 32)).astype(np.float32)
+    extra = rng.standard_normal((10, 32)).astype(np.float32)
+
+    idx = pynear.HNSWL2Index(M=8, ef_construction=100, ef_search=100)
+    idx.set(db)
+    assert idx.size == 200
+    new_ids = idx.add(extra)
+    assert idx.size == 210
+    assert list(new_ids) == list(range(200, 210))
+
+    # Each added vector must be discoverable as its own 1-NN.
+    nn_idx, nn_dist = idx.search1NN(extra)
+    for i, nid in enumerate(new_ids):
+        assert int(nn_idx[i]) == nid
+        # Self-distance is "near zero" rather than exactly zero: the
+        # dot-product distance trick (||q-v||² = ||q||² + ||v||² - 2 q·v)
+        # uses two separate SIMD reductions for the norms, so for self-
+        # queries the cancellation isn't bit-exact — typically ≤ 0.01.
+        assert float(nn_dist[i]) < 0.05, f"self-distance {nn_dist[i]} too large"
+
+
+def test_hnsw_l2_add_on_empty_index_behaves_like_set():
+    rng = np.random.default_rng(1)
+    db = rng.standard_normal((50, 16)).astype(np.float32)
+    idx = pynear.HNSWL2Index(M=8, ef_construction=50, ef_search=50)
+    assert idx.size == 0
+    ids = idx.add(db)
+    assert idx.size == 50
+    assert list(ids) == list(range(50))
+
+
+def test_hnsw_l2_remove_excludes_deleted_from_results():
+    rng = np.random.default_rng(2)
+    db = rng.standard_normal((500, 32)).astype(np.float32)
+    idx = pynear.HNSWL2Index(M=16, ef_construction=200, ef_search=200)
+    idx.set(db)
+
+    # Plant: query[i] is exactly db[i].
+    queries = db[:5].copy()
+
+    # Pre-delete: 1-NN of query[i] must be i.
+    nn_before, _ = idx.search1NN(queries)
+    for i in range(5):
+        assert int(nn_before[i]) == i
+
+    # Delete the obvious matches.
+    for i in range(5):
+        idx.remove(i)
+    assert idx.num_deleted == 5
+
+    # Post-delete: 1-NN must be something else (not the deleted ids).
+    nn_after, _ = idx.search1NN(queries)
+    for i in range(5):
+        assert int(nn_after[i]) != i, (
+            f"deleted id {i} still appeared as nearest neighbour"
+        )
+
+
+def test_hnsw_l2_rebuild_compacts_tombstones_and_remaps_ids():
+    rng = np.random.default_rng(3)
+    db = rng.standard_normal((100, 16)).astype(np.float32)
+    idx = pynear.HNSWL2Index(M=8, ef_construction=100, ef_search=100)
+    idx.set(db)
+
+    # Delete every 4th node.
+    to_delete = list(range(0, 100, 4))
+    for i in to_delete:
+        idx.remove(i)
+    assert idx.num_deleted == 25
+
+    mapping = idx.rebuild()
+    assert len(mapping) == 100
+    assert idx.size == 75
+    assert idx.num_deleted == 0
+
+    # Mapping consistency: deleted slots → -1, others → contiguous new ids.
+    for old in to_delete:
+        assert mapping[old] == -1
+    new_ids = sorted(m for m in mapping if m != -1)
+    assert new_ids == list(range(75))
+
+    # A query that previously matched a surviving node must still find it
+    # under its new id.
+    surviving_old = 1  # not in to_delete
+    surviving_new = mapping[surviving_old]
+    nn_idx, _ = idx.search1NN(db[surviving_old:surviving_old + 1])
+    assert int(nn_idx[0]) == surviving_new
+
+
+def test_hnsw_sq8_add_uses_existing_scale():
+    """add() on SQ8 must reuse the index's existing quantisation scale, not refit."""
+    rng = np.random.default_rng(4)
+    db = rng.standard_normal((100, 16)).astype(np.float32)
+    extra = rng.standard_normal((20, 16)).astype(np.float32)
+
+    idx = pynear.HNSWL2IndexSQ8(M=8, ef_construction=100, ef_search=100)
+    idx.set(db)
+    scale_before = idx.scale
+    new_ids = idx.add(extra)
+    scale_after = idx.scale
+    assert scale_after == scale_before, "add() must not change the scale"
+    assert idx.size == 120
+    assert list(new_ids) == list(range(100, 120))
+
+    # Sanity: queries against the added vectors find themselves (within SQ8 tolerance).
+    nn_idx, _ = idx.search1NN(extra)
+    matches = sum(1 for i in range(20) if int(nn_idx[i]) == new_ids[i])
+    assert matches >= 18, f"only {matches}/20 added SQ8 vectors found as self-NN"
+
+
+def test_hnsw_cosine_add_normalises_new_vectors():
+    rng = np.random.default_rng(5)
+    db = rng.standard_normal((100, 16)).astype(np.float32)
+    extra = rng.standard_normal((10, 16)).astype(np.float32) * 100  # different magnitudes
+    idx = pynear.HNSWCosineIndex(M=8, ef_construction=100, ef_search=100)
+    idx.set(db)
+    new_ids = idx.add(extra)
+    nn_idx, _ = idx.search1NN(extra)
+    for i, nid in enumerate(new_ids):
+        assert int(nn_idx[i]) == nid, (
+            f"added cosine vector {i} not found (norm normalisation may be missing)"
+        )
+
+
+def test_hnsw_binary_add_and_remove():
+    rng = np.random.default_rng(6)
+    db = rng.integers(0, 256, size=(200, 16), dtype=np.uint8)
+    extra = rng.integers(0, 256, size=(10, 16), dtype=np.uint8)
+
+    idx = pynear.HNSWBinaryIndex(M=16, ef_construction=100, ef_search=100)
+    idx.set(db)
+    new_ids = idx.add(extra)
+    assert idx.size == 210
+    nn_idx, _ = idx.search1NN(extra)
+    for i, nid in enumerate(new_ids):
+        assert int(nn_idx[i]) == nid
+
+    idx.remove(new_ids[0])
+    assert idx.num_deleted == 1
+    nn_idx_after, _ = idx.search1NN(extra[:1])
+    assert int(nn_idx_after[0]) != new_ids[0]
+
+
+def test_hnsw_pickle_preserves_tombstones():
+    """Pickle round-trip must keep _deleted state — num_deleted is part of the index."""
+    db = np.random.default_rng(0).standard_normal((50, 16)).astype(np.float32)
+    db_b = np.random.default_rng(1).integers(0, 256, size=(50, 16), dtype=np.uint8)
+
+    for cls, data in [
+        (pynear.HNSWL2Index, db),
+        (pynear.HNSWCosineIndex, db),
+        (pynear.HNSWL2IndexSQ8, db),
+        (pynear.HNSWBinaryIndex, db_b),
+    ]:
+        idx = cls(M=8, ef_construction=100, ef_search=100)
+        idx.set(data)
+        idx.remove(7)
+        idx.remove(13)
+        assert idx.num_deleted == 2
+        restored = pickle.loads(pickle.dumps(idx))
+        assert restored.num_deleted == 2, f"{cls.__name__}: lost tombstones in pickle"
+
+
+def test_hnsw_rebuild_preserves_recall():
+    """After a delete + rebuild cycle, recall should be unchanged for the surviving set."""
+    rng = np.random.default_rng(7)
+    db = rng.standard_normal((1000, 32)).astype(np.float32)
+    queries = rng.standard_normal((50, 32)).astype(np.float32)
+    k = 10
+
+    idx = pynear.HNSWL2Index(M=16, ef_construction=200, ef_search=200)
+    idx.set(db)
+
+    # Delete a random 20% of nodes.
+    deleted = sorted(rng.choice(1000, size=200, replace=False).tolist())
+    for d in deleted:
+        idx.remove(d)
+    mapping = idx.rebuild()
+
+    # Surviving subset of db, in their new order.
+    surviving_db = np.stack([db[i] for i in range(1000) if mapping[i] != -1])
+    assert len(surviving_db) == 800
+
+    # Recall vs brute-force on the surviving set.
+    ref = np.argsort(
+        np.linalg.norm(surviving_db[None, :, :] - queries[:, None, :], axis=2),
+        axis=1,
+    )[:, :k]
+    pred, _ = idx.searchKNN(queries, k=k)
+    pred = np.array(pred)[:, ::-1]  # farthest-first → nearest-first
+    rec = sum(len(set(pred[q]) & set(ref[q].tolist())) for q in range(len(queries))) / (len(queries) * k)
+    assert rec >= 0.85, f"post-rebuild recall {rec:.3f} unexpectedly low"
+

@@ -136,6 +136,7 @@ public:
         _adjacency.assign(_examples.size(), std::vector<std::vector<int32_t>>{});
         _layer0_adj.assign(_examples.size() * _M_max0, -1);
         _layer0_count.assign(_examples.size(), 0);
+        _deleted.assign(_examples.size(), 0u);
         if constexpr (std::is_same_v<T, FlatSpan>) {
             // Precompute ||v_i||² for the dot-product distance trick.
             _norms_sq.assign(_examples.size(), 0.0f);
@@ -162,6 +163,138 @@ public:
             }
         }
         _during_build = false;
+    }
+
+    // ─── Incremental mutation API ──────────────────────────────────────────
+    // add() / remove() / rebuild() are single-threaded — callers must not
+    // invoke them concurrently with searches or each other.
+
+    // Append vectors to an existing index. Returns the new node IDs.
+    // For the very first call (empty index), behaves like set(). Each new
+    // point is woven into the graph via add_point() so subsequent searches
+    // can reach it.
+    std::vector<int32_t> add(const std::vector<T>& data) {
+        if (data.empty()) return {};
+
+        size_t old_n;
+        const bool was_empty = _examples.empty();
+        if (was_empty) {
+            // Use set() to seed dim, backings, thread resources etc.
+            // Then return the trivial id mapping.
+            set(data);
+            std::vector<int32_t> ids(data.size());
+            for (size_t i = 0; i < data.size(); i++) ids[i] = static_cast<int32_t>(i);
+            return ids;
+        }
+
+        old_n = _examples.size();
+        const size_t added = data.size();
+        const size_t new_n = old_n + added;
+
+        // Extend storage in lockstep with set()'s allocation shape.
+        if constexpr (std::is_same_v<T, FlatSpan>) {
+            _flat_backing.resize(new_n * _dim);
+            for (size_t i = 0; i < added; i++) {
+                std::memcpy(_flat_backing.data() + (old_n + i) * _dim,
+                            data[i].ptr, _dim * sizeof(float));
+            }
+            _examples.resize(new_n);
+            // Repoint every span — _flat_backing may have reallocated.
+            for (size_t i = 0; i < new_n; i++) {
+                _examples[i] = FlatSpan{_flat_backing.data() + i * _dim, _dim};
+            }
+            _norms_sq.resize(new_n);
+            for (size_t i = 0; i < added; i++) {
+                _norms_sq[old_n + i] = vec_l2sq_avx2(_examples[old_n + i].ptr, _dim);
+            }
+        } else if constexpr (std::is_same_v<T, SQ8Span>) {
+            _sq8_backing.resize(new_n * _dim);
+            for (size_t i = 0; i < added; i++) {
+                std::memcpy(_sq8_backing.data() + (old_n + i) * _dim, data[i].ptr, _dim);
+            }
+            _examples.resize(new_n);
+            for (size_t i = 0; i < new_n; i++) {
+                _examples[i] = SQ8Span{_sq8_backing.data() + i * _dim, _dim};
+            }
+        } else {
+            // Per-row T (e.g. arrayli) — owns its own data; just append.
+            _examples.reserve(new_n);
+            for (size_t i = 0; i < added; i++) _examples.push_back(data[i]);
+        }
+
+        _levels.resize(new_n, 0);
+        _adjacency.resize(new_n);
+        _layer0_adj.resize(new_n * _M_max0, -1);
+        _layer0_count.resize(new_n, 0);
+        _deleted.resize(new_n, 0u);
+        // Per-thread visited buffers must cover the new node id space.
+        for (auto& v : _visited_per_thread) v.resize(new_n, 0u);
+        // Re-allocate the per-node lock array; std::shared_mutex is not
+        // movable so we have to re-create. add() is single-threaded so this
+        // is safe.
+        _node_locks = std::unique_ptr<std::shared_mutex[]>(new std::shared_mutex[new_n]);
+        _num_locks = new_n;
+
+        _during_build = true;
+        for (size_t i = 0; i < added; i++) {
+            add_point(static_cast<int32_t>(old_n + i));
+        }
+        _during_build = false;
+
+        std::vector<int32_t> ids(added);
+        for (size_t i = 0; i < added; i++) ids[i] = static_cast<int32_t>(old_n + i);
+        return ids;
+    }
+
+    // Mark a node deleted (lazy). Out-of-range / already-deleted is a no-op.
+    void remove(int32_t node_id) {
+        if (node_id < 0 || (size_t)node_id >= _deleted.size()) return;
+        _deleted[node_id] = 1u;
+    }
+
+    // Compact away tombstones. Builds a fresh graph from the live vectors
+    // and returns a mapping: result[old_id] = new_id, or -1 if old_id was
+    // deleted. The mapping has size == old _examples.size() so callers can
+    // translate any external bookkeeping.
+    std::vector<int32_t> rebuild() {
+        size_t old_n = _examples.size();
+        std::vector<int32_t> mapping(old_n, -1);
+        std::vector<T> live;
+        live.reserve(old_n);
+        for (size_t i = 0; i < old_n; i++) {
+            if (_deleted[i]) continue;
+            mapping[i] = static_cast<int32_t>(live.size());
+            live.push_back(_examples[i]);
+        }
+        // Snapshot the data we need before clear() invalidates the spans.
+        // For FlatSpan / SQ8Span the spans point into our owned backing —
+        // copy the raw bytes out so live's spans stay valid after clear().
+        std::vector<float>   live_flat;
+        std::vector<int8_t>  live_sq8;
+        if constexpr (std::is_same_v<T, FlatSpan>) {
+            live_flat.resize(live.size() * _dim);
+            for (size_t i = 0; i < live.size(); i++) {
+                std::memcpy(live_flat.data() + i * _dim, live[i].ptr, _dim * sizeof(float));
+                live[i] = FlatSpan{live_flat.data() + i * _dim, _dim};
+            }
+        } else if constexpr (std::is_same_v<T, SQ8Span>) {
+            live_sq8.resize(live.size() * _dim);
+            for (size_t i = 0; i < live.size(); i++) {
+                std::memcpy(live_sq8.data() + i * _dim, live[i].ptr, _dim);
+                live[i] = SQ8Span{live_sq8.data() + i * _dim, _dim};
+            }
+        }
+        set(live);
+        return mapping;
+    }
+
+    // Read-only access to the tombstone bitmap (for tests / introspection).
+    const std::vector<uint8_t>& deleted() const { return _deleted; }
+
+    size_t num_deleted() const {
+        size_t n = 0;
+        for (uint8_t b : _deleted) if (b) n++;
+        return n;
     }
 
     // Query: returns top-k indices and distances per query.
@@ -219,7 +352,9 @@ public:
                    int32_t& entry,
                    int32_t& top_level,
                    size_t& dim_out,
-                   uint64_t& seed_out) const {
+                   uint64_t& seed_out,
+                   std::vector<uint8_t>& deleted_out) const {
+        deleted_out = _deleted;
         if constexpr (std::is_same_v<T, FlatSpan>) {
             flat_bytes.resize(_flat_backing.size() * sizeof(float));
             std::memcpy(flat_bytes.data(), _flat_backing.data(), flat_bytes.size());
@@ -296,7 +431,8 @@ public:
                      uint64_t seed,
                      size_t M,
                      size_t ef_construction,
-                     size_t ef_search) {
+                     size_t ef_search,
+                     std::vector<uint8_t>&& deleted_in = {}) {
         clear();
         _M = M;
         _M_max0 = 2 * M;
@@ -340,6 +476,12 @@ public:
         _adjacency.assign(n, std::vector<std::vector<int32_t>>{});
         _layer0_adj.assign(n * _M_max0, -1);
         _layer0_count.assign(n, 0);
+        // Tombstones from pickle (backward compat: missing/short = all live).
+        if (deleted_in.size() == n) {
+            _deleted = std::move(deleted_in);
+        } else {
+            _deleted.assign(n, 0u);
+        }
         if constexpr (std::is_same_v<T, FlatSpan>) {
             // Re-populate precomputed norms after deserialise — they aren't
             // serialised because they are a function of the vectors.
@@ -383,6 +525,7 @@ public:
         _flat_backing.clear();
         _sq8_backing.clear();
         _levels.clear();
+        _deleted.clear();
         _adjacency.clear();
         _layer0_adj.clear();
         _layer0_count.clear();
@@ -879,13 +1022,32 @@ private:
         for (int32_t l = _top_level; l > 0; l--) {
             current = greedy_descent(query, current, l);
         }
-        size_t ef = std::max(_ef_search, k);
+        // If there are tombstones, fetch more raw candidates than k so we
+        // still return k *live* results after filtering. Cap the inflation
+        // at 4× to avoid pathological blow-up when most of the index is
+        // deleted (caller should rebuild() at that point).
+        const bool has_tombstones = !_deleted.empty() && num_deleted() > 0;
+        size_t fetch_k = has_tombstones ? std::min(k * 4, k + num_deleted()) : k;
+        size_t ef = std::max(_ef_search, fetch_k);
         auto layer0 = search_layer(query, current, ef, 0);
 
         std::sort(layer0.begin(), layer0.end(),
                   [](const DistNode<distT>& a, const DistNode<distT>& b) {
                       return a.distance < b.distance;
                   });
+
+        // Filter out tombstoned ids. Live nodes preserve their relative order.
+        if (has_tombstones) {
+            std::vector<DistNode<distT>> live;
+            live.reserve(std::min(k, layer0.size()));
+            for (const auto& dn : layer0) {
+                if (dn.node_id < 0 || (size_t)dn.node_id >= _deleted.size()) continue;
+                if (_deleted[dn.node_id]) continue;
+                live.push_back(dn);
+                if (live.size() >= k) break;
+            }
+            return live;
+        }
         if (layer0.size() > k) layer0.resize(k);
         return layer0;
     }
@@ -1008,6 +1170,12 @@ private:
     // template instantiation (FlatSpan); empty otherwise.
     std::vector<float> _norms_sq;
     std::vector<int32_t> _levels;                // _levels[i] = max layer for node i
+
+    // Tombstone bitmap for lazy deletion. 1 byte per node so we can extend
+    // it cheaply on add(). Search traverses through deleted nodes (preserves
+    // graph reachability) but excludes them from results. Compact away with
+    // rebuild().
+    std::vector<uint8_t> _deleted;
 
     // Layer 0 lives in a contiguous flat buffer for cache locality on
     // queries. Each node owns a fixed-size slot of _M_max0 int32 IDs at
