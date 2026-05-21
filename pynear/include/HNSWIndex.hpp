@@ -300,10 +300,16 @@ public:
     // Query: returns top-k indices and distances per query.
     // Convention matches VPTreeNumpyAdapter: distances within the top-k are
     // returned farthest-first (caller reverses if they need nearest-first).
+    // Optional `filter_mask`: byte-per-node array of length `size()`. When
+    // non-null, only nodes with mask[id] != 0 are eligible for the top-k.
+    // Implemented as a post-filter with inflation in search_one() — works
+    // best when filter selectivity ≥ 10 %; very selective filters fall
+    // back to scanning more candidates (capped at 8×k).
     void searchKNN(const std::vector<T>& queries,
                    size_t k,
                    std::vector<std::vector<int64_t>>& indices_out,
-                   std::vector<std::vector<distT>>& distances_out) {
+                   std::vector<std::vector<distT>>& distances_out,
+                   const uint8_t* filter_mask = nullptr) {
         size_t nq = queries.size();
         indices_out.assign(nq, {});
         distances_out.assign(nq, {});
@@ -311,7 +317,7 @@ public:
         if (_entry_point < 0 || _examples.empty()) return;
 
         for (size_t qi = 0; qi < nq; qi++) {
-            std::vector<DistNode<distT>> top = search_one(queries[qi], k);
+            std::vector<DistNode<distT>> top = search_one(queries[qi], k, filter_mask);
             // top is sorted nearest → farthest. Reverse for pynear's convention.
             indices_out[qi].reserve(top.size());
             distances_out[qi].reserve(top.size());
@@ -324,7 +330,8 @@ public:
 
     void search1NN(const std::vector<T>& queries,
                    std::vector<int64_t>& indices_out,
-                   std::vector<distT>& distances_out) {
+                   std::vector<distT>& distances_out,
+                   const uint8_t* filter_mask = nullptr) {
         size_t nq = queries.size();
         indices_out.assign(nq, -1);
         distances_out.assign(nq, distT{});
@@ -332,7 +339,7 @@ public:
         if (_entry_point < 0 || _examples.empty()) return;
 
         for (size_t qi = 0; qi < nq; qi++) {
-            std::vector<DistNode<distT>> top = search_one(queries[qi], 1);
+            std::vector<DistNode<distT>> top = search_one(queries[qi], 1, filter_mask);
             if (!top.empty()) {
                 indices_out[qi] = top.front().node_id;
                 distances_out[qi] = top.front().distance;
@@ -1017,17 +1024,22 @@ private:
 
     // Query path: greedy descent to layer 0, then full beam search.
     // Returns up to k results sorted nearest → farthest.
-    std::vector<DistNode<distT>> search_one(const T& query, size_t k) const {
+    std::vector<DistNode<distT>> search_one(const T& query, size_t k,
+                                             const uint8_t* filter_mask = nullptr) const {
         int32_t current = _entry_point;
         for (int32_t l = _top_level; l > 0; l--) {
             current = greedy_descent(query, current, l);
         }
-        // If there are tombstones, fetch more raw candidates than k so we
-        // still return k *live* results after filtering. Cap the inflation
-        // at 4× to avoid pathological blow-up when most of the index is
-        // deleted (caller should rebuild() at that point).
+        // If there are tombstones OR a filter, fetch more raw candidates
+        // than k so we still return k *eligible* results after filtering.
+        // Cap inflation at 8× to avoid pathological blow-up for very
+        // selective filters (caller should pre-partition / shard).
         const bool has_tombstones = !_deleted.empty() && num_deleted() > 0;
-        size_t fetch_k = has_tombstones ? std::min(k * 4, k + num_deleted()) : k;
+        const bool has_filter = filter_mask != nullptr;
+        size_t fetch_k = k;
+        if (has_tombstones || has_filter) {
+            fetch_k = std::min(k * 8, std::max<size_t>(k * 2, k + num_deleted()));
+        }
         size_t ef = std::max(_ef_search, fetch_k);
         auto layer0 = search_layer(query, current, ef, 0);
 
@@ -1036,13 +1048,14 @@ private:
                       return a.distance < b.distance;
                   });
 
-        // Filter out tombstoned ids. Live nodes preserve their relative order.
-        if (has_tombstones) {
+        // Single filter pass — combines tombstone + user filter checks.
+        if (has_tombstones || has_filter) {
             std::vector<DistNode<distT>> live;
             live.reserve(std::min(k, layer0.size()));
             for (const auto& dn : layer0) {
-                if (dn.node_id < 0 || (size_t)dn.node_id >= _deleted.size()) continue;
-                if (_deleted[dn.node_id]) continue;
+                if (dn.node_id < 0 || (size_t)dn.node_id >= _examples.size()) continue;
+                if (has_tombstones && _deleted[dn.node_id]) continue;
+                if (has_filter && !filter_mask[dn.node_id]) continue;
                 live.push_back(dn);
                 if (live.size() >= k) break;
             }

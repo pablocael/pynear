@@ -304,6 +304,25 @@ public:
     vptree::VPTree<arrayf, float, dist_l2_f_avx2> tree;
 };
 
+// Extract a filter mask from a py::object (numpy bool or uint8 array).
+// Returns a non-null const uint8_t* if the object is a valid 1D array
+// of length == expected_size; otherwise returns nullptr. The caller
+// must keep the numpy array alive for the lifetime of the pointer
+// (pybind11 keeps it alive while it's in scope of the bound function).
+inline const uint8_t* extract_filter_mask(const py::object& filter, size_t expected_size) {
+    if (filter.is_none()) return nullptr;
+    py::array arr = py::cast<py::array>(filter);
+    auto buf = arr.request();
+    if (buf.ndim != 1)
+        throw std::runtime_error("filter must be a 1D array");
+    if ((size_t)buf.shape[0] != expected_size)
+        throw std::runtime_error("filter length must match index size");
+    // numpy bool and uint8 are both 1 byte per element.
+    if (buf.itemsize != 1)
+        throw std::runtime_error("filter must be a bool or uint8 array");
+    return static_cast<const uint8_t*>(buf.ptr);
+}
+
 // HNSWFloatNumpyAdapter — pybind11 wrapper around hnsw::HNSWIndex for float vectors.
 // Templated on the distance function, same pattern as VPTreeNumpyAdapter.
 template <distance_func_f distance> class HNSWFloatNumpyAdapter {
@@ -329,7 +348,8 @@ public:
     }
 
     std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<float>>>
-    searchKNN(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k) {
+    searchKNN(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k,
+              py::object filter = py::none()) {
         auto buf = queries.request();
         if (buf.ndim != 2)
             throw std::runtime_error("searchKNN() expects a 2D float32 array of shape (n, d)");
@@ -340,9 +360,11 @@ public:
         for (size_t i = 0; i < n; i++)
             spans[i] = FlatSpan{ptr + i * d, d};
 
+        const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
+
         std::vector<std::vector<int64_t>> idx;
         std::vector<std::vector<float>> dist;
-        hnsw.searchKNN(spans, k, idx, dist);
+        hnsw.searchKNN(spans, k, idx, dist, mask);
         // HNSW pipeline runs on squared L2 internally (skips sqrt in the
         // hot loop). Apply sqrt only to the final returned top-k so the
         // public API still reports L2 distances.
@@ -353,7 +375,8 @@ public:
     }
 
     std::tuple<std::vector<int64_t>, std::vector<float>>
-    search1NN(py::array_t<float, py::array::c_style | py::array::forcecast> queries) {
+    search1NN(py::array_t<float, py::array::c_style | py::array::forcecast> queries,
+              py::object filter = py::none()) {
         auto buf = queries.request();
         if (buf.ndim != 2)
             throw std::runtime_error("search1NN() expects a 2D float32 array of shape (n, d)");
@@ -364,9 +387,11 @@ public:
         for (size_t i = 0; i < n; i++)
             spans[i] = FlatSpan{ptr + i * d, d};
 
+        const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
+
         std::vector<int64_t> idx;
         std::vector<float> dist;
-        hnsw.search1NN(spans, idx, dist);
+        hnsw.search1NN(spans, idx, dist, mask);
         for (float& v : dist) v = std::sqrt(v);
         return std::make_tuple(std::move(idx), std::move(dist));
     }
@@ -508,7 +533,8 @@ public:
     }
 
     std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<float>>>
-    searchKNN(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k) {
+    searchKNN(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k,
+              py::object filter = py::none()) {
         auto buf = queries.request();
         if (buf.ndim != 2)
             throw std::runtime_error("searchKNN() expects a 2D float32 array of shape (n, d)");
@@ -522,9 +548,11 @@ public:
         for (size_t i = 0; i < n; i++)
             spans[i] = FlatSpan{qnorm.data() + i * d, d};
 
+        const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
+
         std::vector<std::vector<int64_t>> idx;
         std::vector<std::vector<float>> dist;
-        hnsw.searchKNN(spans, k, idx, dist);
+        hnsw.searchKNN(spans, k, idx, dist, mask);
         // hnsw was built with dist_l2sq_f_avx2 which returns L2² directly.
         // Cosine distance: d_cos = L2² / 2 for unit vectors.
         for (auto& row : dist) {
@@ -534,7 +562,8 @@ public:
     }
 
     std::tuple<std::vector<int64_t>, std::vector<float>>
-    search1NN(py::array_t<float, py::array::c_style | py::array::forcecast> queries) {
+    search1NN(py::array_t<float, py::array::c_style | py::array::forcecast> queries,
+              py::object filter = py::none()) {
         auto buf = queries.request();
         if (buf.ndim != 2)
             throw std::runtime_error("search1NN() expects a 2D float32 array of shape (n, d)");
@@ -548,9 +577,11 @@ public:
         for (size_t i = 0; i < n; i++)
             spans[i] = FlatSpan{qnorm.data() + i * d, d};
 
+        const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
+
         std::vector<int64_t> idx;
         std::vector<float> dist;
-        hnsw.search1NN(spans, idx, dist);
+        hnsw.search1NN(spans, idx, dist, mask);
         for (float& v : dist) v = v * 0.5f;
         return std::make_tuple(std::move(idx), std::move(dist));
     }
@@ -702,7 +733,8 @@ public:
     }
 
     std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<float>>>
-    searchKNN(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k) {
+    searchKNN(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k,
+              py::object filter = py::none()) {
         auto buf = queries.request();
         if (buf.ndim != 2)
             throw std::runtime_error("searchKNN() expects a 2D float32 array of shape (n, d)");
@@ -729,9 +761,11 @@ public:
             qspans[i] = SQ8Span{q_buf.data() + i * d, d};
         }
 
+        const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
+
         std::vector<std::vector<int64_t>> idx;
         std::vector<std::vector<int32_t>> dist_i;
-        hnsw.searchKNN(qspans, k, idx, dist_i);
+        hnsw.searchKNN(qspans, k, idx, dist_i, mask);
         // Convert int32 squared-quantised distance → float L2 distance.
         // L2 = scale * sqrt(d_int)   (scale² for L2², then sqrt)
         std::vector<std::vector<float>> dist_f(idx.size());
@@ -745,8 +779,9 @@ public:
     }
 
     std::tuple<std::vector<int64_t>, std::vector<float>>
-    search1NN(py::array_t<float, py::array::c_style | py::array::forcecast> queries) {
-        auto [idx, dist] = searchKNN(queries, 1);
+    search1NN(py::array_t<float, py::array::c_style | py::array::forcecast> queries,
+              py::object filter = py::none()) {
+        auto [idx, dist] = searchKNN(queries, 1, filter);
         std::vector<int64_t> out_idx(idx.size(), -1);
         std::vector<float> out_dist(idx.size(), 0.0f);
         for (size_t i = 0; i < idx.size(); i++) {
@@ -892,16 +927,20 @@ public:
     void set(const ndarrayli& data) { hnsw.set(data); }
 
     std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<int64_t>>>
-    searchKNN(const ndarrayli& queries, size_t k) {
+    searchKNN(const ndarrayli& queries, size_t k,
+              py::object filter = py::none()) {
+        const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
         std::vector<std::vector<int64_t>> idx, dist;
-        hnsw.searchKNN(queries, k, idx, dist);
+        hnsw.searchKNN(queries, k, idx, dist, mask);
         return std::make_tuple(std::move(idx), std::move(dist));
     }
 
     std::tuple<std::vector<int64_t>, std::vector<int64_t>>
-    search1NN(const ndarrayli& queries) {
+    search1NN(const ndarrayli& queries,
+              py::object filter = py::none()) {
+        const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
         std::vector<int64_t> idx, dist;
-        hnsw.search1NN(queries, idx, dist);
+        hnsw.search1NN(queries, idx, dist, mask);
         return std::make_tuple(std::move(idx), std::move(dist));
     }
 
@@ -1314,8 +1353,9 @@ PYBIND11_MODULE(_pynear, m) {
              py::arg("n_threads") = 1)
         .def("set", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::set, py::arg("vectors"))
         .def("searchKNN", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::searchKNN,
-             py::arg("vectors"), py::arg("k"))
-        .def("search1NN", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::search1NN, py::arg("vectors"))
+             py::arg("vectors"), py::arg("k"), py::arg("filter") = py::none())
+        .def("search1NN", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::search1NN,
+             py::arg("vectors"), py::arg("filter") = py::none())
         .def("set_ef", &HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>::set_ef, py::arg("ef_search"))
         .def("dist_calls",
              [](const HNSWFloatNumpyAdapter<dist_l2sq_f_avx2>& a){ return a.hnsw.dist_calls(); })
@@ -1337,8 +1377,10 @@ PYBIND11_MODULE(_pynear, m) {
              py::arg("ef_search") = 50, py::arg("seed") = 42,
              py::arg("n_threads") = 1)
         .def("set", &HNSWCosineNumpyAdapter::set, py::arg("vectors"))
-        .def("searchKNN", &HNSWCosineNumpyAdapter::searchKNN, py::arg("vectors"), py::arg("k"))
-        .def("search1NN", &HNSWCosineNumpyAdapter::search1NN, py::arg("vectors"))
+        .def("searchKNN", &HNSWCosineNumpyAdapter::searchKNN,
+             py::arg("vectors"), py::arg("k"), py::arg("filter") = py::none())
+        .def("search1NN", &HNSWCosineNumpyAdapter::search1NN,
+             py::arg("vectors"), py::arg("filter") = py::none())
         .def("set_ef", &HNSWCosineNumpyAdapter::set_ef, py::arg("ef_search"))
         .def("add", &HNSWCosineNumpyAdapter::add, py::arg("vectors"))
         .def("remove", &HNSWCosineNumpyAdapter::remove_node, py::arg("node_id"))
@@ -1359,8 +1401,10 @@ PYBIND11_MODULE(_pynear, m) {
              py::arg("ef_search") = 50, py::arg("seed") = 42,
              py::arg("n_threads") = 1)
         .def("set", &HNSWL2NumpyAdapterSQ8::set, py::arg("vectors"))
-        .def("searchKNN", &HNSWL2NumpyAdapterSQ8::searchKNN, py::arg("vectors"), py::arg("k"))
-        .def("search1NN", &HNSWL2NumpyAdapterSQ8::search1NN, py::arg("vectors"))
+        .def("searchKNN", &HNSWL2NumpyAdapterSQ8::searchKNN,
+             py::arg("vectors"), py::arg("k"), py::arg("filter") = py::none())
+        .def("search1NN", &HNSWL2NumpyAdapterSQ8::search1NN,
+             py::arg("vectors"), py::arg("filter") = py::none())
         .def("set_ef", &HNSWL2NumpyAdapterSQ8::set_ef, py::arg("ef_search"))
         .def("add", &HNSWL2NumpyAdapterSQ8::add, py::arg("vectors"))
         .def("remove", &HNSWL2NumpyAdapterSQ8::remove_node, py::arg("node_id"))
@@ -1379,8 +1423,9 @@ PYBIND11_MODULE(_pynear, m) {
              py::arg("n_threads") = 1)
         .def("set", &HNSWBinaryNumpyAdapter<dist_hamming>::set, py::arg("vectors"))
         .def("searchKNN", &HNSWBinaryNumpyAdapter<dist_hamming>::searchKNN,
-             py::arg("vectors"), py::arg("k"))
-        .def("search1NN", &HNSWBinaryNumpyAdapter<dist_hamming>::search1NN, py::arg("vectors"))
+             py::arg("vectors"), py::arg("k"), py::arg("filter") = py::none())
+        .def("search1NN", &HNSWBinaryNumpyAdapter<dist_hamming>::search1NN,
+             py::arg("vectors"), py::arg("filter") = py::none())
         .def("set_ef", &HNSWBinaryNumpyAdapter<dist_hamming>::set_ef, py::arg("ef_search"))
         .def("add", &HNSWBinaryNumpyAdapter<dist_hamming>::add, py::arg("vectors"))
         .def("remove", &HNSWBinaryNumpyAdapter<dist_hamming>::remove_node, py::arg("node_id"))

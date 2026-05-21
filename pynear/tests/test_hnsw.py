@@ -726,6 +726,107 @@ def test_mih_seeded_set_mih_radius_changes_behaviour():
     assert all(0 <= int(i) < len(db) for i in nn_high)
 
 
+# ─── Filtered search (metadata mask) ────────────────────────────────────────
+
+
+@pytest.mark.parametrize("cls", [pynear.HNSWL2Index, pynear.HNSWCosineIndex, pynear.HNSWL2IndexSQ8])
+def test_hnsw_filter_returns_only_matching_ids(cls):
+    rng = np.random.default_rng(10)
+    db = rng.standard_normal((500, 16)).astype(np.float32)
+    q = rng.standard_normal((5, 16)).astype(np.float32)
+    idx = cls(M=8, ef_construction=100, ef_search=200)
+    idx.set(db)
+
+    # Even-id subset.
+    mask = np.array([i % 2 == 0 for i in range(500)], dtype=bool)
+    hits, _ = idx.searchKNN(q, k=10, filter=mask)
+    for row in hits:
+        for i in row:
+            assert int(i) % 2 == 0, f"filter leaked odd id {i}"
+
+
+def test_hnsw_binary_filter_returns_only_matching_ids():
+    rng = np.random.default_rng(11)
+    db = rng.integers(0, 256, size=(500, 16), dtype=np.uint8)
+    q = rng.integers(0, 256, size=(5, 16), dtype=np.uint8)
+    idx = pynear.HNSWBinaryIndex(M=16, ef_construction=100, ef_search=200)
+    idx.set(db)
+
+    mask = np.array([i < 250 for i in range(500)], dtype=bool)
+    hits, _ = idx.searchKNN(q, k=10, filter=mask)
+    for row in hits:
+        for i in row:
+            assert int(i) < 250, f"filter leaked id {i} >= 250"
+
+
+def test_hnsw_filter_empty_returns_no_hits():
+    """A mask of all-False must return empty lists (not raise, not hang)."""
+    db = np.random.default_rng(0).standard_normal((100, 16)).astype(np.float32)
+    q = np.random.default_rng(1).standard_normal((3, 16)).astype(np.float32)
+    idx = pynear.HNSWL2Index(M=8, ef_construction=50, ef_search=100)
+    idx.set(db)
+    mask = np.zeros(100, dtype=bool)
+    hits, dists = idx.searchKNN(q, k=10, filter=mask)
+    assert all(len(r) == 0 for r in hits)
+    assert all(len(r) == 0 for r in dists)
+
+
+def test_hnsw_filter_combines_with_tombstones():
+    """remove() + filter must both apply: deleted ids stay excluded even if mask allows them."""
+    db = np.random.default_rng(0).standard_normal((100, 16)).astype(np.float32)
+    q = np.random.default_rng(1).standard_normal((3, 16)).astype(np.float32)
+    idx = pynear.HNSWL2Index(M=8, ef_construction=50, ef_search=100)
+    idx.set(db)
+    idx.remove(0)
+    idx.remove(7)
+    # Mask allows everyone.
+    mask = np.ones(100, dtype=bool)
+    hits, _ = idx.searchKNN(q, k=20, filter=mask)
+    for row in hits:
+        for i in row:
+            assert int(i) != 0 and int(i) != 7, f"deleted id {i} leaked despite mask=all-True"
+
+
+def test_hnsw_filter_wrong_size_raises():
+    db = np.random.default_rng(0).standard_normal((50, 8)).astype(np.float32)
+    idx = pynear.HNSWL2Index(M=4, ef_construction=20, ef_search=20)
+    idx.set(db)
+    q = db[:1]
+    with pytest.raises(Exception):
+        idx.searchKNN(q, k=5, filter=np.zeros(49, dtype=bool))  # off by one
+    with pytest.raises(Exception):
+        idx.searchKNN(q, k=5, filter=np.zeros(51, dtype=bool))
+
+
+def test_hnsw_filter_uint8_array_accepted():
+    """Filter accepts uint8 (0/1) as well as bool (numpy stores both as 1 byte/elem)."""
+    db = np.random.default_rng(0).standard_normal((100, 8)).astype(np.float32)
+    q = db[:3]
+    idx = pynear.HNSWL2Index(M=4, ef_construction=50, ef_search=100)
+    idx.set(db)
+    mask = np.zeros(100, dtype=np.uint8)
+    mask[:50] = 1
+    hits, _ = idx.searchKNN(q, k=5, filter=mask)
+    for row in hits:
+        for i in row:
+            assert int(i) < 50
+
+
+def test_hnsw_search1NN_filter():
+    """search1NN must respect the filter just like searchKNN does."""
+    db = np.random.default_rng(0).standard_normal((100, 16)).astype(np.float32)
+    q = db[:5].copy()  # planted self-matches at ids 0..4
+    idx = pynear.HNSWL2Index(M=8, ef_construction=50, ef_search=100)
+    idx.set(db)
+
+    # Mask excludes the planted ids — nearest neighbour must be something else.
+    mask = np.ones(100, dtype=bool)
+    mask[:5] = False
+    nn_idx, _ = idx.search1NN(q, filter=mask)
+    for i, found in enumerate(nn_idx):
+        assert int(found) != i, f"search1NN returned excluded id {i}"
+
+
 # ─── Cross-class sanity ────────────────────────────────────────────────────
 
 
