@@ -115,10 +115,18 @@ public:
                 _examples[i] = FlatSpan{_flat_backing.data() + i * _dim, _dim};
             }
         } else if constexpr (std::is_same_v<T, SQ8Span>) {
-            // SQ8Span: caller (Python adapter) owns the int8 backing storage
-            // and passes spans pointing into it. We just hold the spans.
+            // SQ8Span: copy the int8 data into our own backing so the
+            // index is self-contained (caller can free its buffer).
             _dim = data[0].sz;
-            _examples = data;
+            size_t n = data.size();
+            _sq8_backing.resize(n * _dim);
+            for (size_t i = 0; i < n; i++) {
+                std::memcpy(_sq8_backing.data() + i * _dim, data[i].ptr, _dim);
+            }
+            _examples.resize(n);
+            for (size_t i = 0; i < n; i++) {
+                _examples[i] = SQ8Span{_sq8_backing.data() + i * _dim, _dim};
+            }
         } else {
             _examples = data;
             _dim = (data.empty() ? 0 : data[0].size());
@@ -215,6 +223,11 @@ public:
         if constexpr (std::is_same_v<T, FlatSpan>) {
             flat_bytes.resize(_flat_backing.size() * sizeof(float));
             std::memcpy(flat_bytes.data(), _flat_backing.data(), flat_bytes.size());
+        } else if constexpr (std::is_same_v<T, SQ8Span>) {
+            // SQ8: bytes come straight from our owned int8 backing.
+            // memcpy because int8_t↔uint8_t need an explicit bitcast.
+            flat_bytes.resize(_sq8_backing.size());
+            std::memcpy(flat_bytes.data(), _sq8_backing.data(), flat_bytes.size());
         } else if constexpr (std::is_same_v<T, arrayli>) {
             // Binary vectors live in _examples (each is a std::vector<uint8_t>).
             // Flatten row-major into the single byte buffer.
@@ -226,8 +239,6 @@ public:
                             _dim);
             }
         } else {
-            // Other types (e.g. SQ8Span) need their own backing handled by the
-            // Python adapter — leave flat_bytes empty here.
             flat_bytes.clear();
         }
         levels = _levels;
@@ -309,6 +320,14 @@ public:
             for (size_t i = 0; i < n; i++) {
                 _examples[i] = FlatSpan{_flat_backing.data() + i * _dim, _dim};
             }
+        } else if constexpr (std::is_same_v<T, SQ8Span>) {
+            // Bytes → int8 backing → SQ8Span pointers. Bitcast via memcpy
+            // (int8_t and uint8_t aren't assignable container-to-container).
+            _sq8_backing.resize(flat_bytes.size());
+            std::memcpy(_sq8_backing.data(), flat_bytes.data(), flat_bytes.size());
+            for (size_t i = 0; i < n; i++) {
+                _examples[i] = SQ8Span{_sq8_backing.data() + i * _dim, _dim};
+            }
         } else if constexpr (std::is_same_v<T, arrayli>) {
             // Bytes → per-vector arrayli rows.
             for (size_t i = 0; i < n; i++) {
@@ -362,6 +381,7 @@ public:
     void clear() {
         _examples.clear();
         _flat_backing.clear();
+        _sq8_backing.clear();
         _levels.clear();
         _adjacency.clear();
         _layer0_adj.clear();
@@ -981,6 +1001,7 @@ private:
 
     std::vector<T> _examples;
     std::vector<float> _flat_backing;            // owns the raw vectors when T = FlatSpan
+    std::vector<int8_t> _sq8_backing;            // owns the raw vectors when T = SQ8Span
     // Precomputed ||v_i||² for the dot-product distance trick:
     // ||q − v||² = ||q||² + ||v||² − 2 q·v. Halves the FMA count per
     // distance vs sub-then-square. Only populated for the float-vector

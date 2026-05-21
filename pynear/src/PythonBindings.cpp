@@ -708,9 +708,71 @@ public:
     size_t size() const { return hnsw.size(); }
     float scale() const { return _scale; }
 
+    static py::tuple get_state(const HNSWL2NumpyAdapterSQ8& p) {
+        std::vector<uint8_t> flat;
+        std::vector<int32_t> levels, flat_adj, adj_offsets;
+        int32_t entry, top_level;
+        size_t dim;
+        uint64_t seed;
+        p.hnsw.serialize(flat, levels, flat_adj, adj_offsets, entry, top_level, dim, seed);
+
+        py::bytes flat_bytes(reinterpret_cast<const char*>(flat.data()), flat.size());
+        py::bytes lvl_bytes(reinterpret_cast<const char*>(levels.data()),
+                            levels.size() * sizeof(int32_t));
+        py::bytes adj_bytes(reinterpret_cast<const char*>(flat_adj.data()),
+                            flat_adj.size() * sizeof(int32_t));
+        py::bytes off_bytes(reinterpret_cast<const char*>(adj_offsets.data()),
+                            adj_offsets.size() * sizeof(int32_t));
+
+        return py::make_tuple(flat_bytes, lvl_bytes, adj_bytes, off_bytes,
+                              entry, top_level, (uint64_t)dim, seed,
+                              (uint64_t)p.hnsw.M(),
+                              (uint64_t)p.hnsw.ef_construction(),
+                              (uint64_t)p.hnsw.ef_search(),
+                              p._scale);  // SQ8-specific tail field
+    }
+
+    static HNSWL2NumpyAdapterSQ8 set_state(py::tuple t) {
+        auto flat_bytes  = t[0].cast<py::bytes>();
+        auto lvl_bytes   = t[1].cast<py::bytes>();
+        auto adj_bytes   = t[2].cast<py::bytes>();
+        auto off_bytes   = t[3].cast<py::bytes>();
+        int32_t entry    = t[4].cast<int32_t>();
+        int32_t top_lvl  = t[5].cast<int32_t>();
+        uint64_t dim     = t[6].cast<uint64_t>();
+        uint64_t seed    = t[7].cast<uint64_t>();
+        size_t M         = t[8].cast<uint64_t>();
+        size_t ef_con    = t[9].cast<uint64_t>();
+        size_t ef_search = t[10].cast<uint64_t>();
+        float scale      = t[11].cast<float>();
+
+        std::string flat_str(flat_bytes);
+        std::vector<uint8_t> flat(flat_str.size());
+        std::memcpy(flat.data(), flat_str.data(), flat_str.size());
+
+        std::string lvl_str(lvl_bytes);
+        std::vector<int32_t> levels(lvl_str.size() / sizeof(int32_t));
+        std::memcpy(levels.data(), lvl_str.data(), lvl_str.size());
+
+        std::string adj_str(adj_bytes);
+        std::vector<int32_t> flat_adj(adj_str.size() / sizeof(int32_t));
+        std::memcpy(flat_adj.data(), adj_str.data(), adj_str.size());
+
+        std::string off_str(off_bytes);
+        std::vector<int32_t> adj_offsets(off_str.size() / sizeof(int32_t));
+        std::memcpy(adj_offsets.data(), off_str.data(), off_str.size());
+
+        HNSWL2NumpyAdapterSQ8 p(M, ef_con, ef_search, seed);
+        p._scale = scale;
+        p.hnsw.deserialize(std::move(flat), std::move(levels), flat_adj, adj_offsets,
+                           entry, top_lvl, (size_t)dim, seed, M, ef_con, ef_search);
+        return p;
+    }
+
     hnsw::HNSWIndex<SQ8Span, int32_t, dist_l2sq_sq8> hnsw;
 
-private:
+    // _scale is left as a member (not private) so get_state/set_state can
+    // read/write it directly without a separate accessor.
     std::vector<int8_t> _sq8_backing;
     float _scale;
 };
@@ -1180,7 +1242,9 @@ PYBIND11_MODULE(_pynear, m) {
         .def("set_ef", &HNSWL2NumpyAdapterSQ8::set_ef, py::arg("ef_search"))
         .def_property_readonly("ef_search", &HNSWL2NumpyAdapterSQ8::ef_search)
         .def_property_readonly("size", &HNSWL2NumpyAdapterSQ8::size)
-        .def_property_readonly("scale", &HNSWL2NumpyAdapterSQ8::scale);
+        .def_property_readonly("scale", &HNSWL2NumpyAdapterSQ8::scale)
+        .def(py::pickle(&HNSWL2NumpyAdapterSQ8::get_state,
+                        &HNSWL2NumpyAdapterSQ8::set_state));
 
     py::class_<HNSWBinaryNumpyAdapter<dist_hamming>>(m, "HNSWBinaryIndex")
         .def(py::init<size_t, size_t, size_t, uint64_t, int>(),

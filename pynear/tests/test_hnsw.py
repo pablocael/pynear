@@ -603,6 +603,26 @@ def test_hnsw_deterministic_with_n_threads_one():
 # ─── Pickle round-trips for the remaining variants ──────────────────────────
 
 
+def test_hnsw_sq8_pickle_round_trip():
+    """HNSWL2IndexSQ8 must round-trip through pickle, preserving scale + graph."""
+    rng = np.random.default_rng(101)
+    db = rng.standard_normal((400, 32)).astype(np.float32)
+    q = rng.standard_normal((10, 32)).astype(np.float32)
+
+    idx = pynear.HNSWL2IndexSQ8(M=8, ef_construction=100, ef_search=100)
+    idx.set(db)
+    i1, d1 = idx.searchKNN(q, k=5)
+    scale_before = idx.scale
+
+    restored = pickle.loads(pickle.dumps(idx))
+    assert restored.size == idx.size
+    assert restored.ef_search == idx.ef_search
+    assert restored.scale == scale_before
+    i2, d2 = restored.searchKNN(q, k=5)
+    np.testing.assert_array_equal(np.array(i1), np.array(i2))
+    np.testing.assert_allclose(np.array(d1), np.array(d2), rtol=1e-6)
+
+
 def test_hnsw_binary_pickle_round_trip():
     rng = np.random.default_rng(123)
     db = rng.integers(0, 256, size=(400, 16), dtype=np.uint8)
