@@ -230,15 +230,36 @@ public:
         // Per-thread visited buffers must cover the new node id space.
         for (auto& v : _visited_per_thread) v.resize(new_n, 0u);
         // Re-allocate the per-node lock array; std::shared_mutex is not
-        // movable so we have to re-create. add() is single-threaded so this
-        // is safe.
+        // movable so we have to re-create. add() is the single mutator
+        // here — concurrent searches on the same index are disallowed
+        // (caller's responsibility), so the realloc is safe.
         _node_locks = std::unique_ptr<std::shared_mutex[]>(new std::shared_mutex[new_n]);
         _num_locks = new_n;
 
         _during_build = true;
+#if defined(ENABLE_OMP_PARALLEL)
+        // Parallel weave just like set(). Each add_point() takes
+        // per-node shared_mutex locks via read_neighbours() / its
+        // own write paths, so multiple inserters don't corrupt each
+        // other's adjacency lists. The order in which new ids get
+        // inserted is non-deterministic across threads, so the
+        // resulting graph differs slightly run-to-run — same property
+        // as parallel set().
+        if (_n_threads > 1) {
+            #pragma omp parallel for num_threads(static_cast<int>(_n_threads)) schedule(dynamic, 16)
+            for (int64_t i = 0; i < static_cast<int64_t>(added); i++) {
+                add_point(static_cast<int32_t>(old_n + i));
+            }
+        } else {
+            for (size_t i = 0; i < added; i++) {
+                add_point(static_cast<int32_t>(old_n + i));
+            }
+        }
+#else
         for (size_t i = 0; i < added; i++) {
             add_point(static_cast<int32_t>(old_n + i));
         }
+#endif
         _during_build = false;
 
         std::vector<int32_t> ids(added);
