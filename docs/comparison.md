@@ -19,7 +19,7 @@ Full feature matrix. The README carries an abridged 4-row version; this page is 
 ## When PyNear is the right choice
 
 - You want **exact** answers without giving up speed (VP-Tree pruning + SIMD beats brute-force well past where naïve kd-trees collapse).
-- You're using **binary descriptors** (ORB / BRIEF / AKAZE / perceptual hashes / SimHash). `MIHBinaryIndex` is up to 257× faster than Faiss brute-force at N=1M, d=512 with 100% Recall@10.
+- You're using **binary descriptors** (ORB / BRIEF / AKAZE / perceptual hashes / SimHash). `MIHBinaryIndex` is ≈38× faster than Faiss `IndexBinaryFlat` on SIFT1M (1M × 128-bit, 100% Recall@10), and up to 257× at d=512 in a synthetic near-duplicate workload.
 - You need **threshold / range queries** (Hamming radius search) — `BKTreeBinaryIndex` is the only option here outside of pynear.
 - You want a **scikit-learn drop-in** that's faster than `sklearn.neighbors` without rewriting your training pipeline.
 - You want a **wheel-only install** with no system-level BLAS/Faiss dependency.

@@ -49,7 +49,7 @@ brute-force at high dimensionality.
 | Index | Distance | Input dtype | Notes |
 |---|---|---|---|
 | `pynear.IVFFlatBinaryIndex` | Hamming | `uint8` | Binary K-Means IVF; predictable cost per query |
-| `pynear.MIHBinaryIndex` | Hamming | `uint8` | Multi-Index Hashing; **257× faster** than brute-force at N=1M, d=512 |
+| `pynear.MIHBinaryIndex` | Hamming | `uint8` | Multi-Index Hashing; ≈**38× faster** than brute-force on SIFT1M 128-bit, up to **257×** at d=512 (near-duplicate workload) |
 
 **`IVFFlatBinaryIndex`** clusters data with binary K-Means (majority-vote
 centroids) and scans `nprobe` clusters per query with POPCNT.  Good when the
@@ -201,7 +201,7 @@ index.set_nprobe(4)    # lower recall, faster
 
 Multi-Index Hashing for near-duplicate binary descriptor retrieval.
 Any true neighbour within `radius` Hamming bits is guaranteed to be found.
-Extremely fast at d=512 — 257× faster than brute-force at N=1M.
+Extremely fast at d=512 — up to 257× faster than brute-force at N=1M in a synthetic near-duplicate workload (≈38× on the real SIFT1M 128-bit set).
 
 ```python
 import numpy as np

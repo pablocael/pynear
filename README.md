@@ -9,7 +9,7 @@
 
 > **Fast KNN search without compromise.** Exact when you need exact, approximate when you need speed.
 >
-> **HNSW** for text-embedding RAG · **SQ8** for 4× memory · **MIH** for binary descriptors at 257× brute-force ·
+> **HNSW** for text-embedding RAG · **SQ8** for 4× memory · **MIH** for binary descriptors at ~38× brute-force on SIFT1M ·
 > drop-in for scikit-learn · SIMD on x86 (AVX2/AVX-512) and ARM (NEON) · zero native deps beyond NumPy.
 
 ![PyNear demo](docs/img/demo.gif)
@@ -62,7 +62,7 @@ A metric-space KNN library with a C++ core covering **exact** (VP-Trees), **appr
 |---|---|---|---|---|
 | **Metric agnostic** | ✅ L2, L1, L∞, cosine, Hamming | L2 / IP / cosine | L2 / cosine / Hamming | L2 / others |
 | **HNSW (incl. binary)** | ✅ + novel MIH-seeded variant for binary | ✅ | ❌ | ❌ |
-| **Binary / Hamming approx** | ✅ 257× faster than brute-force | ⚠️ slow build | ❌ | ❌ |
+| **Binary / Hamming approx** | ✅ ~38× faster than brute-force on SIFT1M (up to 257× at d=512) | ⚠️ slow build | ❌ | ❌ |
 | **scikit-learn drop-in** | ✅ adapter classes | ❌ | ❌ | — |
 | **Zero native deps** | ✅ NumPy only | ❌ compiled lib + optional GPU | ❌ | ❌ |
 
@@ -77,7 +77,7 @@ PyNear covers the full spectrum: **VPTree** indices for guaranteed exact answers
 | | | |
 |:---|:---|:---|
 | **Image / video dedup** | **Drop-in for sklearn** | **Interactive visualisation** |
-| Encode with perceptual hash / ORB / SimHash, index with `MIHBinaryIndex`, find near-duplicates **257× faster** than brute-force. | Swap `sklearn.neighbors.KNeighborsClassifier` for `PyNearKNeighborsClassifier`. Same API, same results, faster. | Two desktop demos: a 1M-point KNN explorer and a live Voronoi diagram you can drag seeds in. |
+| Encode with perceptual hash / ORB / SimHash, index with `MIHBinaryIndex`, find near-duplicates **tens to hundreds of × faster** than exact brute-force (≈38× on SIFT1M 128-bit, up to 257× on 512-bit descriptors). | Swap `sklearn.neighbors.KNeighborsClassifier` for `PyNearKNeighborsClassifier`. Same API, same results, faster. | Two desktop demos: a 1M-point KNN explorer and a live Voronoi diagram you can drag seeds in. |
 | → [`demo_binary.py`](./demo_binary.py) | → [Migration guide](#migrating-from-scikit-learn) | → [`demo/`](./demo) |
 
 ### Choosing an index
@@ -88,7 +88,7 @@ PyNear covers the full spectrum: **VPTree** indices for guaranteed exact answers
 | Same but **memory-tight** (millions of vectors on one box) | `HNSWL2IndexSQ8` — 4× less RAM, ~1-3% recall hit |
 | **Generic float L2 ANN** | `HNSWL2Index` |
 | **Exact answers** required (small / moderate D ≤ 256) | `VPTreeL2Index` (or `L1`, `Chebyshev`, `Cosine`) |
-| **Binary descriptors** (perceptual hash, ORB, BRIEF, SimHash) — near-duplicate detection | `MIHBinaryIndex` (exact at small Hamming radius, 257× brute-force) |
+| **Binary descriptors** (perceptual hash, ORB, BRIEF, SimHash) — near-duplicate detection | `MIHBinaryIndex` (exact at small Hamming radius, ≈38× brute-force on SIFT1M; up to 257× on 512-bit descriptors) |
 | Binary + want graph fallback for larger queries | `MIHSeededHNSWBinaryIndex` (novel — MIH seeds the HNSW beam search) |
 | **Range / threshold queries** on binary descriptors | `BKTreeBinaryIndex` |
 | Already on `sklearn.neighbors.*` | `pynear.sklearn_adapter.PyNearKNeighborsClassifier` etc. — drop-in |
@@ -149,7 +149,7 @@ db = np.random.randint(0, 256, size=(1_000_000, 64), dtype=np.uint8)
 
 # ── Multi-Index Hashing ───────────────────────────────────────────────────────
 # Best for d=512 (m=8 sub-tables of 64 bits).
-# 257× faster than brute-force at N=1M; 100% Recall@10 for near-duplicates.
+# ~38× faster than brute-force on SIFT1M 128-bit; up to 257× at d=512 (near-duplicate workload, 100% Recall@10).
 mih = pynear.MIHBinaryIndex(m=8)   # m=4 for d=128/256, m=8 for d=512
 mih.set(db)
 
@@ -254,7 +254,7 @@ reg.score(X_test, y_test)    # R²
 
 | Index | Distance | Notes |
 |---|---|---|
-| **`MIHBinaryIndex`** | Hamming | Multi-Index Hashing; **257× faster than Faiss brute-force at N=1M, d=512** with 100% Recall@10. Exact within a configurable Hamming radius. |
+| **`MIHBinaryIndex`** | Hamming | Multi-Index Hashing; ≈**38× faster than Faiss `IndexBinaryFlat`** on SIFT1M (1M × 128-bit, 100% Recall@10), and up to **257× at d=512** in a synthetic near-duplicate workload. Exact within a configurable Hamming radius. |
 | **`MIHSeededHNSWBinaryIndex`** | Hamming | **Novel** — HNSW beam search seeded by MIH lookups. Exact for small-radius queries, graph-robust for larger ones. ([Design doc](./docs/hnsw_design.md).) |
 | `HNSWBinaryIndex` | Hamming | Plain HNSW with hardware popcount distance. |
 | `IVFFlatBinaryIndex` | Hamming | Binary K-Means IVF; faster build than Faiss binary IVF. |
