@@ -47,6 +47,10 @@
 #include <unordered_set>
 #include <vector>
 
+#if defined(ENABLE_OMP_PARALLEL)
+#include <omp.h>
+#endif
+
 class MIHBinaryIndex {
 public:
     /*
@@ -101,6 +105,9 @@ public:
 
         int32_t r_sub = radius / _m; // pigeonhole radius per sub-table
 
+#if defined(ENABLE_OMP_PARALLEL)
+        #pragma omp parallel for schedule(dynamic) if (nq > 1)
+#endif
         for (size_t qi = 0; qi < nq; ++qi) {
             // ── Collect candidates from all sub-tables ───────────────────────
             std::unordered_set<int32_t> candidates;
