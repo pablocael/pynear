@@ -39,6 +39,7 @@
 
 #include <DistanceFunctions.hpp>
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <queue>
@@ -105,10 +106,13 @@ public:
 
         int32_t r_sub = radius / _m; // pigeonhole radius per sub-table
 
+        // OpenMP 2.0 (the version MSVC ships) requires a SIGNED integral
+        // loop variable. Use ptrdiff_t and cast nq once.
+        const std::ptrdiff_t nq_signed = static_cast<std::ptrdiff_t>(nq);
 #if defined(ENABLE_OMP_PARALLEL)
-        #pragma omp parallel for schedule(dynamic) if (nq > 1)
+        #pragma omp parallel for schedule(dynamic) if (nq_signed > 1)
 #endif
-        for (size_t qi = 0; qi < nq; ++qi) {
+        for (std::ptrdiff_t qi = 0; qi < nq_signed; ++qi) {
             // ── Collect candidates from all sub-tables ───────────────────────
             std::unordered_set<int32_t> candidates;
 
