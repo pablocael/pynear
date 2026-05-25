@@ -133,6 +133,86 @@ These ratios are rough — always measure on your own data.
 
 ---
 
+## Approximate Hamming search — `MIHBinaryIndex`
+
+For **binary descriptors** (ORB, BRIEF, AKAZE, perceptual hashes, SimHash),
+pynear provides `MIHBinaryIndex`, an implementation of **Multi-Index
+Hashing**. Unlike `IVFFlatL2Index`, its accuracy is controlled by a single
+`radius` parameter that carries an *exact* guarantee.
+
+### How it works
+
+A `d`-bit descriptor is split into `m` equal sub-strings of `d/m` bits, and
+`m` hash tables map each sub-string to the points that contain it. At query
+time MIH leans on the **pigeonhole principle**:
+
+> If two descriptors are within Hamming distance `r`, then at least one of
+> their `m` sub-strings must match within `⌊r / m⌋` bits.
+
+So to find every neighbour within radius `r`, MIH only has to look up each
+query sub-string in its table within the much smaller radius
+`r_sub = ⌊r / m⌋`, union the candidates, and verify their full Hamming
+distance with POPCNT. On wide descriptors that collects a tiny candidate set
+instead of scanning all `N` points.
+
+### The `radius` parameter
+
+`radius` is the Hamming radius for candidate enumeration:
+
+```python
+mih = pynear.MIHBinaryIndex(m=4)   # m=4 for 128/256-bit, m=8 for 512-bit
+mih.set(db)
+idx, dist = mih.searchKNN(queries, k=10, radius=12)
+```
+
+It comes with an exact guarantee: **any** true neighbour within Hamming
+distance ≤ `radius` is returned with probability 1 — there are no false
+negatives inside the radius (this is the pigeonhole guarantee, not a
+probabilistic bound like `nprobe`). Recall is only lost for true neighbours
+that lie *beyond* the chosen radius. Larger `radius` → higher recall, more
+candidates, slower:
+
+| `radius` (m=4, 128-bit) | candidate set | recall@10 (SIFT1M) | relative speed |
+|---|---|---|---|
+| small (4–8)   | tiny     | partial — near-duplicates only | fastest |
+| medium (12–16) | moderate | rising | moderate |
+| large (20+)   | large    | approaches brute-force | slowest |
+
+The measured recall–throughput curve is in the
+[SIFT1M benchmark](../results/binary_benchmark.md).
+
+### Choosing `m`
+
+`m` must divide the descriptor's byte width, and each sub-string must fit in
+a `uint64_t` (`d/m ≤ 64` bits):
+
+| Descriptor width | Recommended `m` | Sub-string width |
+|---|---|---|
+| 128-bit (16 bytes) | 4 | 32 bits |
+| 256-bit (32 bytes) | 4 | 64 bits |
+| 512-bit (64 bytes) | 8 | 64 bits |
+
+### When MIH wins — and when it doesn't
+
+MIH is strongest when the candidate set stays small:
+
+- **Near-duplicate retrieval** (small Hamming radius) — image/video dedup,
+  copy detection, perceptual-hash lookup.
+- **Wide descriptors** (256–512 bits) — sub-tables are sparse, so each
+  lookup returns few candidates. On 512-bit near-duplicate workloads pynear's
+  MIH runs ~40× faster than Faiss's brute-force `IndexBinaryFlat` and is far
+  ahead of Faiss's own MIH (see
+  [results/faiss_comparison.md](../results/faiss_comparison.md)).
+
+It is *not* the right tool when you need **high recall on narrow, clustered
+descriptors**. On 128-bit SIFT1M, pushing recall toward 1.0 forces a large
+radius, the candidate set balloons, and an optimised brute-force POPCNT scan
+becomes competitive or faster. In that regime prefer `IVFFlatBinaryIndex`
+(predictable `nprobe` cost) or an exact `VPTreeBinaryIndex` / brute-force
+scan.
+
+---
+
 ## When to use exact vs approximate
 
 | Situation | Recommendation |
@@ -140,7 +220,9 @@ These ratios are rough — always measure on your own data.
 | Dimensionality ≤ 128-D | `VPTreeL2Index` — exact and fast |
 | Dimensionality 256-D – 1024-D, N > 50 K | `IVFFlatL2Index` with `n_probe` tuned to recall target |
 | Need guaranteed exact results | `IVFFlatL2Index` with `n_probe = n_clusters` |
-| Binary descriptors (ORB, BRIEF) | `VPTreeBinaryIndex` (exact) or `BKTreeBinaryIndex` (range) |
+| Binary descriptors — near-duplicate / small radius | `MIHBinaryIndex` with `radius` tuned to recall target |
+| Binary descriptors — general approximate KNN | `IVFFlatBinaryIndex` with `nprobe` tuned to recall target |
+| Binary descriptors — exact / range | `VPTreeBinaryIndex` (exact) or `BKTreeBinaryIndex` (range) |
 
 ---
 

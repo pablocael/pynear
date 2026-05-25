@@ -12,7 +12,7 @@ Metrics reported
   Build time  — wall-clock seconds to construct the index
   ms/query    — best-of-3 mean query latency (milliseconds per query)
   QPS         — queries per second (best-of-3)
-  Recall@k    — fraction of queries for which ≥1 true neighbour is in top-k
+  Recall@k    — standard recall: mean |returned_k ∩ true_k| / k over queries
 
 Usage
 -----
@@ -183,15 +183,20 @@ def recall_at_k(
     k: int,
 ) -> float:
     """
-    Mean Recall@k: fraction of queries for which at least one of the true
-    top-k neighbours appears in the index's top-k results.
+    Mean Recall@k: the standard metric, averaged over queries —
+
+        recall@k = mean_i |retrieved_i[:k] ∩ true_top_k_i| / k
+
+    Note: Hamming distances are integers, so the k-th-nearest boundary is
+    frequently tied. Recall is measured against one fixed exact-Hamming
+    ground truth; a value below 1.0 can reflect tie-breaking against that
+    reference rather than genuinely missed neighbours.
     """
-    hits = sum(
-        1
-        for i, r in enumerate(retrieved)
-        if any(x in set(ground_truth[i, :k].tolist()) for x in r[:k])
-    )
-    return hits / len(retrieved)
+    total = 0.0
+    for i, r in enumerate(retrieved):
+        truth = set(ground_truth[i, :k].tolist())
+        total += len(truth & set(r[:k])) / k
+    return total / len(retrieved)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -509,8 +514,10 @@ def main() -> None:
     ]
     rows: list[list[str]] = []
 
-    # ── Brute-force numpy baseline (exact) ────────────────────────────────────
-    print("\n  ▶ Brute-force baseline (numpy exact Hamming, no index)")
+    # ── Naive numpy brute-force baseline (exact) ──────────────────────────────
+    # NOTE: this is an unoptimised reference. A SIMD/POPCNT brute-force such as
+    # Faiss IndexBinaryFlat is dramatically faster — see results/faiss_comparison.md.
+    print("\n  ▶ Naive numpy brute-force baseline (exact Hamming, no index)")
     bf_n = min(100, n_gt)
     bf_results: list[list[int]] = []
     t0 = time.perf_counter()
@@ -523,7 +530,7 @@ def main() -> None:
     bf_qps = bf_n / bf_elapsed
     bf_recall = recall_at_k(bf_results, gt[:bf_n], k)
     rows.append([
-        "Brute-force (numpy)", f"N={N:,}",
+        "numpy brute-force (naive)", f"N={N:,}",
         "—", f"{bf_ms:.1f}", f"{bf_qps:.0f}", f"{bf_recall:.3f}",
     ])
     print(
@@ -624,8 +631,10 @@ def main() -> None:
     # ── Markdown section ───────────────────────────────────────────────────────
     md_table = to_markdown_table(headers, rows)
 
-    best_ivf = next(
-        (r for r in rows if r[0] == "IVFFlatBinaryIndex" and r[5] == "1.000"), None
+    best_ivf = max(
+        (r for r in rows if r[0] == "IVFFlatBinaryIndex"),
+        key=lambda r: float(r[5]),
+        default=None,
     )
     best_mih = min(
         (r for r in rows if r[0] == "MIHBinaryIndex"),
@@ -633,7 +642,7 @@ def main() -> None:
         default=None,
     )
     speedup_ivf = (
-        f" — **{float(rows[0][3]) / float(best_ivf[3]):.0f}× faster than brute-force**"
+        f" (**{float(rows[0][3]) / float(best_ivf[3]):.0f}× faster than the naive numpy scan**)"
         if best_ivf else ""
     )
 
@@ -649,19 +658,37 @@ Performance of pynear's approximate Hamming-distance indices on the
 ({nbytes} bytes/descriptor).  Ground truth computed by exact brute-force Hamming k-NN
 over {n_gt} queries, k={k}.  Machine: {_machine_info()}.
 
+The baseline below is a *naive* numpy scan. For the apples-to-apples comparison
+against Faiss's optimised brute-force (`IndexBinaryFlat`) and Faiss's own
+Multi-Index Hashing, see
+[results/faiss_comparison.md](results/faiss_comparison.md).
+
 ![QPS vs Recall@{k}]({plot_md_path})
 
 {md_table}
 
+> Recall@{k} is the standard `|returned ∩ true| / k`, measured against a fixed
+> exact-Hamming ground truth. Because Hamming distances are integers, the
+> {k}-th-nearest boundary is often tied, so even an exact scan can score below
+> 1.0 against this reference — the value reflects tie-breaking, not missed
+> neighbours.
+
 **Key takeaways:**
-- `IVFFlatBinaryIndex` (nprobe={best_ivf[1].split("nprobe=")[1] if best_ivf else "—"}) achieves **100% Recall@{k} at {best_ivf[4] if best_ivf else "—"} QPS{speedup_ivf}**.
-- `MIHBinaryIndex` (radius={best_mih[1].split("radius=")[1] if best_mih else "—"}) is the fastest single configuration at **{best_mih[4] if best_mih else "—"} QPS** with {best_mih[5] if best_mih else "—"} recall.
-- MIH excels on wider descriptors (512-bit / 64 bytes) where sub-table sparsity is higher.
+- `IVFFlatBinaryIndex` (nprobe={best_ivf[1].split("nprobe=")[1] if best_ivf else "—"}) reaches Recall@{k}={best_ivf[5] if best_ivf else "—"} at **{best_ivf[4] if best_ivf else "—"} QPS**{speedup_ivf}.
+- `MIHBinaryIndex` (radius={best_mih[1].split("radius=")[1] if best_mih else "—"}) is the lowest-latency single configuration at **{best_mih[4] if best_mih else "—"} QPS** (Recall@{k}={best_mih[5] if best_mih else "—"}).
+- MIH's real advantage shows on **wide descriptors (256–512-bit)** and
+  **small-radius / near-duplicate** retrieval. On narrow 128-bit data at high
+  recall, an optimised brute-force scan can outperform it — pick the index to
+  the workload.
 
 > **Reproduce:** `python demo_binary.py` · add `--small` for a 10 K quick test · `--n-gt-queries N` to adjust evaluation size.
 """
 
-    (results_dir / "binary_benchmark.md").write_text(md_section_body)
+    # The body uses repo-root-relative paths (correct in README.md). The copy
+    # written into results/ is one level down, so strip the "results/" prefix
+    # from its links/images to keep them valid when viewed standalone.
+    local_body = md_section_body.replace("(results/", "(")
+    (results_dir / "binary_benchmark.md").write_text(local_body)
     print(f"Markdown table saved → {results_dir / 'binary_benchmark.md'}")
 
     # ── Update README.md ───────────────────────────────────────────────────────

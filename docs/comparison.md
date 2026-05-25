@@ -10,7 +10,7 @@ Full feature matrix. The README carries an abridged 4-row version; this page is 
 | **Low-dim sweet spot** | ✅ | ❌ | ❌ | ❌ |
 | **High-dim (512-D – 1024-D)** | ✅ IVFFlatL2Index | ✅ | ✅ | ❌ |
 | **Binary / Hamming exact** | ✅ hardware popcount | ✅ | ✅ | ❌ |
-| **Binary / Hamming approx** | ✅ MIH + IVFFlat | ⚠️ slow build | ❌ | ❌ |
+| **Binary / Hamming approx** | ✅ MIH + IVFFlat (faster than Faiss MIH) | ✅ MIH + IVF | ❌ | ❌ |
 | **Threshold / range search** | ✅ BKTree | ❌ | ❌ | ❌ |
 | **Pickle serialization** | ✅ | ❌ | ✅ | ✅ |
 | **No extra native deps** | ✅ NumPy only | ❌ compiled lib + optional GPU | ❌ | ❌ |
@@ -19,7 +19,7 @@ Full feature matrix. The README carries an abridged 4-row version; this page is 
 ## When PyNear is the right choice
 
 - You want **exact** answers without giving up speed (VP-Tree pruning + SIMD beats brute-force well past where naïve kd-trees collapse).
-- You're using **binary descriptors** (ORB / BRIEF / AKAZE / perceptual hashes / SimHash). `MIHBinaryIndex` is up to 257× faster than Faiss brute-force at N=1M, d=512 with 100% Recall@10.
+- You're using **binary descriptors** (ORB / BRIEF / AKAZE / perceptual hashes / SimHash). On 512-bit near-duplicate retrieval, `MIHBinaryIndex` is **~40× faster than Faiss's brute-force `IndexBinaryFlat`** at 100% Recall@10, and **1.3–1.6× faster than Faiss's own `IndexBinaryMultiHash`** at matched recall on SIFT1M (128-bit). See [results/faiss_comparison.md](../results/faiss_comparison.md). (On *narrow* descriptors at high recall, an optimised brute-force scan can still win — match the index to the workload.)
 - You need **threshold / range queries** (Hamming radius search) — `BKTreeBinaryIndex` is the only option here outside of pynear.
 - You want a **scikit-learn drop-in** that's faster than `sklearn.neighbors` without rewriting your training pipeline.
 - You want a **wheel-only install** with no system-level BLAS/Faiss dependency.

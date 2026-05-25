@@ -43,13 +43,15 @@ choosing `n_clusters`, measuring recall, and tuning `n_probe`.
 ### Approximate KNN Indices — Binary (Hamming)
 
 Two indices for approximate Hamming-distance search on binary descriptors
-(ORB, BRIEF, AKAZE, etc.).  Both are dramatically faster than exact
-brute-force at high dimensionality.
+(ORB, BRIEF, AKAZE, etc.).  They shine on **wide descriptors** (256–512-bit)
+and **near-duplicate** retrieval; on narrow descriptors at high recall an
+optimised brute-force POPCNT scan is still hard to beat — match the index to
+the workload (see [results/faiss_comparison.md](../results/faiss_comparison.md)).
 
 | Index | Distance | Input dtype | Notes |
 |---|---|---|---|
 | `pynear.IVFFlatBinaryIndex` | Hamming | `uint8` | Binary K-Means IVF; predictable cost per query |
-| `pynear.MIHBinaryIndex` | Hamming | `uint8` | Multi-Index Hashing; **257× faster** than brute-force at N=1M, d=512 |
+| `pynear.MIHBinaryIndex` | Hamming | `uint8` | Multi-Index Hashing; **~40× faster than Faiss brute-force** on 512-bit near-duplicates, and faster than Faiss's own MIH |
 
 **`IVFFlatBinaryIndex`** clusters data with binary K-Means (majority-vote
 centroids) and scans `nprobe` clusters per query with POPCNT.  Good when the
@@ -200,8 +202,10 @@ index.set_nprobe(4)    # lower recall, faster
 ### `pynear.MIHBinaryIndex`
 
 Multi-Index Hashing for near-duplicate binary descriptor retrieval.
-Any true neighbour within `radius` Hamming bits is guaranteed to be found.
-Extremely fast at d=512 — 257× faster than brute-force at N=1M.
+Any true neighbour within `radius` Hamming bits is guaranteed to be found
+(pigeonhole principle). Excels on **wide descriptors** (256–512-bit) and
+**small-radius / near-duplicate** workloads — on 512-bit data it finds
+near-duplicates at 100% recall ~40× faster than Faiss's brute-force scan.
 
 ```python
 import numpy as np
@@ -226,13 +230,20 @@ indices, distances = index.searchKNN(queries, k=10, radius=8)
 print(f"Index size: {index.n()} vectors, {index.nbytes()} bytes each, {index.m()} sub-tables")
 ```
 
-**Performance at N=1M, d=512, k=10 (near-duplicate setting):**
+**Performance at N=1M, d=512, k=10 (near-duplicate setting, 24 threads,
+all at 100% Recall@10):**
 
-| Method | Query time | Recall@10 |
-|---|---|---|
-| `MIHBinaryIndex` (m=8, radius=8) | **0.037 ms** | 100% |
-| `IVFFlatBinaryIndex` (nlist=512, nprobe=16) | 1.95 ms | 100% |
-| Faiss `IndexBinaryFlat` (exact) | 9.5 ms | 100% |
+| Method | Query time | QPS | vs brute-force |
+|---|---|---|---|
+| **`MIHBinaryIndex`** (m=8, radius=4) | **0.008 ms** | **120,515** | **~40× faster** |
+| `IVFFlatBinaryIndex` (nlist=512, nprobe=16) | 1.82 ms | 548 | 0.18× |
+| Faiss `IndexBinaryFlat` (exact brute-force) | 0.32 ms | 3,118 | 1× (baseline) |
+| Faiss `IndexBinaryMultiHash` | 22.1 ms | 45 | 0.01× |
+
+> Faiss runs at 24 threads; `IndexBinaryFlat` is measured in a faiss-only
+> process to avoid a dual-OpenMP-runtime slowdown when libgomp (pynear) and
+> libomp (faiss-cpu) are loaded together. Full methodology and the 128-bit
+> comparison: [results/faiss_comparison.md](../results/faiss_comparison.md).
 
 ---
 
