@@ -8,7 +8,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/pablocael/pynear?style=social)](https://github.com/pablocael/pynear/stargazers)
 
 > **Fast KNN that doesn't make you choose between exact answers and production speed.**
-> Drop-in for scikit-learn. SIMD-accelerated. Up to **257× faster than Faiss** on binary descriptors at 100% recall.
+> Drop-in for scikit-learn. SIMD-accelerated. Binary Multi-Index Hashing that **beats Faiss's own MIH** at matched recall — and finds 512-bit near-duplicates **~40× faster than Faiss's brute-force scan** at 100% recall.
 
 ![PyNear demo](docs/img/demo.gif)
 
@@ -53,7 +53,7 @@ A metric-space KNN library with a C++ core. **VP-Trees** for exact search up to 
 | | PyNear | Faiss | Annoy | scikit-learn |
 |---|---|---|---|---|
 | **Metric agnostic** | ✅ L2, L1, L∞, cosine, Hamming | L2 / IP / cosine | L2 / cosine / Hamming | L2 / others |
-| **Binary / Hamming approx** | ✅ 257× faster than brute-force | ⚠️ slow build | ❌ | ❌ |
+| **Binary / Hamming approx** | ✅ MIH + IVF, faster than Faiss MIH | ✅ MIH + IVF | ❌ | ❌ |
 | **scikit-learn drop-in** | ✅ adapter classes | ❌ | ❌ | — |
 | **Zero native deps** | ✅ NumPy only | ❌ compiled lib + optional GPU | ❌ | ❌ |
 
@@ -68,7 +68,7 @@ PyNear covers the full spectrum: **VPTree** indices for guaranteed exact answers
 | | | |
 |:---|:---|:---|
 | **Image / video dedup** | **Drop-in for sklearn** | **Interactive visualisation** |
-| Encode with perceptual hash / ORB / SimHash, index with `MIHBinaryIndex`, find near-duplicates **257× faster** than brute-force. | Swap `sklearn.neighbors.KNeighborsClassifier` for `PyNearKNeighborsClassifier`. Same API, same results, faster. | Two desktop demos: a 1M-point KNN explorer and a live Voronoi diagram you can drag seeds in. |
+| Encode with perceptual hash / ORB / SimHash, index with `MIHBinaryIndex`, find 512-bit near-duplicates at 100% recall **~40× faster than Faiss's brute-force scan**. | Swap `sklearn.neighbors.KNeighborsClassifier` for `PyNearKNeighborsClassifier`. Same API, same results, faster. | Two desktop demos: a 1M-point KNN explorer and a live Voronoi diagram you can drag seeds in. |
 | → [`demo_binary.py`](./demo_binary.py) | → [Migration guide](#migrating-from-scikit-learn) | → [`demo/`](./demo) |
 
 ---
@@ -119,8 +119,8 @@ import pynear
 db = np.random.randint(0, 256, size=(1_000_000, 64), dtype=np.uint8)
 
 # ── Multi-Index Hashing ───────────────────────────────────────────────────────
-# Best for d=512 (m=8 sub-tables of 64 bits).
-# 257× faster than brute-force at N=1M; 100% Recall@10 for near-duplicates.
+# Best for wide descriptors (d=512 → m=8 sub-tables of 64 bits).
+# ~40× faster than Faiss's brute-force scan at N=1M; 100% Recall@10 for near-duplicates.
 mih = pynear.MIHBinaryIndex(m=8)   # m=4 for d=128/256, m=8 for d=512
 mih.set(db)
 
@@ -144,7 +144,7 @@ ivf.set_nprobe(32)  # increase nprobe at runtime to trade speed for recall
 | | `MIHBinaryIndex` | `IVFFlatBinaryIndex` |
 |---|---|---|
 | Best for | Near-duplicate retrieval (small Hamming radius) | General approximate Hamming KNN |
-| d=512, N=1M query time | **0.037 ms** | 1.95 ms |
+| d=512, N=1M query time (near-duplicate) | **0.008 ms** | 1.82 ms |
 | Recall guarantee | Exact for distance ≤ radius (pigeonhole) | Probabilistic (depends on nprobe) |
 | Recall control | `radius` parameter | `nprobe` parameter |
 | Recommended `m` | d/8 bytes (e.g. m=8 for 512-bit) | — |
@@ -229,7 +229,7 @@ reg.score(X_test, y_test)    # R²
 | `IVFFlatL2Index` | L2 (Euclidean) | `float32` | BLAS SGEMV inner scan; best for 512-D – 1024-D |
 | `IVFFlatCosineIndex` | Cosine | `float32` | Spherical K-Means + BLAS SGEMV; ideal for text embeddings |
 | `IVFFlatBinaryIndex` | Hamming | `uint8` | Binary K-Means IVF; faster build than Faiss binary IVF |
-| `MIHBinaryIndex` | Hamming | `uint8` | Multi-Index Hashing; 257× faster than brute-force at N=1M, d=512 |
+| `MIHBinaryIndex` | Hamming | `uint8` | Multi-Index Hashing; ~40× faster than Faiss brute-force on 512-bit near-duplicates, and faster than Faiss's own MIH |
 
 All VPTree and IVFFlat indices support `searchKNN(queries, k)`.
 `BKTreeBinaryIndex` supports `find_threshold(queries, threshold)` for range queries.
@@ -306,9 +306,9 @@ See [docs/demos.md](./docs/demos.md) for full details.
 
 ![QPS vs Recall@10 on SIFT1M binary](results/binary_benchmark_qps.png)
 
-> Approximate Hamming search on 1M × 128-bit SIFT descriptors. `MIHBinaryIndex` and `IVFFlatBinaryIndex` both reach 100% Recall@10 at >35× the throughput of brute-force.
+> Recall vs throughput for approximate Hamming search on 1M × 128-bit SIFT descriptors (the ~0.84 ceiling is a Hamming-tie artifact, not missed neighbours). For the apples-to-apples comparison against Faiss's brute-force `IndexBinaryFlat` and Faiss's own `IndexBinaryMultiHash` — including the 512-bit workload where MIH is ~40× faster than brute-force — see [results/faiss_comparison.md](./results/faiss_comparison.md).
 
-[**Full benchmark report (PDF)**](./docs/benchmarks.pdf) — formal evaluation against Faiss, scikit-learn, and Annoy across L2 / L1 / Hamming, dimensionalities from 2-D to 1024-D, both exact and approximate modes. Includes the recall–latency Pareto analysis and the **257× speedup** result over Faiss binary brute-force at N=1M, d=512.
+[**Full benchmark report (PDF)**](./docs/benchmarks.pdf) — formal evaluation against Faiss, scikit-learn, and Annoy across L2 / L1 / Hamming, dimensionalities from 2-D to 1024-D, both exact and approximate modes, including the recall–latency Pareto analysis. (The binary-descriptor numbers are superseded by the reproducible, thread-matched [results/faiss_comparison.md](./results/faiss_comparison.md).)
 
 Quick standalone run:
 
@@ -327,26 +327,42 @@ Performance of pynear's approximate Hamming-distance indices on the
 (16 bytes/descriptor).  Ground truth computed by exact brute-force Hamming k-NN
 over 500 queries, k=10.  Machine: Intel(R) Core(TM) Ultra 9 285K.
 
-| Index               | Configuration         | Build (s) | ms / query | QPS | Recall@10 |
-| ------------------- | --------------------- | --------- | ---------- | --- | --------- |
-| Brute-force (numpy) | N=1,000,000           | —         | 49.6       | 20  | 1.000     |
-| IVFFlatBinaryIndex  | nlist=500, nprobe=31  | 6.90      | 1.43       | 698 | 1.000     |
-| IVFFlatBinaryIndex  | nlist=500, nprobe=62  | 6.90      | 2.77       | 361 | 1.000     |
-| IVFFlatBinaryIndex  | nlist=500, nprobe=125 | 6.90      | 5.42       | 184 | 1.000     |
-| IVFFlatBinaryIndex  | nlist=500, nprobe=250 | 6.90      | 10.54      | 95  | 1.000     |
-| IVFFlatBinaryIndex  | nlist=500, nprobe=500 | 6.90      | 20.85      | 48  | 1.000     |
-| MIHBinaryIndex      | m=8, radius=4         | 2.83      | 1.29       | 772 | 0.992     |
-| MIHBinaryIndex      | m=8, radius=8         | 2.83      | 7.56       | 132 | 1.000     |
-| MIHBinaryIndex      | m=8, radius=12        | 2.83      | 7.56       | 132 | 1.000     |
-| MIHBinaryIndex      | m=8, radius=16        | 2.83      | 24.02      | 42  | 1.000     |
-| MIHBinaryIndex      | m=8, radius=24        | 2.83      | 50.92      | 20  | 1.000     |
-| MIHBinaryIndex      | m=8, radius=32        | 2.83      | 81.68      | 12  | 1.000     |
-| MIHBinaryIndex      | m=8, radius=48        | 2.83      | 171.86     | 6   | 1.000     |
+The baseline below is a *naive* numpy scan. For the apples-to-apples comparison
+against Faiss's optimised brute-force (`IndexBinaryFlat`) and Faiss's own
+Multi-Index Hashing, see
+[results/faiss_comparison.md](results/faiss_comparison.md).
+
+![QPS vs Recall@10](results/binary_benchmark_qps.png)
+
+| Index                     | Configuration         | Build (s) | ms / query | QPS   | Recall@10 |
+| ------------------------- | --------------------- | --------- | ---------- | ----- | --------- |
+| numpy brute-force (naive) | N=1,000,000           | —         | 50.1       | 20    | 1.000     |
+| IVFFlatBinaryIndex        | nlist=500, nprobe=31  | 6.24      | 1.47       | 679   | 0.825     |
+| IVFFlatBinaryIndex        | nlist=500, nprobe=62  | 6.24      | 2.85       | 351   | 0.842     |
+| IVFFlatBinaryIndex        | nlist=500, nprobe=125 | 6.24      | 5.65       | 177   | 0.845     |
+| IVFFlatBinaryIndex        | nlist=500, nprobe=250 | 6.24      | 10.74      | 93    | 0.845     |
+| IVFFlatBinaryIndex        | nlist=500, nprobe=500 | 6.24      | 20.95      | 48    | 0.845     |
+| MIHBinaryIndex            | m=8, radius=4         | 2.81      | 0.09       | 10825 | 0.585     |
+| MIHBinaryIndex            | m=8, radius=8         | 2.81      | 0.97       | 1031  | 0.829     |
+| MIHBinaryIndex            | m=8, radius=12        | 2.81      | 0.95       | 1053  | 0.829     |
+| MIHBinaryIndex            | m=8, radius=16        | 2.81      | 4.73       | 211   | 0.842     |
+| MIHBinaryIndex            | m=8, radius=24        | 2.81      | 12.37      | 81    | 0.844     |
+| MIHBinaryIndex            | m=8, radius=32        | 2.81      | 19.79      | 51    | 0.843     |
+| MIHBinaryIndex            | m=8, radius=48        | 2.81      | 36.34      | 28    | 0.843     |
+
+> Recall@10 is the standard `|returned ∩ true| / k`, measured against a fixed
+> exact-Hamming ground truth. Because Hamming distances are integers, the
+> 10-th-nearest boundary is often tied, so even an exact scan can score below
+> 1.0 against this reference — the value reflects tie-breaking, not missed
+> neighbours.
 
 **Key takeaways:**
-- `IVFFlatBinaryIndex` (nprobe=31) achieves **100% Recall@10 at 698 QPS — **35× faster than brute-force****.
-- `MIHBinaryIndex` (radius=4) is the fastest single configuration at **772 QPS** with 0.992 recall.
-- MIH excels on wider descriptors (512-bit / 64 bytes) where sub-table sparsity is higher.
+- `IVFFlatBinaryIndex` (nprobe=125) reaches Recall@10=0.845 at **177 QPS** (**9× faster than the naive numpy scan**).
+- `MIHBinaryIndex` (radius=4) is the lowest-latency single configuration at **10825 QPS** (Recall@10=0.585).
+- MIH's real advantage shows on **wide descriptors (256–512-bit)** and
+  **small-radius / near-duplicate** retrieval. On narrow 128-bit data at high
+  recall, an optimised brute-force scan can outperform it — pick the index to
+  the workload.
 
 > **Reproduce:** `python demo_binary.py` · add `--small` for a 10 K quick test · `--n-gt-queries N` to adjust evaluation size.
 
