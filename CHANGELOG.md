@@ -3,7 +3,7 @@
 All notable changes to PyNear are documented in this file. Versioning follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html): MAJOR.MINOR.PATCH.
 
-## Unreleased
+## 2.3.1 — 2026-05-25
 
 ### Added
 
