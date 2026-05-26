@@ -12,30 +12,18 @@
 
 ![PyNear demo](docs/img/demo.gif)
 
-```python
-import numpy as np, pynear
-
-db      = np.random.rand(1_000_000, 128).astype(np.float32)
-queries = np.random.rand(10, 128).astype(np.float32)
-
-index = pynear.VPTreeL2Index()
-index.set(db)
-indices, distances = index.searchKNN(queries, k=5)
-```
-
-```console
-pip install pynear     # pre-built wheels, no compiler needed
-```
-
-A metric-space KNN library with a C++ core. **VP-Trees** for exact search up to ~256-D, **IVF-Flat** for fast approximate float search at 512–1024-D, **MIH** and **IVF-Binary** for Hamming search on image descriptors. Already on scikit-learn? [Switch with a one-line import change.](#migrating-from-scikit-learn)
+**PyNear** is a metric-space nearest-neighbour library with a C++ core: exact **VP-Trees** up to ~256-D, **IVF-Flat** for approximate float search at 512–1024-D (embeddings, RAG), and **Multi-Index Hashing** / **IVF-Binary** for Hamming search on binary descriptors — one small, NumPy-only API with a scikit-learn drop-in and pre-built wheels (`pip install pynear`).
 
 ---
 
 ## Table of Contents
 
+- [Introduction](#introduction)
+- [Why PyNear?](#why-pynear)
 - [Installation](#installation)
 - [Quick start](#quick-start)
-  - [Approximate binary search (image descriptors)](#approximate-binary-search-image-descriptors)
+  - [Low-dimensional exact search (VPTreeL2Index)](#low-dimensional-exact-search-vptreel2index)
+  - [High-dimensional binary descriptors (MIHBinaryIndex)](#high-dimensional-binary-descriptors-mihbinaryindex)
 - [Migrating from scikit-learn](#migrating-from-scikit-learn)
 - [Features](#features)
   - [Available indices](#available-indices)
@@ -48,7 +36,44 @@ A metric-space KNN library with a C++ core. **VP-Trees** for exact search up to 
 
 ---
 
-### Why PyNear?
+## Introduction
+
+Search, recommendation, deduplication, and retrieval-augmented generation all
+reduce to the same primitive: turn an item — an image, an audio clip, a
+document, a face — into a **descriptor** (a fixed-length vector or bit-string),
+then find the descriptors nearest to it. Similar items map to nearby points, so
+*"find similar"* becomes *"find nearest neighbours."*
+
+The right way to search depends on the data, and PyNear gives you one API for
+all three regimes instead of forcing every problem through the same tool:
+
+- **Low-to-mid dimensions (a few up to ~256-D)** — exact tree search wins. A
+  **VP-Tree** prunes by distance to vantage points and returns the *true*
+  nearest neighbours, no recall loss, no tuning.
+- **High-dimensional float vectors (512–1024-D embeddings)** — exact pruning
+  collapses (the *curse of dimensionality*), so **IVF-Flat** trades a sliver of
+  recall for large speed-ups.
+- **Binary descriptors (ORB, BRIEF, perceptual hashes, SimHash)** — Hamming
+  distance plus **Multi-Index Hashing** uses the pigeonhole principle to find
+  near-duplicates without scanning the whole dataset.
+
+**What people build with it:**
+
+- **Image / video deduplication & copy detection** — perceptual-hash / ORB
+  descriptors + `MIHBinaryIndex`.
+- **Audio fingerprinting** (Shazam-style) — spectrogram-peak descriptors +
+  Hamming search.
+- **Semantic & RAG retrieval** — text/image embeddings + `IVFFlatCosineIndex`.
+- **Classic ML** — drop-in `KNeighborsClassifier` / `Regressor` backed by
+  VP-Trees.
+
+> New to nearest-neighbour search? See [docs/intro.md](./docs/intro.md) for a
+> gentle, jargon-free introduction — or the deep dive,
+> [*The shared recipe behind image search, Shazam, and RAG*](https://medium.com/@pablo.cael/the-shared-recipe-behind-search-images-shazam-and-rag-08fc93a276ac).
+
+---
+
+## Why PyNear?
 
 | | PyNear | Faiss | Annoy | scikit-learn |
 |---|---|---|---|---|
@@ -58,18 +83,6 @@ A metric-space KNN library with a C++ core. **VP-Trees** for exact search up to 
 | **Zero native deps** | ✅ NumPy only | ❌ compiled lib + optional GPU | ❌ | ❌ |
 
 [Full comparison →](./docs/comparison.md)
-
-PyNear covers the full spectrum: **VPTree** indices for guaranteed exact answers (2-D to ~256-D), **IVFFlatL2Index** / **IVFFlatCosineIndex** for fast approximate float search at 512–1024-D (text embeddings, RAG), and **MIHBinaryIndex** / **IVFFlatBinaryIndex** for approximate Hamming search on binary descriptors.
-
-> New to KNN? See [docs/intro.md](./docs/intro.md) for a gentle, jargon-free introduction.
-
-### What people build with PyNear
-
-| | | |
-|:---|:---|:---|
-| **Image / video dedup** | **Drop-in for sklearn** | **Interactive visualisation** |
-| Encode with perceptual hash / ORB / SimHash, index with `MIHBinaryIndex`, find 512-bit near-duplicates at 100% recall **~40× faster than Faiss's brute-force scan**. | Swap `sklearn.neighbors.KNeighborsClassifier` for `PyNearKNeighborsClassifier`. Same API, same results, faster. | Two desktop demos: a 1M-point KNN explorer and a live Voronoi diagram you can drag seeds in. |
-| → [`demo_binary.py`](./demo_binary.py) | → [Migration guide](#migrating-from-scikit-learn) | → [`demo/`](./demo) |
 
 ---
 
@@ -86,11 +99,21 @@ Linux, macOS (x86-64 and Apple Silicon), and Windows — no compiler needed.
 
 ## Quick start
 
+PyNear's two headline indices: exact **VP-Trees** for low-to-mid dimensions,
+and **Multi-Index Hashing** for binary descriptors.
+
+### Low-dimensional exact search (VPTreeL2Index)
+
+VP-Trees partition points by *distance to a vantage point*, so they prune whole
+branches in any metric space and return **exact** neighbours — no recall loss,
+no tuning — and stay effective up to ~256-D. The same API backs L2, L1, L∞,
+cosine, and Hamming.
+
 ```python
 import numpy as np
 import pynear
 
-# Build index from 100 000 vectors of dimension 32
+# 100,000 vectors in 32-D
 data = np.random.rand(100_000, 32).astype(np.float32)
 index = pynear.VPTreeL2Index()
 index.set(data)
@@ -103,40 +126,38 @@ indices, distances = index.searchKNN(queries, k=5)
 nn_indices, nn_distances = index.search1NN(queries)
 ```
 
-For all index types and advanced usage see [docs/README.md](./docs/README.md).
+### High-dimensional binary descriptors (MIHBinaryIndex)
 
-### Approximate binary search (image descriptors)
-
-For large-scale image retrieval with binary descriptors (ORB, BRIEF, AKAZE),
-PyNear provides two approximate Hamming-distance indices that are orders of
-magnitude faster than exact brute-force:
+`MIHBinaryIndex` is pynear's flagship for **binary** descriptors (ORB, BRIEF,
+AKAZE, perceptual hashes, SimHash). Multi-Index Hashing splits each *d*-bit
+descriptor into `m` sub-strings and hashes them; by the **pigeonhole
+principle**, any neighbour within `radius` Hamming bits is *guaranteed* to be
+found. On wide descriptors it retrieves near-duplicates **~40× faster than
+Faiss's brute-force scan** at 100% recall — and faster than Faiss's own MIH.
 
 ```python
 import numpy as np
 import pynear
 
 # 1M × 512-bit descriptors (64 bytes each)
-db = np.random.randint(0, 256, size=(1_000_000, 64), dtype=np.uint8)
-
-# ── Multi-Index Hashing ───────────────────────────────────────────────────────
-# Best for wide descriptors (d=512 → m=8 sub-tables of 64 bits).
-# ~40× faster than Faiss's brute-force scan at N=1M; 100% Recall@10 for near-duplicates.
-mih = pynear.MIHBinaryIndex(m=8)   # m=4 for d=128/256, m=8 for d=512
-mih.set(db)
-
+db      = np.random.randint(0, 256, size=(1_000_000, 64), dtype=np.uint8)
 queries = np.random.randint(0, 256, size=(100, 64), dtype=np.uint8)
-indices, distances = mih.searchKNN(queries, k=10, radius=8)
-# radius: any true neighbour within Hamming distance ≤ radius is guaranteed
-# to be found (pigeonhole principle). Increase for higher recall on noisier data.
 
-# ── IVF Flat Binary ───────────────────────────────────────────────────────────
-# Predictable cost: scans nprobe clusters per query.
-# Good when the query radius is unknown or data is non-uniform.
+mih = pynear.MIHBinaryIndex(m=8)   # 8 sub-tables of 64 bits (m=4 for 128/256-bit)
+mih.set(db)
+indices, distances = mih.searchKNN(queries, k=10, radius=8)
+# radius: any true neighbour within this Hamming distance is guaranteed found
+# (pigeonhole). Increase for higher recall on noisier data.
+```
+
+When you'd rather cap the cost per query than reason about a radius,
+`IVFFlatBinaryIndex` scans a fixed number of clusters instead:
+
+```python
 ivf = pynear.IVFFlatBinaryIndex(nlist=512, nprobe=16)
 ivf.set(db)
-
 indices, distances = ivf.searchKNN(queries, k=10)
-ivf.set_nprobe(32)  # increase nprobe at runtime to trade speed for recall
+ivf.set_nprobe(32)   # trade speed for recall at runtime
 ```
 
 **Choosing between MIH and IVFFlat:**
@@ -148,6 +169,10 @@ ivf.set_nprobe(32)  # increase nprobe at runtime to trade speed for recall
 | Recall guarantee | Exact for distance ≤ radius (pigeonhole) | Probabilistic (depends on nprobe) |
 | Recall control | `radius` parameter | `nprobe` parameter |
 | Recommended `m` | d/8 bytes (e.g. m=8 for 512-bit) | — |
+
+For wide **float** vectors (512-D–1024-D embeddings, e.g. text / RAG) reach for
+`IVFFlatL2Index` / `IVFFlatCosineIndex`. Every index type and its tuning knobs
+are covered in [docs/README.md](./docs/README.md).
 
 ---
 
