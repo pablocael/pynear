@@ -329,11 +329,17 @@ See [docs/demos.md](./docs/demos.md) for full details.
 
 ## Benchmarks
 
-![QPS vs Recall@10 on SIFT1M binary](results/binary_benchmark_qps.png)
+pynear is evaluated against Faiss, scikit-learn, and Annoy across L2 / L1 /
+Hamming and dimensionalities from 2-D to 1024-D.
 
-> Recall vs throughput for approximate Hamming search on 1M × 128-bit SIFT descriptors (the ~0.84 ceiling is a Hamming-tie artifact, not missed neighbours). For the apples-to-apples comparison against Faiss's brute-force `IndexBinaryFlat` and Faiss's own `IndexBinaryMultiHash` — including the 512-bit workload where MIH is ~40× faster than brute-force — see [results/faiss_comparison.md](./results/faiss_comparison.md).
-
-[**Full benchmark report (PDF)**](./docs/benchmarks.pdf) — formal evaluation against Faiss, scikit-learn, and Annoy across L2 / L1 / Hamming, dimensionalities from 2-D to 1024-D, both exact and approximate modes, including the recall–latency Pareto analysis. (The binary-descriptor numbers are superseded by the reproducible, thread-matched [results/faiss_comparison.md](./results/faiss_comparison.md).)
+- **Binary / Hamming:** see the [SIFT1M results below](#real-world-benchmark--sift1m-binary)
+  and the reproducible, thread-matched [pynear vs Faiss comparison](./results/faiss_comparison.md)
+  — ~40× faster than Faiss's brute-force `IndexBinaryFlat` on 512-bit near-duplicates,
+  and faster than Faiss's own `IndexBinaryMultiHash` at matched recall.
+- **Full report:** the [formal benchmark PDF](./docs/benchmarks.pdf) covers exact and
+  approximate modes across L2 / L1 / Hamming with the recall–latency Pareto analysis.
+  (Its binary-descriptor numbers are superseded by the thread-matched
+  [results/faiss_comparison.md](./results/faiss_comparison.md).)
 
 Quick standalone run:
 
