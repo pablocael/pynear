@@ -33,6 +33,17 @@ struct FlatSpan {
     const float* data() const { return ptr; }
 };
 
+// SQ8 — pointer to a vector of int8 values produced by scalar quantisation
+// of the original floats. Carries no scale itself; the SQ8 owner (e.g.
+// HNSWL2IndexSQ8) holds the global scale and scales final distances back
+// to L2 if it wants them in float space. For ordering inside HNSW the
+// scale is constant and can be omitted.
+struct SQ8Span {
+    const int8_t* ptr;
+    size_t sz;
+    size_t size() const { return sz; }
+};
+
 using arrayd = std::vector<double>;
 using arrayf = FlatSpan;
 using arrayli = std::vector<uint8_t>;
@@ -301,22 +312,577 @@ static inline __m128 masked_read(int d, const float *x) {
     // cannot use AVX2 _mm_mask_set1_epi32
 }
 
+// ─── int8 (SQ8) distance kernels ────────────────────────────────────────────
+// Process 32 int8 lanes per AVX2 op (4 × wider than float). Combined with the
+// 4 × memory-bandwidth reduction this is the biggest single perf lever we
+// have on Skylake-era hardware. Result is int32 sum-of-squared-diffs in the
+// quantised space; callers compose final L2 by multiplying by global scale².
+
+inline int32_t dist_l2sq_sq8_avx2(const int8_t* x, const int8_t* y, size_t d) {
+#if (defined(__AVX__) || defined(__AVX2__))
+    __m256i acc = _mm256_setzero_si256();
+    size_t i = 0;
+    for (; i + 32 <= d; i += 32) {
+        __m256i vx = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(x + i));
+        __m256i vy = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(y + i));
+        // Widen int8 → int16 in two halves so we can subtract without
+        // saturation surprises (int8 - int8 can underflow int8 range).
+        __m256i diff_lo = _mm256_sub_epi16(
+            _mm256_cvtepi8_epi16(_mm256_extracti128_si256(vx, 0)),
+            _mm256_cvtepi8_epi16(_mm256_extracti128_si256(vy, 0)));
+        __m256i diff_hi = _mm256_sub_epi16(
+            _mm256_cvtepi8_epi16(_mm256_extracti128_si256(vx, 1)),
+            _mm256_cvtepi8_epi16(_mm256_extracti128_si256(vy, 1)));
+        // madd_epi16(a, a) computes pairwise a*a then adds adjacent pairs
+        // → 8 int32 lanes, each holding the sum of two squared diffs.
+        acc = _mm256_add_epi32(acc, _mm256_madd_epi16(diff_lo, diff_lo));
+        acc = _mm256_add_epi32(acc, _mm256_madd_epi16(diff_hi, diff_hi));
+    }
+    // Reduce 8 int32 lanes to a scalar.
+    alignas(32) int32_t buf[8];
+    _mm256_store_si256(reinterpret_cast<__m256i*>(buf), acc);
+    int32_t result = 0;
+    for (int j = 0; j < 8; j++) result += buf[j];
+    // Scalar tail.
+    for (; i < d; i++) {
+        int32_t diff = static_cast<int32_t>(x[i]) - static_cast<int32_t>(y[i]);
+        result += diff * diff;
+    }
+    return result;
+#else
+    int32_t result = 0;
+    for (size_t i = 0; i < d; i++) {
+        int32_t diff = static_cast<int32_t>(x[i]) - static_cast<int32_t>(y[i]);
+        result += diff * diff;
+    }
+    return result;
+#endif
+}
+
+// Wrapper matching the HNSWIndex distance-function-pointer signature.
+inline int32_t dist_l2sq_sq8(const SQ8Span& p1, const SQ8Span& p2) {
+    return dist_l2sq_sq8_avx2(p1.ptr, p2.ptr, p1.sz);
+}
+
+// 4-way batched SQ8 L2² distance — compute distance(query, v[i]) for i ∈ [0,n).
+// 4 independent int32 accumulators expose ILP across the madd_epi16 chain.
+inline void batch_l2sq_sq8_avx2(const int8_t* query, size_t d,
+                                const int8_t* const* vectors,
+                                size_t n,
+                                int32_t* out) {
+#if (defined(__AVX__) || defined(__AVX2__))
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        __m256i a0 = _mm256_setzero_si256();
+        __m256i a1 = _mm256_setzero_si256();
+        __m256i a2 = _mm256_setzero_si256();
+        __m256i a3 = _mm256_setzero_si256();
+        const int8_t* p0 = vectors[i + 0];
+        const int8_t* p1 = vectors[i + 1];
+        const int8_t* p2 = vectors[i + 2];
+        const int8_t* p3 = vectors[i + 3];
+        size_t j = 0;
+        for (; j + 32 <= d; j += 32) {
+            __m256i q = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(query + j));
+            __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p0 + j));
+            __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p1 + j));
+            __m256i v2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p2 + j));
+            __m256i v3 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p3 + j));
+
+            __m256i q_lo = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(q, 0));
+            __m256i q_hi = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(q, 1));
+
+            // Accumulate (sum of squared diffs) for one DB vector into `acc`.
+            // Inlined per-vector to avoid a multi-line macro (MSVC has been
+            // brittle around those in some configurations).
+            auto accum_one = [q_lo, q_hi](__m256i acc, __m256i v) -> __m256i {
+                __m256i d_lo = _mm256_sub_epi16(q_lo,
+                    _mm256_cvtepi8_epi16(_mm256_extracti128_si256(v, 0)));
+                __m256i d_hi = _mm256_sub_epi16(q_hi,
+                    _mm256_cvtepi8_epi16(_mm256_extracti128_si256(v, 1)));
+                acc = _mm256_add_epi32(acc, _mm256_madd_epi16(d_lo, d_lo));
+                acc = _mm256_add_epi32(acc, _mm256_madd_epi16(d_hi, d_hi));
+                return acc;
+            };
+            a0 = accum_one(a0, v0);
+            a1 = accum_one(a1, v1);
+            a2 = accum_one(a2, v2);
+            a3 = accum_one(a3, v3);
+        }
+        alignas(32) int32_t b0[8], b1[8], b2[8], b3[8];
+        _mm256_store_si256(reinterpret_cast<__m256i*>(b0), a0);
+        _mm256_store_si256(reinterpret_cast<__m256i*>(b1), a1);
+        _mm256_store_si256(reinterpret_cast<__m256i*>(b2), a2);
+        _mm256_store_si256(reinterpret_cast<__m256i*>(b3), a3);
+        int32_t r0 = 0, r1 = 0, r2 = 0, r3 = 0;
+        for (int k = 0; k < 8; k++) { r0 += b0[k]; r1 += b1[k]; r2 += b2[k]; r3 += b3[k]; }
+        for (; j < d; j++) {
+            int32_t qd = query[j];
+            int32_t t;
+            t = qd - p0[j]; r0 += t * t;
+            t = qd - p1[j]; r1 += t * t;
+            t = qd - p2[j]; r2 += t * t;
+            t = qd - p3[j]; r3 += t * t;
+        }
+        out[i + 0] = r0; out[i + 1] = r1; out[i + 2] = r2; out[i + 3] = r3;
+    }
+    for (; i < n; i++) {
+        out[i] = dist_l2sq_sq8_avx2(query, vectors[i], d);
+    }
+#else
+    for (size_t i = 0; i < n; i++) {
+        out[i] = dist_l2sq_sq8_avx2(query, vectors[i], d);
+    }
+#endif
+}
+
+// Squared sum of one vector — ||v||². Used to precompute per-DB norms.
+inline float vec_l2sq_avx2(const float* v, size_t d) {
+    __m256 s0 = _mm256_setzero_ps();
+    __m256 s1 = _mm256_setzero_ps();
+    __m256 s2 = _mm256_setzero_ps();
+    __m256 s3 = _mm256_setzero_ps();
+    while (d >= 32) {
+        __m256 v0 = _mm256_loadu_ps(v +  0);
+        __m256 v1 = _mm256_loadu_ps(v +  8);
+        __m256 v2 = _mm256_loadu_ps(v + 16);
+        __m256 v3 = _mm256_loadu_ps(v + 24);
+        s0 = _mm256_fmadd_ps(v0, v0, s0);
+        s1 = _mm256_fmadd_ps(v1, v1, s1);
+        s2 = _mm256_fmadd_ps(v2, v2, s2);
+        s3 = _mm256_fmadd_ps(v3, v3, s3);
+        v += 32; d -= 32;
+    }
+    while (d >= 8) {
+        __m256 vv = _mm256_loadu_ps(v); v += 8;
+        s0 = _mm256_fmadd_ps(vv, vv, s0);
+        d -= 8;
+    }
+    __m256 sum = _mm256_add_ps(_mm256_add_ps(s0, s1), _mm256_add_ps(s2, s3));
+    float r = sum8(sum);
+    for (size_t j = 0; j < d; j++) r += v[j] * v[j];
+    return r;
+}
+
+// Dot product q·v with 4-way FMA ILP.
+inline float dot_f_avx2(const float* q, const float* v, size_t d) {
+    __m256 s0 = _mm256_setzero_ps();
+    __m256 s1 = _mm256_setzero_ps();
+    __m256 s2 = _mm256_setzero_ps();
+    __m256 s3 = _mm256_setzero_ps();
+    while (d >= 32) {
+        s0 = _mm256_fmadd_ps(_mm256_loadu_ps(q +  0), _mm256_loadu_ps(v +  0), s0);
+        s1 = _mm256_fmadd_ps(_mm256_loadu_ps(q +  8), _mm256_loadu_ps(v +  8), s1);
+        s2 = _mm256_fmadd_ps(_mm256_loadu_ps(q + 16), _mm256_loadu_ps(v + 16), s2);
+        s3 = _mm256_fmadd_ps(_mm256_loadu_ps(q + 24), _mm256_loadu_ps(v + 24), s3);
+        q += 32; v += 32; d -= 32;
+    }
+    while (d >= 8) {
+        s0 = _mm256_fmadd_ps(_mm256_loadu_ps(q), _mm256_loadu_ps(v), s0);
+        q += 8; v += 8; d -= 8;
+    }
+    __m256 sum = _mm256_add_ps(_mm256_add_ps(s0, s1), _mm256_add_ps(s2, s3));
+    float r = sum8(sum);
+    for (size_t j = 0; j < d; j++) r += q[j] * v[j];
+    return r;
+}
+
+// 8-way batched dot product. Eight accumulators fully saturate the FMA
+// throughput on Intel Skylake+/AMD Zen+ (FMA latency 4 cycles × throughput
+// 2/cycle ⇒ 8 in-flight to keep both FMA ports busy every cycle).
+inline void batch_dot_f_avx2_8(const float* query, size_t d,
+                                const float* const* vectors,
+                                size_t n,
+                                float* out_dots) {
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256 a0 = _mm256_setzero_ps(), a1 = _mm256_setzero_ps();
+        __m256 a2 = _mm256_setzero_ps(), a3 = _mm256_setzero_ps();
+        __m256 a4 = _mm256_setzero_ps(), a5 = _mm256_setzero_ps();
+        __m256 a6 = _mm256_setzero_ps(), a7 = _mm256_setzero_ps();
+        const float* p0 = vectors[i + 0]; const float* p1 = vectors[i + 1];
+        const float* p2 = vectors[i + 2]; const float* p3 = vectors[i + 3];
+        const float* p4 = vectors[i + 4]; const float* p5 = vectors[i + 5];
+        const float* p6 = vectors[i + 6]; const float* p7 = vectors[i + 7];
+        size_t j = 0;
+        for (; j + 8 <= d; j += 8) {
+            __m256 q = _mm256_loadu_ps(query + j);
+            a0 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p0 + j), a0);
+            a1 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p1 + j), a1);
+            a2 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p2 + j), a2);
+            a3 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p3 + j), a3);
+            a4 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p4 + j), a4);
+            a5 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p5 + j), a5);
+            a6 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p6 + j), a6);
+            a7 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p7 + j), a7);
+        }
+        float r[8] = {sum8(a0), sum8(a1), sum8(a2), sum8(a3),
+                      sum8(a4), sum8(a5), sum8(a6), sum8(a7)};
+        const float* ps[8] = {p0, p1, p2, p3, p4, p5, p6, p7};
+        for (; j < d; j++) {
+            float qj = query[j];
+            for (int k = 0; k < 8; k++) r[k] += qj * ps[k][j];
+        }
+        for (int k = 0; k < 8; k++) out_dots[i + k] = r[k];
+    }
+    // Tail: < 8 vectors — use the 4-way batch and single fallback.
+    for (; i + 4 <= n; i += 4) {
+        __m256 s0 = _mm256_setzero_ps(), s1 = _mm256_setzero_ps();
+        __m256 s2 = _mm256_setzero_ps(), s3 = _mm256_setzero_ps();
+        const float* p0 = vectors[i + 0]; const float* p1 = vectors[i + 1];
+        const float* p2 = vectors[i + 2]; const float* p3 = vectors[i + 3];
+        size_t j = 0;
+        for (; j + 8 <= d; j += 8) {
+            __m256 q = _mm256_loadu_ps(query + j);
+            s0 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p0 + j), s0);
+            s1 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p1 + j), s1);
+            s2 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p2 + j), s2);
+            s3 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p3 + j), s3);
+        }
+        float r0 = sum8(s0), r1 = sum8(s1), r2 = sum8(s2), r3 = sum8(s3);
+        for (; j < d; j++) {
+            r0 += query[j] * p0[j]; r1 += query[j] * p1[j];
+            r2 += query[j] * p2[j]; r3 += query[j] * p3[j];
+        }
+        out_dots[i + 0] = r0; out_dots[i + 1] = r1;
+        out_dots[i + 2] = r2; out_dots[i + 3] = r3;
+    }
+    for (; i < n; i++) {
+        out_dots[i] = dot_f_avx2(query, vectors[i], d);
+    }
+}
+
+// 4-way batched dot product. Same pattern as batch_l2sq but using FMA
+// directly on q*v (one FMA per chunk instead of sub-then-square = two ops).
+// Caller composes ||q-v||² = q_norm_sq + v_norm_sq - 2 q·v.
+inline void batch_dot_f_avx2(const float* query, size_t d,
+                              const float* const* vectors,
+                              size_t n,
+                              float* out_dots) {
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        __m256 s0 = _mm256_setzero_ps();
+        __m256 s1 = _mm256_setzero_ps();
+        __m256 s2 = _mm256_setzero_ps();
+        __m256 s3 = _mm256_setzero_ps();
+        const float* p0 = vectors[i + 0];
+        const float* p1 = vectors[i + 1];
+        const float* p2 = vectors[i + 2];
+        const float* p3 = vectors[i + 3];
+        size_t j = 0;
+        for (; j + 8 <= d; j += 8) {
+            __m256 q = _mm256_loadu_ps(query + j);
+            s0 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p0 + j), s0);
+            s1 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p1 + j), s1);
+            s2 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p2 + j), s2);
+            s3 = _mm256_fmadd_ps(q, _mm256_loadu_ps(p3 + j), s3);
+        }
+        float r0 = sum8(s0), r1 = sum8(s1), r2 = sum8(s2), r3 = sum8(s3);
+        for (; j < d; j++) {
+            r0 += query[j] * p0[j];
+            r1 += query[j] * p1[j];
+            r2 += query[j] * p2[j];
+            r3 += query[j] * p3[j];
+        }
+        out_dots[i + 0] = r0;
+        out_dots[i + 1] = r1;
+        out_dots[i + 2] = r2;
+        out_dots[i + 3] = r3;
+    }
+    for (; i < n; i++) {
+        out_dots[i] = dot_f_avx2(query, vectors[i], d);
+    }
+}
+
+// Squared L2 — same memory and FMA pattern as L2, no final sqrt.
+// Used internally by HNSW where ordering is preserved by squared distance
+// and we save ~10 cycle sqrt latency per distance (~2.5 ns at 4 GHz).
+// The HNSW adapter applies sqrt only to the final returned top-k.
+inline float dist_l2sq_raw_avx2(const float* x, const float* y, size_t d) {
+    __m256 s0 = _mm256_setzero_ps();
+    __m256 s1 = _mm256_setzero_ps();
+    __m256 s2 = _mm256_setzero_ps();
+    __m256 s3 = _mm256_setzero_ps();
+    while (d >= 32) {
+        __m256 x0 = _mm256_loadu_ps(x +  0);
+        __m256 x1 = _mm256_loadu_ps(x +  8);
+        __m256 x2 = _mm256_loadu_ps(x + 16);
+        __m256 x3 = _mm256_loadu_ps(x + 24);
+        __m256 d0 = _mm256_sub_ps(x0, _mm256_loadu_ps(y +  0));
+        __m256 d1 = _mm256_sub_ps(x1, _mm256_loadu_ps(y +  8));
+        __m256 d2 = _mm256_sub_ps(x2, _mm256_loadu_ps(y + 16));
+        __m256 d3 = _mm256_sub_ps(x3, _mm256_loadu_ps(y + 24));
+        s0 = _mm256_fmadd_ps(d0, d0, s0);
+        s1 = _mm256_fmadd_ps(d1, d1, s1);
+        s2 = _mm256_fmadd_ps(d2, d2, s2);
+        s3 = _mm256_fmadd_ps(d3, d3, s3);
+        x += 32; y += 32; d -= 32;
+    }
+    while (d >= 8) {
+        __m256 mx = _mm256_loadu_ps(x); x += 8;
+        __m256 my = _mm256_loadu_ps(y); y += 8;
+        __m256 dd = _mm256_sub_ps(mx, my);
+        s0 = _mm256_fmadd_ps(dd, dd, s0);
+        d -= 8;
+    }
+    __m256 sum = _mm256_add_ps(_mm256_add_ps(s0, s1), _mm256_add_ps(s2, s3));
+    float r = sum8(sum);
+    for (size_t j = 0; j < d; j++) {
+        float t = x[j] - y[j];
+        r += t * t;
+    }
+    return r;
+}
+
+// Batched squared L2 — 4-way to hide FMA latency.
+inline void batch_l2sq_f_avx2(const float* query, size_t d,
+                              const float* const* vectors,
+                              size_t n,
+                              float* out) {
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        __m256 s0 = _mm256_setzero_ps();
+        __m256 s1 = _mm256_setzero_ps();
+        __m256 s2 = _mm256_setzero_ps();
+        __m256 s3 = _mm256_setzero_ps();
+        const float* p0 = vectors[i + 0];
+        const float* p1 = vectors[i + 1];
+        const float* p2 = vectors[i + 2];
+        const float* p3 = vectors[i + 3];
+        size_t j = 0;
+        for (; j + 8 <= d; j += 8) {
+            __m256 q = _mm256_loadu_ps(query + j);
+            __m256 d0 = _mm256_sub_ps(q, _mm256_loadu_ps(p0 + j));
+            __m256 d1 = _mm256_sub_ps(q, _mm256_loadu_ps(p1 + j));
+            __m256 d2 = _mm256_sub_ps(q, _mm256_loadu_ps(p2 + j));
+            __m256 d3 = _mm256_sub_ps(q, _mm256_loadu_ps(p3 + j));
+            s0 = _mm256_fmadd_ps(d0, d0, s0);
+            s1 = _mm256_fmadd_ps(d1, d1, s1);
+            s2 = _mm256_fmadd_ps(d2, d2, s2);
+            s3 = _mm256_fmadd_ps(d3, d3, s3);
+        }
+        float r0 = sum8(s0), r1 = sum8(s1), r2 = sum8(s2), r3 = sum8(s3);
+        for (; j < d; j++) {
+            float t;
+            t = query[j] - p0[j]; r0 += t * t;
+            t = query[j] - p1[j]; r1 += t * t;
+            t = query[j] - p2[j]; r2 += t * t;
+            t = query[j] - p3[j]; r3 += t * t;
+        }
+        out[i + 0] = r0;
+        out[i + 1] = r1;
+        out[i + 2] = r2;
+        out[i + 3] = r3;
+    }
+    for (; i < n; i++) {
+        out[i] = dist_l2sq_raw_avx2(query, vectors[i], d);
+    }
+}
+
+// FlatSpan wrapper used as the function-pointer template parameter for
+// HNSWIndex. Returns squared L2; the HNSW Python adapter applies sqrt
+// when handing distances back to the caller so the public API still
+// reports L2 (sqrt'd) distances.
+inline float dist_l2sq_f_avx2(const arrayf &p1, const arrayf &p2) {
+    return dist_l2sq_raw_avx2(p1.data(), p2.data(), p1.size());
+}
+
+// ─── AVX-512 paths (gated on __AVX512F__) ──────────────────────────────────
+// Compile only when the target CPU supports AVX-512F. On Zen 4 / Sapphire
+// Rapids / Xeon Gold these halve the distance-compute time versus AVX2 by
+// processing 16 floats per op (vs 8). The AVX2 paths above remain the
+// fallback for older hardware (and for Arrow Lake / Alder Lake clients
+// which removed AVX-512 from the consumer line).
+
+#if defined(__AVX512F__)
+
+inline float sum16(__m512 v) {
+    return _mm512_reduce_add_ps(v);
+}
+
+// 8-way batched dot product on AVX-512 — eight 512-bit accumulators saturate
+// both FMA ports on Zen 4 (FMA latency 4 cycles × throughput 2/cycle ⇒ 8
+// in-flight).
+inline void batch_dot_f_avx512_8(const float* query, size_t d,
+                                  const float* const* vectors,
+                                  size_t n,
+                                  float* out_dots) {
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m512 a0 = _mm512_setzero_ps(), a1 = _mm512_setzero_ps();
+        __m512 a2 = _mm512_setzero_ps(), a3 = _mm512_setzero_ps();
+        __m512 a4 = _mm512_setzero_ps(), a5 = _mm512_setzero_ps();
+        __m512 a6 = _mm512_setzero_ps(), a7 = _mm512_setzero_ps();
+        const float* p[8];
+        for (int k = 0; k < 8; k++) p[k] = vectors[i + k];
+        size_t j = 0;
+        for (; j + 16 <= d; j += 16) {
+            __m512 q = _mm512_loadu_ps(query + j);
+            a0 = _mm512_fmadd_ps(q, _mm512_loadu_ps(p[0] + j), a0);
+            a1 = _mm512_fmadd_ps(q, _mm512_loadu_ps(p[1] + j), a1);
+            a2 = _mm512_fmadd_ps(q, _mm512_loadu_ps(p[2] + j), a2);
+            a3 = _mm512_fmadd_ps(q, _mm512_loadu_ps(p[3] + j), a3);
+            a4 = _mm512_fmadd_ps(q, _mm512_loadu_ps(p[4] + j), a4);
+            a5 = _mm512_fmadd_ps(q, _mm512_loadu_ps(p[5] + j), a5);
+            a6 = _mm512_fmadd_ps(q, _mm512_loadu_ps(p[6] + j), a6);
+            a7 = _mm512_fmadd_ps(q, _mm512_loadu_ps(p[7] + j), a7);
+        }
+        float r[8] = {sum16(a0), sum16(a1), sum16(a2), sum16(a3),
+                      sum16(a4), sum16(a5), sum16(a6), sum16(a7)};
+        for (; j < d; j++) {
+            float qj = query[j];
+            for (int k = 0; k < 8; k++) r[k] += qj * p[k][j];
+        }
+        for (int k = 0; k < 8; k++) out_dots[i + k] = r[k];
+    }
+    // Tail: fall through to the AVX2 path for any remaining < 8 vectors.
+    if (i < n) {
+        batch_dot_f_avx2(query, d, vectors + i, n - i, out_dots + i);
+    }
+}
+
+// AVX-512 SQ8 distance — uses _mm512 int paths. 64 int8 lanes per op vs
+// AVX2's 32. Same int16 widen → sub → madd chain.
+inline int32_t dist_l2sq_sq8_avx512(const int8_t* x, const int8_t* y, size_t d) {
+    __m512i acc = _mm512_setzero_si512();
+    size_t i = 0;
+    for (; i + 64 <= d; i += 64) {
+        __m512i vx = _mm512_loadu_si512(reinterpret_cast<const void*>(x + i));
+        __m512i vy = _mm512_loadu_si512(reinterpret_cast<const void*>(y + i));
+        // Widen int8 → int16 in two halves.
+        __m512i diff_lo = _mm512_sub_epi16(
+            _mm512_cvtepi8_epi16(_mm512_extracti64x4_epi64(vx, 0)),
+            _mm512_cvtepi8_epi16(_mm512_extracti64x4_epi64(vy, 0)));
+        __m512i diff_hi = _mm512_sub_epi16(
+            _mm512_cvtepi8_epi16(_mm512_extracti64x4_epi64(vx, 1)),
+            _mm512_cvtepi8_epi16(_mm512_extracti64x4_epi64(vy, 1)));
+        acc = _mm512_add_epi32(acc, _mm512_madd_epi16(diff_lo, diff_lo));
+        acc = _mm512_add_epi32(acc, _mm512_madd_epi16(diff_hi, diff_hi));
+    }
+    int32_t result = _mm512_reduce_add_epi32(acc);
+    for (; i < d; i++) {
+        int32_t diff = static_cast<int32_t>(x[i]) - static_cast<int32_t>(y[i]);
+        result += diff * diff;
+    }
+    return result;
+}
+
+#endif  // __AVX512F__
+
+// 4-way batched L2 distance — compute distance(query, v[i]) for i in [0, n)
+// processing 4 neighbours in parallel to expose instruction-level parallelism.
+// Four independent FMA chains hide the FMA latency (~5 cycles on Skylake+)
+// far better than computing distances sequentially.
+//
+// Single-vector fallback for the remainder (< 4 neighbours).
+inline void batch_l2_f_avx2(const float* query, size_t d,
+                            const float* const* vectors,
+                            size_t n,
+                            float* out) {
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        __m256 s0 = _mm256_setzero_ps();
+        __m256 s1 = _mm256_setzero_ps();
+        __m256 s2 = _mm256_setzero_ps();
+        __m256 s3 = _mm256_setzero_ps();
+        const float* p0 = vectors[i + 0];
+        const float* p1 = vectors[i + 1];
+        const float* p2 = vectors[i + 2];
+        const float* p3 = vectors[i + 3];
+        size_t j = 0;
+        for (; j + 8 <= d; j += 8) {
+            __m256 q = _mm256_loadu_ps(query + j);
+            __m256 d0 = _mm256_sub_ps(q, _mm256_loadu_ps(p0 + j));
+            __m256 d1 = _mm256_sub_ps(q, _mm256_loadu_ps(p1 + j));
+            __m256 d2 = _mm256_sub_ps(q, _mm256_loadu_ps(p2 + j));
+            __m256 d3 = _mm256_sub_ps(q, _mm256_loadu_ps(p3 + j));
+            s0 = _mm256_fmadd_ps(d0, d0, s0);
+            s1 = _mm256_fmadd_ps(d1, d1, s1);
+            s2 = _mm256_fmadd_ps(d2, d2, s2);
+            s3 = _mm256_fmadd_ps(d3, d3, s3);
+        }
+        // Horizontal-add each accumulator + sqrt.
+        float r0 = sum8(s0), r1 = sum8(s1), r2 = sum8(s2), r3 = sum8(s3);
+        // Tail (dim % 8) — scalar.
+        for (; j < d; j++) {
+            float t;
+            t = query[j] - p0[j]; r0 += t * t;
+            t = query[j] - p1[j]; r1 += t * t;
+            t = query[j] - p2[j]; r2 += t * t;
+            t = query[j] - p3[j]; r3 += t * t;
+        }
+        out[i + 0] = std::sqrt(r0);
+        out[i + 1] = std::sqrt(r1);
+        out[i + 2] = std::sqrt(r2);
+        out[i + 3] = std::sqrt(r3);
+    }
+    // Remainder — < 4 neighbours, inline the single-vector SIMD path
+    // (avoids a forward-reference dependency on dist_l2_f_avx2 below).
+    for (; i < n; i++) {
+        const float* p = vectors[i];
+        __m256 sum = _mm256_setzero_ps();
+        size_t j = 0;
+        for (; j + 8 <= d; j += 8) {
+            __m256 q = _mm256_loadu_ps(query + j);
+            __m256 dd = _mm256_sub_ps(q, _mm256_loadu_ps(p + j));
+            sum = _mm256_fmadd_ps(dd, dd, sum);
+        }
+        float r = sum8(sum);
+        for (; j < d; j++) {
+            float t = query[j] - p[j];
+            r += t * t;
+        }
+        out[i] = std::sqrt(r);
+    }
+}
+
 float dist_l2_f_avx2(const arrayf &p1, const arrayf &p2) {
     unsigned int d = p1.size();
-    __m256 msum1 = _mm256_setzero_ps();
+    // Four independent FMA accumulators hide FMA latency (~5 cycles on
+    // Skylake+/Zen+). With a single accumulator this loop was latency-bound:
+    // ~1 FMA every 5 cycles. With four accumulators we issue ~1 FMA per
+    // cycle → ~4× throughput on the hot inner loop.
+    __m256 s0 = _mm256_setzero_ps();
+    __m256 s1 = _mm256_setzero_ps();
+    __m256 s2 = _mm256_setzero_ps();
+    __m256 s3 = _mm256_setzero_ps();
 
     const float *x = p1.data();
     const float *y = p2.data();
 
+    // 32 floats per iteration (4 lanes × 8 floats).
+    while (d >= 32) {
+        __m256 x0 = _mm256_loadu_ps(x +  0);
+        __m256 x1 = _mm256_loadu_ps(x +  8);
+        __m256 x2 = _mm256_loadu_ps(x + 16);
+        __m256 x3 = _mm256_loadu_ps(x + 24);
+        __m256 y0 = _mm256_loadu_ps(y +  0);
+        __m256 y1 = _mm256_loadu_ps(y +  8);
+        __m256 y2 = _mm256_loadu_ps(y + 16);
+        __m256 y3 = _mm256_loadu_ps(y + 24);
+        __m256 d0 = _mm256_sub_ps(x0, y0);
+        __m256 d1 = _mm256_sub_ps(x1, y1);
+        __m256 d2 = _mm256_sub_ps(x2, y2);
+        __m256 d3 = _mm256_sub_ps(x3, y3);
+        s0 = _mm256_fmadd_ps(d0, d0, s0);
+        s1 = _mm256_fmadd_ps(d1, d1, s1);
+        s2 = _mm256_fmadd_ps(d2, d2, s2);
+        s3 = _mm256_fmadd_ps(d3, d3, s3);
+        x += 32; y += 32;
+        d -= 32;
+    }
+    // Drain remaining 8-float chunks into s0.
     while (d >= 8) {
         __m256 mx = _mm256_loadu_ps(x);
         x += 8;
         __m256 my = _mm256_loadu_ps(y);
         y += 8;
         const __m256 a_m_b1 = _mm256_sub_ps(mx, my);
-        msum1 = _mm256_fmadd_ps(a_m_b1, a_m_b1, msum1);  // FMA: 1 insn vs 2
+        s0 = _mm256_fmadd_ps(a_m_b1, a_m_b1, s0);
         d -= 8;
     }
+    // Combine all four accumulators into one.
+    __m256 msum1 = _mm256_add_ps(_mm256_add_ps(s0, s1), _mm256_add_ps(s2, s3));
 
     __m128 msum2 = _mm256_extractf128_ps(msum1, 1);
     msum2 = _mm_add_ps(msum2, _mm256_extractf128_ps(msum1, 0));
@@ -419,12 +985,320 @@ float dist_chebyshev_f_avx2(const arrayf &p1, const arrayf &p2) {
     return max_distance;
 }
 
-#else // !(__AVX__ || __AVX2__) — scalar fallbacks for non-x86 platforms (e.g. arm64)
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+// ─── NEON paths (Apple Silicon M-series, AWS Graviton, generic ARM64) ─────
+// NEON gives us 4×float32 or 16×int8 per vector op — 2-4× faster than the
+// scalar fallback. The "_avx2" suffix is a misnomer here (we're on ARM)
+// but kept to match the symbol names referenced by HNSWIndex.hpp's
+// if-constexpr branches; ifdefs aside the API surface is identical.
+
+#include <arm_neon.h>
+
+double dist_l2_d_avx2(const arrayd &p1, const arrayd &p2) { return dist_l2_d(p1, p2); }
+float  dist_l1_f_avx2(const arrayf &p1, const arrayf &p2) { return dist_l1_f(p1, p2); }
+float  dist_chebyshev_f_avx2(const arrayf &p1, const arrayf &p2) { return dist_chebyshev_f(p1, p2); }
+
+inline float horiz_sum_f32x4(float32x4_t v) {
+    // vaddvq_f32 is the natural choice on ARMv8; available everywhere we
+    // target so no need for the manual lane-pair reduction.
+    return vaddvq_f32(v);
+}
+
+inline float dist_l2_f_avx2(const arrayf &p1, const arrayf &p2) {
+    size_t d = p1.size();
+    const float* x = p1.data();
+    const float* y = p2.data();
+    float32x4_t s0 = vdupq_n_f32(0.0f), s1 = vdupq_n_f32(0.0f);
+    float32x4_t s2 = vdupq_n_f32(0.0f), s3 = vdupq_n_f32(0.0f);
+    // 16 floats per iteration (4 NEON 4-lane vectors × 4 accumulators) —
+    // exposes ILP the same way as the AVX2 4-acc kernel.
+    while (d >= 16) {
+        float32x4_t x0 = vld1q_f32(x),     x1 = vld1q_f32(x + 4);
+        float32x4_t x2 = vld1q_f32(x + 8), x3 = vld1q_f32(x + 12);
+        float32x4_t y0 = vld1q_f32(y),     y1 = vld1q_f32(y + 4);
+        float32x4_t y2 = vld1q_f32(y + 8), y3 = vld1q_f32(y + 12);
+        float32x4_t d0 = vsubq_f32(x0, y0), d1 = vsubq_f32(x1, y1);
+        float32x4_t d2 = vsubq_f32(x2, y2), d3 = vsubq_f32(x3, y3);
+        s0 = vfmaq_f32(s0, d0, d0); s1 = vfmaq_f32(s1, d1, d1);
+        s2 = vfmaq_f32(s2, d2, d2); s3 = vfmaq_f32(s3, d3, d3);
+        x += 16; y += 16; d -= 16;
+    }
+    while (d >= 4) {
+        float32x4_t xv = vld1q_f32(x), yv = vld1q_f32(y);
+        float32x4_t dv = vsubq_f32(xv, yv);
+        s0 = vfmaq_f32(s0, dv, dv);
+        x += 4; y += 4; d -= 4;
+    }
+    float r = horiz_sum_f32x4(vaddq_f32(vaddq_f32(s0, s1), vaddq_f32(s2, s3)));
+    for (size_t i = 0; i < d; i++) { float t = x[i] - y[i]; r += t * t; }
+    return std::sqrt(r);
+}
+
+inline float dist_l2sq_raw_avx2(const float* x, const float* y, size_t d) {
+    float32x4_t s0 = vdupq_n_f32(0.0f), s1 = vdupq_n_f32(0.0f);
+    float32x4_t s2 = vdupq_n_f32(0.0f), s3 = vdupq_n_f32(0.0f);
+    while (d >= 16) {
+        float32x4_t x0 = vld1q_f32(x),     x1 = vld1q_f32(x + 4);
+        float32x4_t x2 = vld1q_f32(x + 8), x3 = vld1q_f32(x + 12);
+        float32x4_t d0 = vsubq_f32(x0, vld1q_f32(y));
+        float32x4_t d1 = vsubq_f32(x1, vld1q_f32(y + 4));
+        float32x4_t d2 = vsubq_f32(x2, vld1q_f32(y + 8));
+        float32x4_t d3 = vsubq_f32(x3, vld1q_f32(y + 12));
+        s0 = vfmaq_f32(s0, d0, d0); s1 = vfmaq_f32(s1, d1, d1);
+        s2 = vfmaq_f32(s2, d2, d2); s3 = vfmaq_f32(s3, d3, d3);
+        x += 16; y += 16; d -= 16;
+    }
+    while (d >= 4) {
+        float32x4_t dv = vsubq_f32(vld1q_f32(x), vld1q_f32(y));
+        s0 = vfmaq_f32(s0, dv, dv);
+        x += 4; y += 4; d -= 4;
+    }
+    float r = horiz_sum_f32x4(vaddq_f32(vaddq_f32(s0, s1), vaddq_f32(s2, s3)));
+    for (size_t i = 0; i < d; i++) { float t = x[i] - y[i]; r += t * t; }
+    return r;
+}
+
+inline float dist_l2sq_f_avx2(const arrayf& p1, const arrayf& p2) {
+    return dist_l2sq_raw_avx2(p1.data(), p2.data(), p1.size());
+}
+
+inline float vec_l2sq_avx2(const float* v, size_t d) {
+    float32x4_t s0 = vdupq_n_f32(0.0f), s1 = vdupq_n_f32(0.0f);
+    float32x4_t s2 = vdupq_n_f32(0.0f), s3 = vdupq_n_f32(0.0f);
+    while (d >= 16) {
+        float32x4_t v0 = vld1q_f32(v),     v1 = vld1q_f32(v + 4);
+        float32x4_t v2 = vld1q_f32(v + 8), v3 = vld1q_f32(v + 12);
+        s0 = vfmaq_f32(s0, v0, v0); s1 = vfmaq_f32(s1, v1, v1);
+        s2 = vfmaq_f32(s2, v2, v2); s3 = vfmaq_f32(s3, v3, v3);
+        v += 16; d -= 16;
+    }
+    while (d >= 4) {
+        float32x4_t vv = vld1q_f32(v);
+        s0 = vfmaq_f32(s0, vv, vv);
+        v += 4; d -= 4;
+    }
+    float r = horiz_sum_f32x4(vaddq_f32(vaddq_f32(s0, s1), vaddq_f32(s2, s3)));
+    for (size_t i = 0; i < d; i++) r += v[i] * v[i];
+    return r;
+}
+
+inline float dot_f_avx2(const float* q, const float* v, size_t d) {
+    float32x4_t s0 = vdupq_n_f32(0.0f), s1 = vdupq_n_f32(0.0f);
+    float32x4_t s2 = vdupq_n_f32(0.0f), s3 = vdupq_n_f32(0.0f);
+    while (d >= 16) {
+        s0 = vfmaq_f32(s0, vld1q_f32(q),     vld1q_f32(v));
+        s1 = vfmaq_f32(s1, vld1q_f32(q + 4), vld1q_f32(v + 4));
+        s2 = vfmaq_f32(s2, vld1q_f32(q + 8), vld1q_f32(v + 8));
+        s3 = vfmaq_f32(s3, vld1q_f32(q + 12), vld1q_f32(v + 12));
+        q += 16; v += 16; d -= 16;
+    }
+    while (d >= 4) {
+        s0 = vfmaq_f32(s0, vld1q_f32(q), vld1q_f32(v));
+        q += 4; v += 4; d -= 4;
+    }
+    float r = horiz_sum_f32x4(vaddq_f32(vaddq_f32(s0, s1), vaddq_f32(s2, s3)));
+    for (size_t i = 0; i < d; i++) r += q[i] * v[i];
+    return r;
+}
+
+inline void batch_dot_f_avx2(const float* query, size_t d,
+                              const float* const* vectors,
+                              size_t n,
+                              float* out_dots) {
+    for (size_t i = 0; i < n; i++) out_dots[i] = dot_f_avx2(query, vectors[i], d);
+}
+
+// 8-way batched dot: same shape as the AVX2 version but with NEON 4-lane ops.
+// On ARMv8 there are 32 NEON registers, so the 8-accumulator inner loop has
+// plenty of room.
+inline void batch_dot_f_avx2_8(const float* query, size_t d,
+                                const float* const* vectors,
+                                size_t n,
+                                float* out_dots) {
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        float32x4_t a0 = vdupq_n_f32(0), a1 = vdupq_n_f32(0);
+        float32x4_t a2 = vdupq_n_f32(0), a3 = vdupq_n_f32(0);
+        float32x4_t a4 = vdupq_n_f32(0), a5 = vdupq_n_f32(0);
+        float32x4_t a6 = vdupq_n_f32(0), a7 = vdupq_n_f32(0);
+        const float* p[8];
+        for (int k = 0; k < 8; k++) p[k] = vectors[i + k];
+        size_t j = 0;
+        for (; j + 4 <= d; j += 4) {
+            float32x4_t q = vld1q_f32(query + j);
+            a0 = vfmaq_f32(a0, q, vld1q_f32(p[0] + j));
+            a1 = vfmaq_f32(a1, q, vld1q_f32(p[1] + j));
+            a2 = vfmaq_f32(a2, q, vld1q_f32(p[2] + j));
+            a3 = vfmaq_f32(a3, q, vld1q_f32(p[3] + j));
+            a4 = vfmaq_f32(a4, q, vld1q_f32(p[4] + j));
+            a5 = vfmaq_f32(a5, q, vld1q_f32(p[5] + j));
+            a6 = vfmaq_f32(a6, q, vld1q_f32(p[6] + j));
+            a7 = vfmaq_f32(a7, q, vld1q_f32(p[7] + j));
+        }
+        float r[8] = {horiz_sum_f32x4(a0), horiz_sum_f32x4(a1),
+                      horiz_sum_f32x4(a2), horiz_sum_f32x4(a3),
+                      horiz_sum_f32x4(a4), horiz_sum_f32x4(a5),
+                      horiz_sum_f32x4(a6), horiz_sum_f32x4(a7)};
+        for (; j < d; j++) {
+            float qj = query[j];
+            for (int k = 0; k < 8; k++) r[k] += qj * p[k][j];
+        }
+        for (int k = 0; k < 8; k++) out_dots[i + k] = r[k];
+    }
+    for (; i < n; i++) out_dots[i] = dot_f_avx2(query, vectors[i], d);
+}
+
+inline void batch_l2_f_avx2(const float* query, size_t d,
+                             const float* const* vectors,
+                             size_t n,
+                             float* out) {
+    for (size_t i = 0; i < n; i++) {
+        out[i] = std::sqrt(dist_l2sq_raw_avx2(query, vectors[i], d));
+    }
+}
+
+inline void batch_l2sq_f_avx2(const float* query, size_t d,
+                               const float* const* vectors,
+                               size_t n,
+                               float* out) {
+    for (size_t i = 0; i < n; i++) {
+        out[i] = dist_l2sq_raw_avx2(query, vectors[i], d);
+    }
+}
+
+// SQ8 NEON: 16 int8 lanes per op. Widen to int16, subtract, multiply
+// pairwise via vmlal_s16 and accumulate as int32x4_t.
+inline int32_t dist_l2sq_sq8_avx2(const int8_t* x, const int8_t* y, size_t d) {
+    int32x4_t acc = vdupq_n_s32(0);
+    size_t i = 0;
+    while (i + 16 <= d) {
+        int8x16_t vx = vld1q_s8(x + i);
+        int8x16_t vy = vld1q_s8(y + i);
+        // Widen low / high halves to int16x8_t, then subtract.
+        int16x8_t d_lo = vsubq_s16(vmovl_s8(vget_low_s8(vx)),
+                                   vmovl_s8(vget_low_s8(vy)));
+        int16x8_t d_hi = vsubq_s16(vmovl_s8(vget_high_s8(vx)),
+                                   vmovl_s8(vget_high_s8(vy)));
+        // diff * diff into int32 lanes — accumulate.
+        acc = vmlal_s16(acc, vget_low_s16(d_lo),  vget_low_s16(d_lo));
+        acc = vmlal_s16(acc, vget_high_s16(d_lo), vget_high_s16(d_lo));
+        acc = vmlal_s16(acc, vget_low_s16(d_hi),  vget_low_s16(d_hi));
+        acc = vmlal_s16(acc, vget_high_s16(d_hi), vget_high_s16(d_hi));
+        i += 16;
+    }
+    int32_t result = vaddvq_s32(acc);
+    for (; i < d; i++) {
+        int32_t t = static_cast<int32_t>(x[i]) - static_cast<int32_t>(y[i]);
+        result += t * t;
+    }
+    return result;
+}
+
+inline int32_t dist_l2sq_sq8(const SQ8Span& p1, const SQ8Span& p2) {
+    return dist_l2sq_sq8_avx2(p1.ptr, p2.ptr, p1.sz);
+}
+
+inline void batch_l2sq_sq8_avx2(const int8_t* query, size_t d,
+                                 const int8_t* const* vectors,
+                                 size_t n,
+                                 int32_t* out) {
+    for (size_t i = 0; i < n; i++) {
+        out[i] = dist_l2sq_sq8_avx2(query, vectors[i], d);
+    }
+}
+
+#else // !(__AVX__ || __AVX2__) && !__ARM_NEON — scalar fallbacks for any
+       // other platform, and for x86 cross-compile builds where -mavx
+       // isn't passed (macos cibuildwheel arm64→x86_64 path falls here).
 
 double dist_l2_d_avx2(const arrayd &p1, const arrayd &p2) { return dist_l2_d(p1, p2); }
 float  dist_l2_f_avx2(const arrayf &p1, const arrayf &p2) { return dist_l2_f(p1, p2); }
 float  dist_l1_f_avx2(const arrayf &p1, const arrayf &p2) { return dist_l1_f(p1, p2); }
 float  dist_chebyshev_f_avx2(const arrayf &p1, const arrayf &p2) { return dist_chebyshev_f(p1, p2); }
+
+// ─── Scalar fallbacks for the L2² / dot / SQ8 batch family ────────────────
+// HNSWIndex.hpp references these unconditionally inside `if constexpr` arms,
+// so the symbols must exist even when AVX is unavailable.
+
+inline float vec_l2sq_avx2(const float* v, size_t d) {
+    float r = 0.0f;
+    for (size_t i = 0; i < d; i++) r += v[i] * v[i];
+    return r;
+}
+
+inline float dist_l2sq_raw_avx2(const float* x, const float* y, size_t d) {
+    float r = 0.0f;
+    for (size_t i = 0; i < d; i++) {
+        float t = x[i] - y[i];
+        r += t * t;
+    }
+    return r;
+}
+
+inline float dist_l2sq_f_avx2(const arrayf &p1, const arrayf &p2) {
+    return dist_l2sq_raw_avx2(p1.data(), p2.data(), p1.size());
+}
+
+inline float dot_f_avx2(const float* q, const float* v, size_t d) {
+    float r = 0.0f;
+    for (size_t i = 0; i < d; i++) r += q[i] * v[i];
+    return r;
+}
+
+inline void batch_dot_f_avx2(const float* query, size_t d,
+                              const float* const* vectors,
+                              size_t n,
+                              float* out_dots) {
+    for (size_t i = 0; i < n; i++) out_dots[i] = dot_f_avx2(query, vectors[i], d);
+}
+
+inline void batch_dot_f_avx2_8(const float* query, size_t d,
+                                const float* const* vectors,
+                                size_t n,
+                                float* out_dots) {
+    for (size_t i = 0; i < n; i++) out_dots[i] = dot_f_avx2(query, vectors[i], d);
+}
+
+inline void batch_l2_f_avx2(const float* query, size_t d,
+                             const float* const* vectors,
+                             size_t n,
+                             float* out) {
+    for (size_t i = 0; i < n; i++) {
+        out[i] = std::sqrt(dist_l2sq_raw_avx2(query, vectors[i], d));
+    }
+}
+
+inline void batch_l2sq_f_avx2(const float* query, size_t d,
+                               const float* const* vectors,
+                               size_t n,
+                               float* out) {
+    for (size_t i = 0; i < n; i++) {
+        out[i] = dist_l2sq_raw_avx2(query, vectors[i], d);
+    }
+}
+
+// SQ8 scalar fallbacks (used by HNSWL2IndexSQ8).
+inline int32_t dist_l2sq_sq8_avx2(const int8_t* x, const int8_t* y, size_t d) {
+    int32_t r = 0;
+    for (size_t i = 0; i < d; i++) {
+        int32_t t = static_cast<int32_t>(x[i]) - static_cast<int32_t>(y[i]);
+        r += t * t;
+    }
+    return r;
+}
+
+inline int32_t dist_l2sq_sq8(const SQ8Span& p1, const SQ8Span& p2) {
+    return dist_l2sq_sq8_avx2(p1.ptr, p2.ptr, p1.sz);
+}
+
+inline void batch_l2sq_sq8_avx2(const int8_t* query, size_t d,
+                                 const int8_t* const* vectors,
+                                 size_t n,
+                                 int32_t* out) {
+    for (size_t i = 0; i < n; i++) {
+        out[i] = dist_l2sq_sq8_avx2(query, vectors[i], d);
+    }
+}
 
 #endif // __AVX__
 

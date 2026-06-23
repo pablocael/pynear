@@ -156,6 +156,81 @@ class IVFFlatL2Adapter(IndexAdapter):
         return self._index.searchKNN(query, k)
 
 
+class HNSWL2Adapter(IndexAdapter):
+    """Approximate L2 ANN using pynear's HNSWL2Index."""
+
+    def __init__(self, M: int = 16, ef_construction: int = 200, ef_search: int = 50):
+        self._M = M
+        self._ef_construction = ef_construction
+        self._ef_search = ef_search
+        self._index = None
+
+    def build_index(self, data: np.ndarray):
+        self._index = pynear.HNSWL2Index(
+            M=self._M,
+            ef_construction=self._ef_construction,
+            ef_search=self._ef_search,
+        )
+        self._index.set(data)
+
+    def _search_implementation(self, query, k: int):
+        self._index.searchKNN(query, k)
+
+    def search(self, query: np.ndarray, k: int):
+        return self._index.searchKNN(query, k)
+
+
+class FaissHNSWAdapter(IndexAdapter):
+    """Approximate L2 ANN using Faiss IndexHNSWFlat — the reference HNSW baseline."""
+
+    def __init__(self, M: int = 16, ef_construction: int = 200, ef_search: int = 50):
+        self._M = M
+        self._ef_construction = ef_construction
+        self._ef_search = ef_search
+        self._index = None
+
+    def build_index(self, data: np.ndarray):
+        d = data.shape[1]
+        self._index = faiss.IndexHNSWFlat(d, self._M)
+        self._index.hnsw.efConstruction = self._ef_construction
+        self._index.hnsw.efSearch = self._ef_search
+        self._index.add(data)
+
+    def _search_implementation(self, query, k: int):
+        self._index.search(query, k)
+
+    def search(self, query: np.ndarray, k: int):
+        distances, indices = self._index.search(query, k)
+        return indices.tolist(), distances.tolist()
+
+
+class MIHSeededHNSWBinaryAdapter(IndexAdapter):
+    """The novel variant — HNSW for Hamming distance seeded by an MIH lookup."""
+
+    def __init__(self, M: int = 16, ef_construction: int = 200, ef_search: int = 50,
+                 mih_m: int = 8, mih_radius: int = 8):
+        self._M = M
+        self._ef_construction = ef_construction
+        self._ef_search = ef_search
+        self._mih_m = mih_m
+        self._mih_radius = mih_radius
+        self._index = None
+
+    def build_index(self, data: np.ndarray):
+        self._index = pynear.MIHSeededHNSWBinaryIndex(
+            M=self._M, ef_construction=self._ef_construction,
+            ef_search=self._ef_search,
+            mih_m=self._mih_m, mih_radius=self._mih_radius,
+        )
+        self._index.set(data)
+
+    def _search_implementation(self, query, k: int):
+        self._index.searchKNN(query, k)
+
+    def search(self, query: np.ndarray, k: int):
+        return self._index.searchKNN(query, k)
+
+
 class FaissIVFAdapter(IndexAdapter):
     """Approximate L2 index using Faiss IndexIVFFlat (standard IVF baseline)."""
 

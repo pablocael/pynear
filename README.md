@@ -7,12 +7,15 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/pablocael/pynear?style=social)](https://github.com/pablocael/pynear/stargazers)
 
-> **Fast KNN that doesn't make you choose between exact answers and production speed.**
-> Drop-in for scikit-learn. SIMD-accelerated. Binary Multi-Index Hashing that **beats Faiss's own MIH** at matched recall — and finds 512-bit near-duplicates **~40× faster than Faiss's brute-force scan** at 100% recall.
+> **Fast KNN search without compromise.** Exact when you need exact, approximate when you need speed.
+>
+> **HNSW** for text-embedding RAG · **SQ8** for 4× memory · **MIH** for binary descriptors,
+> ~40× faster than Faiss's brute-force scan at d=512, 100% recall · drop-in for scikit-learn ·
+> SIMD on x86 (AVX2/AVX-512) and ARM (NEON) · zero native deps beyond NumPy.
 
 ![PyNear demo](docs/img/demo.gif)
 
-**PyNear** is a metric-space nearest-neighbour library with a C++ core: exact **VP-Trees** up to ~256-D, **IVF-Flat** for approximate float search at 512–1024-D (embeddings, RAG), and **Multi-Index Hashing** / **IVF-Binary** for Hamming search on binary descriptors — one small, NumPy-only API with a scikit-learn drop-in and pre-built wheels (`pip install pynear`).
+**PyNear** is a metric-space nearest-neighbour library with a C++ core covering **exact** (VP-Trees up to ~256-D), **approximate float** (HNSW + IVF-Flat, with optional int8 quantisation, for 384–1024-D embeddings / RAG), and **binary / Hamming** (MIH + IVF-Binary + the novel MIH-seeded HNSW) search — one small NumPy-only API with a scikit-learn drop-in and pre-built wheels (`pip install pynear`).
 
 ---
 
@@ -20,6 +23,7 @@
 
 - [Introduction](#introduction)
 - [Why PyNear?](#why-pynear)
+- [Choosing an index](#choosing-an-index)
 - [Installation](#installation)
 - [Quick start](#quick-start)
   - [Low-dimensional exact search (VPTreeL2Index)](#low-dimensional-exact-search-vptreel2index)
@@ -78,11 +82,34 @@ all three regimes instead of forcing every problem through the same tool:
 | | PyNear | Faiss | Annoy | scikit-learn |
 |---|---|---|---|---|
 | **Metric agnostic** | ✅ L2, L1, L∞, cosine, Hamming | L2 / IP / cosine | L2 / cosine / Hamming | L2 / others |
-| **Binary / Hamming approx** | ✅ MIH + IVF, faster than Faiss MIH | ✅ MIH + IVF | ❌ | ❌ |
+| **HNSW (incl. binary)** | ✅ + novel MIH-seeded variant for binary | ✅ | ❌ | ❌ |
+| **Binary / Hamming approx** | ✅ MIH + IVF, ~40× Faiss flat at d=512; faster than Faiss MIH at matched recall | ✅ MIH + IVF | ❌ | ❌ |
 | **scikit-learn drop-in** | ✅ adapter classes | ❌ | ❌ | — |
 | **Zero native deps** | ✅ NumPy only | ❌ compiled lib + optional GPU | ❌ | ❌ |
 
 [Full comparison →](./docs/comparison.md)
+
+---
+
+## Choosing an index
+
+| Your situation | Use |
+|---|---|
+| **Text / image embeddings** (cosine, 384-1024 D, want fast queries) | `HNSWCosineIndex` |
+| Same but **memory-tight** (millions of vectors on one box) | `HNSWL2IndexSQ8` — 4× less RAM, ~1-3% recall hit |
+| **Generic float L2 ANN** | `HNSWL2Index` |
+| **Exact answers** required (small / moderate D ≤ 256) | `VPTreeL2Index` (or `L1`, `Chebyshev`, `Cosine`) |
+| **Binary descriptors** (perceptual hash, ORB, BRIEF, SimHash) — near-duplicate detection | `MIHBinaryIndex` (exact at small Hamming radius; ~40× faster than Faiss brute-force `IndexBinaryFlat` on 512-bit near-duplicates at 100% recall) |
+| Binary + want graph fallback for larger queries | `MIHSeededHNSWBinaryIndex` (novel — MIH seeds the HNSW beam search) |
+| **Range / threshold queries** on binary descriptors | `BKTreeBinaryIndex` |
+| Already on `sklearn.neighbors.*` | `pynear.sklearn_adapter.PyNearKNeighborsClassifier` etc. — drop-in |
+| Building from scratch and want the closest match to "what hnswlib does" | `HNSWL2Index(M=16, ef_construction=200, ef_search=50)` |
+
+When in doubt: **`HNSWCosineIndex` for embeddings, `MIHBinaryIndex` for binary, `VPTreeL2Index` for exact**.
+
+> 📖 **For HNSW specifically** — including the `add()` / `remove()` /
+> `rebuild()` mutation API, filtered search, parameter tuning, and a
+> per-variant decision guide — see [**`docs/hnsw.md`**](./docs/hnsw.md).
 
 ---
 
@@ -236,28 +263,35 @@ reg.score(X_test, y_test)    # R²
 
 ### Available indices
 
-**Exact indices** — always return the true k nearest neighbours:
+**Approximate ANN — float / cosine** (graph-based, the modern default):
+
+| Index | Distance | Notes |
+|---|---|---|
+| `HNSWL2Index` | L2 (Euclidean) | Paper-faithful HNSW (Malkov & Yashunin 2016) with α-heuristic + `keepPrunedConnections`. Opt-in parallel build via `n_threads`. AVX-512 paths gated on `__AVX512F__`. |
+| `HNSWCosineIndex` | Cosine | HNSW on L2-normalised vectors. Default for text embeddings / RAG. |
+| **`HNSWL2IndexSQ8`** | L2 (Euclidean) | HNSW with **int8 scalar quantisation** — 4× less RAM, ~2-3× faster queries, ~1-3% recall hit. |
+| `IVFFlatL2Index` | L2 (Euclidean) | IVF with BLAS SGEMV inner scan; best when memory layout matters more than per-query latency. |
+| `IVFFlatCosineIndex` | Cosine | Spherical K-Means + BLAS SGEMV. |
+
+**Approximate ANN — binary / Hamming** (image / document deduplication, perceptual hashes):
+
+| Index | Distance | Notes |
+|---|---|---|
+| **`MIHBinaryIndex`** | Hamming | Multi-Index Hashing; **~40× faster than Faiss `IndexBinaryFlat`** on 512-bit near-duplicates at 100% Recall@10, and faster than Faiss's own `IndexBinaryMultiHash` at matched recall on SIFT1M. Exact within a configurable Hamming radius. |
+| **`MIHSeededHNSWBinaryIndex`** | Hamming | **Novel** — HNSW beam search seeded by MIH lookups. Exact for small-radius queries, graph-robust for larger ones. ([Design doc](./docs/hnsw_design.md).) |
+| `HNSWBinaryIndex` | Hamming | Plain HNSW with hardware popcount distance. |
+| `IVFFlatBinaryIndex` | Hamming | Binary K-Means IVF; faster build than Faiss binary IVF. |
+
+**Exact** (small / moderate dim, when recall must be 1.0):
 
 | Index | Distance | Data type | Notes |
 |---|---|---|---|
-| `VPTreeL2Index` | L2 (Euclidean) | `float32` | SIMD-accelerated |
-| `VPTreeL1Index` | L1 (Manhattan) | `float32` | SIMD-accelerated |
-| `VPTreeChebyshevIndex` | L∞ (Chebyshev) | `float32` | SIMD-accelerated |
-| `VPTreeCosineIndex` | Cosine | `float32` | L2-normalised internally; SIMD-accelerated |
-| `VPTreeBinaryIndex` | Hamming | `uint8` | Hardware popcount |
-| `BKTreeBinaryIndex` | Hamming | `uint8` | Threshold / range search |
+| `VPTreeL2Index` / `L1Index` / `ChebyshevIndex` / `CosineIndex` | L2 / L1 / L∞ / Cosine | `float32` | SIMD-accelerated VP-Tree pruning. |
+| `VPTreeBinaryIndex` | Hamming | `uint8` | Hardware popcount. |
+| `BKTreeBinaryIndex` | Hamming | `uint8` | Threshold / range search (`find_threshold(q, t)`). |
 
-**Approximate indices** — trade a small recall budget for large speed gains; tunable via `n_probe` / `radius`:
-
-| Index | Distance | Data type | Notes |
-|---|---|---|---|
-| `IVFFlatL2Index` | L2 (Euclidean) | `float32` | BLAS SGEMV inner scan; best for 512-D – 1024-D |
-| `IVFFlatCosineIndex` | Cosine | `float32` | Spherical K-Means + BLAS SGEMV; ideal for text embeddings |
-| `IVFFlatBinaryIndex` | Hamming | `uint8` | Binary K-Means IVF; faster build than Faiss binary IVF |
-| `MIHBinaryIndex` | Hamming | `uint8` | Multi-Index Hashing; ~40× faster than Faiss brute-force on 512-bit near-duplicates, and faster than Faiss's own MIH |
-
-All VPTree and IVFFlat indices support `searchKNN(queries, k)`.
-`BKTreeBinaryIndex` supports `find_threshold(queries, threshold)` for range queries.
+Every index above supports pickle round-trip (build once, persist, restore in seconds).
+All HNSW classes accept `n_threads=N` for parallel build.
 Set `n_probe = n_clusters` on `IVFFlatL2Index` to make it exact.
 
 See [docs/approximate.md](./docs/approximate.md) for a full guide on measuring
@@ -329,22 +363,41 @@ See [docs/demos.md](./docs/demos.md) for full details.
 
 ## Benchmarks
 
-pynear is evaluated against Faiss, scikit-learn, and Annoy across L2 / L1 /
-Hamming and dimensionalities from 2-D to 1024-D.
+### HNSW family (v2.4) — query latency vs Faiss IndexHNSWFlat
 
-- **Binary / Hamming:** see the [SIFT1M results below](#real-world-benchmark--sift1m-binary)
-  and the reproducible, thread-matched [pynear vs Faiss comparison](./results/faiss_comparison.md)
-  — ~40× faster than Faiss's brute-force `IndexBinaryFlat` on 512-bit near-duplicates,
-  and faster than Faiss's own `IndexBinaryMultiHash` at matched recall.
-- **Full report:** the [formal benchmark PDF](./docs/benchmarks.pdf) covers exact and
-  approximate modes across L2 / L1 / Hamming with the recall–latency Pareto analysis.
-  (Its binary-descriptor numbers are superseded by the thread-matched
-  [results/faiss_comparison.md](./results/faiss_comparison.md).)
+Single machine, N=20k, ef_construction=200, ef_search=256, k=10, 8-thread build:
 
-Quick standalone run:
+| Dim | `HNSWL2Index` | `HNSWL2IndexSQ8` | Faiss `IndexHNSWFlat` | Recall (pynear / Faiss) |
+|----:|--------------:|-----------------:|----------------------:|:------------------------|
+| 128 | 88 µs | **70 µs** | 9 µs | 0.94 / 0.96 (at M=16); **0.99 / 0.99** at M=32 |
+| 384 | 181 µs | 113 µs | 24 µs | 0.88 / 0.89 |
+| 768 | 349 µs | **173 µs** | 94 µs | 0.86 / 0.86 |
+
+**Build time** at N=20k, d=128 with `n_threads=24`: pynear 0.18s vs Faiss 0.20s — competitive.
+
+Use `HNSWL2IndexSQ8` when memory matters: ~4× smaller index, query 2-3× faster than the float HNSW. Recall drops ~1-3% at the same `ef_search`.
+
+### Binary / Hamming (the long-standing wedge)
+
+![QPS vs Recall@10 on SIFT1M binary](results/binary_benchmark_qps.png)
+
+See the [SIFT1M results below](#real-world-benchmark--sift1m-binary) and the
+reproducible, thread-matched [pynear vs Faiss comparison](./results/faiss_comparison.md)
+— ~40× faster than Faiss's brute-force `IndexBinaryFlat` on 512-bit near-duplicates,
+and faster than Faiss's own `IndexBinaryMultiHash` at matched recall on SIFT1M.
+
+[**Full benchmark report (PDF)**](./docs/benchmarks.pdf) — formal evaluation against
+Faiss, scikit-learn, and Annoy across L2 / L1 / Hamming, dimensionalities from
+2-D to 1024-D, both exact and approximate modes. (Its binary-descriptor numbers
+are superseded by the thread-matched
+[results/faiss_comparison.md](./results/faiss_comparison.md).)
+
+Quick standalone runs:
 
 ```console
-python bench_run.py
+python bench_run.py                                  # general suite
+python -m pynear.benchmark.hnsw_benchmark            # HNSW vs Faiss
+python -m pynear.benchmark.arm64_neon_benchmark      # ARM64 NEON path (on an M-series Mac)
 ```
 
 ---

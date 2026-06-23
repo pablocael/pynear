@@ -38,6 +38,59 @@ jobs:
         name: wheels-${{ matrix.os }}
         path: ./wheelhouse/*.whl
 
+  # Compile-only check that the AVX-512 distance kernels (gated by
+  # __AVX512F__) build without errors when the compiler is forced into
+  # AVX-512 mode. We do NOT execute the binary because GitHub runners
+  # may be AMD EPYC (no AVX-512) and would crash with SIGILL.
+  #
+  # We tried Intel SDE for emulated execution but Intel rotates the
+  # download URL frequently. A compile check catches the most common
+  # regression (a typo in the __AVX512F__ block that nobody compiles
+  # locally because their dev machine has no AVX-512). Live perf
+  # validation requires real AVX-512 hardware.
+  build-check-avx512:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install build deps
+      run: |
+        sudo apt update
+        sudo apt install -y build-essential libgomp1
+        python -m pip install --upgrade pip
+        python -m pip install numpy pybind11
+    - name: Compile DistanceFunctions.hpp with AVX-512 forced on
+      run: |
+        # Use a tiny stub TU that includes the header and calls each
+        # __AVX512F__-gated symbol — that way the compiler is forced to
+        # instantiate the AVX-512 templates.
+        cat > /tmp/avx512_check.cpp <<'EOF'
+        #include "DistanceFunctions.hpp"
+        int main() {
+        #if defined(__AVX512F__)
+            int8_t x[64] = {0}, y[64] = {0};
+            volatile int32_t r = dist_l2sq_sq8_avx512(x, y, 64);
+            (void)r;
+            const float q[16] = {0};
+            const float v0[16] = {0}, v1[16] = {0}, v2[16] = {0}, v3[16] = {0};
+            const float v4[16] = {0}, v5[16] = {0}, v6[16] = {0}, v7[16] = {0};
+            const float* vs[8] = {v0,v1,v2,v3,v4,v5,v6,v7};
+            float out[8];
+            batch_dot_f_avx512_8(q, 16, vs, 8, out);
+        #else
+        #  error "Expected __AVX512F__ to be defined under these flags"
+        #endif
+            return 0;
+        }
+        EOF
+        g++ -O3 -std=c++17 \
+            -march=skylake-avx512 -mavx512f -mavx512bw -mfma \
+            -I pynear/include \
+            -c /tmp/avx512_check.cpp -o /tmp/avx512_check.o
+        echo "AVX-512 kernels compiled successfully."
+
   build-sdist:
     needs: build-wheels
     runs-on: ubuntu-latest
