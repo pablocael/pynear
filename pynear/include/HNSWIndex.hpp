@@ -858,10 +858,9 @@ private:
         //   (c) Single batched SIMD distance call — supplied by the
         //       caller as `compute(vptr, ids, n, dists)`; `get_ptr`
         //       extracts the raw vector pointer for a node id.
-        constexpr size_t MAX_BATCH = 512;
         auto process_batch = [&](const NeighbourView& nv,
                                  auto&& get_ptr, auto&& compute) {
-            const size_t cap = std::min(nv.count, MAX_BATCH);
+            const size_t cap = std::min(nv.count, kMaxBatch);
 #if defined(__AVX__) || defined(__AVX2__)
             // (a) prefetch visited-array entries.
             for (size_t ni = 0; ni < cap; ni++) {
@@ -870,8 +869,8 @@ private:
                     _MM_HINT_T0);
             }
 #endif
-            int32_t unvis[MAX_BATCH];
-            decltype(get_ptr(int32_t{0})) vptr[MAX_BATCH];
+            int32_t unvis[kMaxBatch];
+            decltype(get_ptr(int32_t{0})) vptr[kMaxBatch];
             size_t n_unvis = 0;
             for (size_t ni = 0; ni < cap; ni++) {
                 int32_t n = nv.ptr[ni];
@@ -891,7 +890,7 @@ private:
             if (n_unvis == 0) return;
 
             // (c) batched distances, then admit into the beam.
-            distT dists[MAX_BATCH];
+            distT dists[kMaxBatch];
             compute(vptr, unvis, n_unvis, dists);
             _dist_calls += n_unvis;
             for (size_t i = 0; i < n_unvis; i++) {
@@ -931,7 +930,7 @@ private:
                                 dist_l2sq_sq8_avx512(query.ptr, vptr[bi], query.sz));
                         }
 #else
-                        int32_t dists_i32[MAX_BATCH];
+                        int32_t dists_i32[kMaxBatch];
                         batch_l2sq_sq8_avx2(query.ptr, query.sz, vptr,
                                             n, dists_i32);
                         for (size_t i = 0; i < n; i++) {
@@ -949,7 +948,7 @@ private:
                     nv,
                     [&](int32_t n) -> const float* { return _examples[n].ptr; },
                     [&](auto vptr, const int32_t* ids, size_t n, distT* dists) {
-                        float dots[MAX_BATCH];
+                        float dots[kMaxBatch];
 #if defined(__AVX512F__)
                         // AVX-512 path: 16 floats/op, 8 accumulators saturate
                         // FMA throughput on Zen 4 / Sapphire Rapids / Xeon Gold.
@@ -1291,6 +1290,12 @@ private:
     size_t _ef_construction;
     size_t _ef_search;
     double _mL;
+
+    // Upper bound on a node's neighbour count processed per batched-SIMD
+    // sweep in search_layer. Class-scope (not function-local) so it is a
+    // valid constant expression for stack-array bounds inside the nested
+    // lambdas on MSVC as well as gcc/clang.
+    static constexpr size_t kMaxBatch = 512;
 
     int32_t _entry_point;
     int32_t _top_level;
