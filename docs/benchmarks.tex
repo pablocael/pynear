@@ -66,8 +66,9 @@
        \large Query-Time Performance of Vantage-Point Tree Indices\\
        for Exact and Approximate $k$-Nearest-Neighbour Search}
 \author{PyNear Development Team \\[4pt]
-        \small \url{https://github.com/pablocael/pynear}}
-\date{March 2026}
+        \small \url{https://github.com/pablocael/pynear} \\[2pt]
+        \small Third edition — PyNear version 2.4}
+\date{July 2026}
 
 % =============================================================================
 \begin{document}
@@ -78,42 +79,39 @@
 \begin{abstract}
 We present a systematic empirical evaluation of \emph{PyNear}, a Python
 library implementing exact and approximate $k$-nearest-neighbour
-($k$-NN) search via Vantage-Point Trees (VP-Trees) and an IVF-style
-approximate index with SIMD-accelerated distance kernels.  Version 2.1 introduces
-(i) a BLAS-backed inner-cluster flat scan for \texttt{IVFFlatL2Index}
-using the NumPy SGEMV identity
-$\|q-x\|^2 = \|q\|^2 + \|x\|^2 - 2\,q^\top X$,
-replacing the previous per-cluster VP-Tree traversal,
-(ii) a native C++ Lloyd's K-Means implementation with K-Means++ initialisation,
-SIMD L2 distances, and OpenMP parallelism, which replaces the previous
-scikit-learn dependency for clustering and yields a
-$2.4\text{--}3.7\times$ build-time speedup, and
-(iii) multiple exact-index query optimisations: best-first (min-heap) tree
-traversal, cache-friendly data reordering, FMA distance kernels, improved
-vantage-point selection by spread maximisation, and \texttt{int32\_t} node
-indices for reduced memory pressure — collectively yielding a $3.3\times$
-query-latency reduction at $d=512$.
+($k$-NN) search via Vantage-Point Trees (VP-Trees), IVF-style approximate
+indices, and Multi-Index Hashing, with SIMD-accelerated distance kernels.
+This third edition of the report re-measures every experiment with
+PyNear version 2.4, whose exact indices gained \emph{leaf bucketing}:
+tree splitting stops at 32-point leaves, which are then scanned as
+contiguous SIMD sweeps, combined with best-first descent and pooled
+per-query heaps.
 PyNear is benchmarked against three widely adopted libraries —
 \emph{Faiss}, \emph{scikit-learn}, and \emph{Annoy} — across five
 experimental configurations spanning the Euclidean ($\ell_2$),
 Manhattan ($\ell_1$), and Hamming distance metrics, with dataset
-cardinalities up to $N = 10^6$ and dimensionalities from
+cardinalities up to $N = 2.5 \times 10^6$ and dimensionalities from
 $d = 2$ to $d = 1024$.  In the exact-search regime,
-\texttt{VPTreeL2Index} achieves query latencies up to $220\times$
-lower than scikit-learn's kd-tree and up to $39\times$ lower than Faiss
-\texttt{IndexFlatL2} at high dimensionality ($d=512$);
-at low dimensionality ($d \le 16$) it is $2\text{--}4\times$
-faster than Faiss's BLAS-backed scan.  In the high-dimensionality approximate regime
-($d = 128\text{--}1024$), the BLAS-optimised \texttt{IVFFlatL2Index}
-achieves competitive latency (5.7–19.2 ms for 32 queries at $n_{\mathrm{probe}}=20$),
-outperforming Faiss \texttt{IndexIVFFlat} at $d=128$ and $d=512$.
-Build time is now \emph{faster} than Faiss IVF for $N \le 50\,000$
-and within $1.4\text{--}5\times$ at larger scales owing to the C++ K-Means kernel.
-Version~2.2 further introduces \texttt{MIHBinaryIndex} (Multi-Index Hashing)
-and \texttt{IVFFlatBinaryIndex} for approximate Hamming-distance search;
-at $d=512$, $N=10^6$, \texttt{MIHBinaryIndex} achieves 0.037 ms/query —
-a $\mathbf{257\times}$ speedup over exact binary brute-force — with 100\%
-Recall@10 in near-duplicate image retrieval.
+\texttt{VPTreeL2Index} answers a 16-query batch over $N = 2.5\times10^6$
+points in 0.4--0.9 ms across $d = 2$--$16$ — $9\text{--}20\times$
+faster than Faiss's BLAS-backed \texttt{IndexFlatL2} scan measured in the
+same process — and at $d = 128$ ($N = 120\,000$) it is $11\times$ faster
+than Faiss and $83\times$ faster than scikit-learn.
+For exact Hamming search, \texttt{VPTreeBinaryIndex} now overtakes Faiss
+\texttt{IndexBinaryFlat} at 256-bit descriptors (15.9 ms vs.\ 36.3 ms),
+while Faiss remains faster at $\le 128$ bits.
+In the high-dimensionality approximate regime ($d = 128$--$1024$),
+\texttt{IVFFlatL2Index} attains perfect Recall@10 at
+$n_{\mathrm{probe}} = 20$ with 5.6--21.5 ms for 32 queries, but Faiss
+\texttt{IndexIVFFlat} is now $8\text{--}32\times$ faster on raw latency
+at every tested dimensionality; PyNear's IVF builds, however, remain
+$1.4\text{--}2.4\times$ faster than Faiss at $N = 50\,000$.
+For approximate binary-descriptor search, \texttt{MIHBinaryIndex}
+retrieves 512-bit near-duplicates at $N = 10^6$ in 0.0088 ms/query
+(114\,039 QPS) with 100\% Recall@10 — $\mathbf{34\times}$ faster than a
+thread-matched, subprocess-isolated Faiss \texttt{IndexBinaryFlat}
+brute-force scan — while on narrow 128-bit SIFT1M descriptors at high
+recall an optimised brute-force scan remains the better choice.
 All experiments were conducted on an
 Intel\textsuperscript{\textregistered}
 Core\textsuperscript{\texttrademark} Ultra 9 285K (24 cores).
@@ -141,23 +139,27 @@ partitioning.  SIMD intrinsics (AVX2 on x86-64) further accelerate the
 hot distance computation paths.  The library exposes a uniform Python API for
 both exact \texttt{VPTree*} indices and the approximate \texttt{IVFFlat*}
 family, which implements an inverted file (IVF) scheme over Voronoi cells
-with a configurable probe budget.
+with a configurable probe budget, alongside \texttt{MIHBinaryIndex}
+(Multi-Index Hashing) for approximate Hamming-distance search.
 
-Version 2.1 replaces the per-cluster VP-Tree traversal inside
-\texttt{IVFFlat*} with a vectorised flat scan using NumPy's BLAS-backed
-matrix--vector product (SGEMV).  For $\ell_2$, the identity
-$\|q - x\|^2 = \|q\|^2 + \|x\|^2 - 2\,q^\top X$ reduces inner-cluster
-distance computation to a single SGEMV call, with per-cluster squared norms
-pre-computed at build time.  This approach provides a $2\text{--}4\times$
-speed-up within each probed cluster compared to tree traversal at high
-dimensionality.
+Version 2.4, evaluated in this edition, reworks the exact-index hot paths:
+tree splitting now stops at 32-point \emph{leaf buckets} that are scanned as
+contiguous SIMD sweeps (the strategy used by Faiss and scikit-learn leaf
+nodes), combined with direct mandatory-child descent, pooled per-query
+heaps, and release of the Python GIL around all heavy C\texttt{++} work.
+Earlier editions introduced the BLAS-backed inner-cluster flat scan of
+\texttt{IVFFlatL2Index} (NumPy SGEMV identity
+$\|q-x\|^2 = \|q\|^2 + \|x\|^2 - 2\,q^\top X$), a native C\texttt{++}
+K-Means++ clustering kernel, and the approximate binary indices
+(\texttt{MIHBinaryIndex}, \texttt{IVFFlatBinaryIndex}); all of these are
+re-measured here on the same machine as the previous edition.
 
 The remainder of this report is organised as follows.
 Section~\ref{sec:setup} describes the experimental setup.
 Section~\ref{sec:exact} reports results for exact-search indices across
 $\ell_2$, $\ell_1$, and Hamming metrics.  Section~\ref{sec:approx}
 evaluates the approximate $\ell_2$ regime.
-Section~\ref{sec:approx-binary} presents the new approximate binary-descriptor
+Section~\ref{sec:approx-binary} presents the approximate binary-descriptor
 indices (\texttt{MIHBinaryIndex}, \texttt{IVFFlatBinaryIndex}).
 Section~\ref{sec:build-scale}
 analyses build-time scalability from $N=10\,000$ to $N=10^6$.
@@ -171,8 +173,11 @@ Section~\ref{sec:conclusion} concludes.
 \paragraph{Hardware.}
 All experiments were executed on a workstation equipped with an
 Intel\textsuperscript{\textregistered} Core\textsuperscript{\texttrademark}
-Ultra 9 285K processor (24 cores, AVX-512 capable).  No GPU acceleration was
-used; all libraries ran on the CPU.
+Ultra 9 285K processor (24 cores).  The Arrow Lake microarchitecture does
+not support AVX-512; PyNear was built with its deterministic AVX2 baseline
+flags (\texttt{-mavx2 -mfma -mpopcnt}), so all SIMD kernels use AVX2/FMA and
+hardware popcount.  No GPU acceleration was used; all libraries ran on the
+CPU.
 
 \paragraph{Competitors.}
 We compare against the following external libraries:
@@ -195,10 +200,22 @@ We compare against the following external libraries:
 \paragraph{Protocol.}
 Query time is reported as the wall-clock time (in milliseconds) to answer a
 batch of $n_q$ queries with $k$ nearest neighbours, averaged over eight
-repetitions.  Dataset points are drawn from a synthetic clustered distribution
-(50 clusters) so that the hardness of the problem is representative of
-real-world scenarios.  The exact parameters for each benchmark are reported
-in the caption of the corresponding figure.
+repetitions with outlier rejection.  Dataset points are drawn from a
+synthetic clustered distribution so that the hardness of the problem is
+representative of real-world scenarios.  The exact parameters for each
+benchmark are reported in the caption of the corresponding figure.
+
+\paragraph{OpenMP runtime caveat.}
+PyNear links GNU \texttt{libgomp} while \texttt{faiss-cpu} bundles LLVM
+\texttt{libomp}.  When both are loaded into a single Python process, the two
+OpenMP runtimes contend and can serialise Faiss's parallel flat scans.  The
+exact-search suites of Section~\ref{sec:exact} run all libraries in one
+process (the historical protocol), so the Faiss flat-scan numbers reported
+there should be read as \emph{in-process} figures that may be depressed by
+this contention.  The approximate binary-descriptor comparison of
+Section~\ref{sec:approx-binary} therefore times Faiss
+\texttt{IndexBinaryFlat} in a separate Faiss-only subprocess, which is the
+fair configuration for that baseline.
 
 % =============================================================================
 \section{Exact-Search Benchmarks}
@@ -208,41 +225,43 @@ in the caption of the corresponding figure.
 \label{sec:l2-low}
 
 Figure~\ref{fig:l2-low} shows query latency as a function of dimensionality
-for $d \in \{2, 3, 4, 5, 6, 7, 8, 16\}$ with $N = 5 \times 10^5$ data
-points, $k = 8$, and $n_q = 16$ queries.
+for $d \in \{2, 3, 4, 5, 6, 7, 8, 16\}$ with $N = 2.5 \times 10^6$ data
+points, $k = 8$, and $n_q = 16$ queries.  Note that this edition enlarges
+the dataset five-fold with respect to the previous one
+($N = 5\times10^5 \to 2.5\times10^6$).
 
 \begin{figure}[h]
 \centering
 \begin{tikzpicture}
 \begin{axis}[
   benchstyle,
-  title={$\ell_2$ — Low Dimensionality ($N=500\,000$, $k=8$, $n_q=16$)},
+  title={$\ell_2$ — Low Dimensionality ($N=2\,500\,000$, $k=8$, $n_q=16$)},
   xlabel={Dimensionality $d$},
   ylabel={Query time (ms)},
   xtick={2,3,4,5,6,7,8,16},
   xticklabels={2,3,4,5,6,7,8,16},
   xmin=1.5, xmax=17,
-  ymin=0, ymax=8.0,
+  ymin=0, ymax=25,
 ]
 
 % Annoy (approximate — included as lower-bound reference)
 \addplot[color=colBlue, mark=*, dashed]
-  coordinates {(2,0.10)(3,0.10)(4,0.10)(5,0.10)(6,0.10)(7,0.10)(8,0.05)(16,0.05)};
+  coordinates {(2,0.07)(3,0.09)(4,0.07)(5,0.07)(6,0.06)(7,0.07)(8,0.05)(16,0.05)};
 \addlegendentry{Annoy L2 (approx.)}
 
 % Faiss IndexFlatL2
 \addplot[color=colOrange, mark=square*]
-  coordinates {(2,0.9)(3,1.3)(4,0.9)(5,1.1)(6,1.1)(7,1.2)(8,1.2)(16,2.7)};
+  coordinates {(2,4.6)(3,4.5)(4,4.9)(5,5.9)(6,6.6)(7,7.3)(8,8.2)(16,13.9)};
 \addlegendentry{Faiss \texttt{IndexFlatL2}}
 
 % scikit-learn
 \addplot[color=colGreen, mark=triangle*]
-  coordinates {(2,0.5)(3,0.5)(4,0.8)(5,0.6)(6,1.1)(7,1.2)(8,1.3)(16,6.9)};
+  coordinates {(2,0.5)(3,0.5)(4,0.9)(5,0.9)(6,1.4)(7,1.6)(8,2.0)(16,22.9)};
 \addlegendentry{scikit-learn}
 
 % PyNear VPTreeL2Index
 \addplot[color=colRed, mark=diamond*]
-  coordinates {(2,0.4)(3,0.4)(4,0.4)(5,0.3)(6,0.4)(7,0.4)(8,0.5)(16,0.7)};
+  coordinates {(2,0.36)(3,0.50)(4,0.47)(5,0.47)(6,0.39)(7,0.71)(8,0.41)(16,0.86)};
 \addlegendentry{PyNear \texttt{VPTreeL2Index}}
 
 \end{axis}
@@ -250,17 +269,22 @@ points, $k = 8$, and $n_q = 16$ queries.
 \caption{Mean query latency (ms) vs.\ dimensionality for exact $\ell_2$
   nearest-neighbour search in the low-dimensionality regime.  Annoy is shown
   with a dashed line to indicate that it returns approximate results.
-  \texttt{VPTreeL2Index} consistently undercuts both Faiss's flat index and
-  scikit-learn across the entire range, staying below 0.7 ms up to $d=16$.}
+  Despite the five-fold larger dataset, \texttt{VPTreeL2Index} (v2.4, leaf
+  bucketing) stays essentially flat at 0.4--0.9 ms across the entire range,
+  undercutting Faiss's flat scan by roughly an order of magnitude and
+  scikit-learn by up to $27\times$ at $d=16$.}
 \label{fig:l2-low}
 \end{figure}
 
 \texttt{VPTreeL2Index} achieves the lowest latency among exact methods
-throughout the low-dimensional range, with query times between 0.3 ms and
-0.7 ms.  scikit-learn's kd-tree is competitive at $d = 2$ but grows
-steadily with $d$, reaching 6.9 ms at $d = 16$.  Faiss's flat index incurs
-a relatively constant overhead (reflecting its BLAS-driven batch computation)
-that grows to 2.7 ms at $d = 16$.  Annoy's approximate index
+throughout the low-dimensional range, with query times between 0.36 ms and
+0.86 ms over $2.5$ million points — a near-flat profile that reflects the
+v2.4 leaf-bucketed traversal.  scikit-learn's kd-tree is competitive at
+$d = 2\text{--}3$ but grows steadily with $d$, reaching 22.9 ms at $d = 16$.
+Faiss's flat index scans all $N$ points per query and grows from 4.6 ms at
+$d=2$ to 13.9 ms at $d = 16$; measured in-process it is
+$9\text{--}20\times$ slower than \texttt{VPTreeL2Index} here (see the
+OpenMP caveat in Section~\ref{sec:setup}).  Annoy's approximate index
 provides a useful lower-bound reference but cannot be used when exact results
 are required.
 
@@ -268,124 +292,120 @@ are required.
 \label{sec:l2-high}
 
 Figure~\ref{fig:l2-high} extends the $\ell_2$ comparison to higher
-dimensionalities ($d \in \{32, 64, 128, 256, 512\}$).  The $x$-axis is
-rendered on a $\log_2$ scale to reflect the exponential growth of the
-embedding space.
+dimensionalities ($d \in \{32, 64, 128\}$) on a smaller dataset
+($N = 120\,000$, 20 clusters).  The $x$-axis is rendered on a $\log_2$
+scale.
 
 \begin{figure}[h]
 \centering
 \begin{tikzpicture}
 \begin{axis}[
   benchstyle,
-  title={$\ell_2$ — High Dimensionality ($N=500\,000$, $k=8$, $n_q=16$)},
+  title={$\ell_2$ — High Dimensionality ($N=120\,000$, $k=8$, $n_q=16$)},
   xlabel={Dimensionality $d$},
   ylabel={Query time (ms)},
   xmode=log, log basis x=2,
-  xtick={32,64,128,256,512},
-  xticklabels={32,64,128,256,512},
-  xmin=24, xmax=680,
-  ymin=0, ymax=520,
+  xtick={32,64,128},
+  xticklabels={32,64,128},
+  xmin=24, xmax=170,
+  ymin=0, ymax=45,
 ]
 
 % Annoy
 \addplot[color=colBlue, mark=*, dashed]
-  coordinates {(32,0.1)(64,0.1)(128,0.1)(256,0.2)(512,0.4)};
+  coordinates {(32,0.05)(64,0.06)(128,0.10)};
 \addlegendentry{Annoy L2 (approx.)}
 
 % Faiss IndexFlatL2
 \addplot[color=colOrange, mark=square*]
-  coordinates {(32,5.1)(64,9.1)(128,23.1)(256,45.7)(512,85.4)};
+  coordinates {(32,0.45)(64,1.34)(128,5.31)};
 \addlegendentry{Faiss \texttt{IndexFlatL2}}
 
 % scikit-learn
 \addplot[color=colGreen, mark=triangle*]
-  coordinates {(32,8.0)(64,23.5)(128,143.1)(256,210.1)(512,483.2)};
+  coordinates {(32,7.8)(64,9.0)(128,40.8)};
 \addlegendentry{scikit-learn}
 
 % PyNear VPTreeL2Index
 \addplot[color=colRed, mark=diamond*]
-  coordinates {(32,0.9)(64,0.9)(128,1.3)(256,1.5)(512,2.2)};
+  coordinates {(32,0.10)(64,0.33)(128,0.49)};
 \addlegendentry{PyNear \texttt{VPTreeL2Index}}
 
 \end{axis}
 \end{tikzpicture}
 \caption{Mean query latency (ms) vs.\ dimensionality for exact $\ell_2$
   nearest-neighbour search in the high-dimensionality regime ($\log_2$ scale
-  on the $x$-axis).  scikit-learn exhibits super-linear growth and reaches
-  483 ms at $d=512$; Faiss scales to 85 ms.  \texttt{VPTreeL2Index} maintains
-  sub-linear growth from 0.9 ms at $d=32$ to 2.2 ms at $d=512$, a
-  $220\times$ advantage over scikit-learn and a $39\times$ advantage over Faiss
-  at the highest tested dimensionality.}
+  on the $x$-axis; $N=120\,000$, 20 clusters).  scikit-learn reaches
+  40.8 ms at $d=128$; Faiss's flat scan reaches 5.3 ms.
+  \texttt{VPTreeL2Index} grows from 0.10 ms at $d=32$ to 0.49 ms at
+  $d=128$ — an $11\times$ advantage over Faiss and an $83\times$ advantage
+  over scikit-learn at the highest dimensionality tested by this suite.}
 \label{fig:l2-high}
 \end{figure}
 
-The results reveal a stark divergence in scaling behaviour.  scikit-learn's
-latency grows super-linearly with $d$, reaching 210.1 ms at $d=256$ and
-483.2 ms at $d=512$.  Faiss's flat index grows more gracefully (85.4 ms at
-$d=512$) owing to its vectorised batched scan.  \texttt{VPTreeL2Index} is the
-most efficient exact method at all tested dimensionalities, growing from 0.9 ms
-at $d=32$ to only 2.2 ms at $d=512$ — a $39\times$ advantage over Faiss
-and a $220\times$ advantage over scikit-learn at the highest dimensionality.
-This reflects the VP-Tree's ability to prune branches via the triangle inequality
-combined with best-first traversal and cache-friendly data layout: even as the
-intrinsic dimensionality grows, the clustered structure allows the VP-Tree to
-eliminate a substantial fraction of candidates while visiting nodes in
-descending priority order.
+The results again show diverging scaling behaviour.  scikit-learn's latency
+grows super-linearly with $d$, reaching 40.8 ms at $d=128$.  Faiss's flat
+index grows roughly linearly with $d$ (0.45 ms at $d=32$ to 5.31 ms at
+$d=128$), as expected of an exhaustive scan.  \texttt{VPTreeL2Index} is the
+most efficient exact method at all tested dimensionalities: 0.10 ms at
+$d=32$ ($4.4\times$ faster than Faiss), 0.33 ms at $d=64$ ($4.0\times$),
+and 0.49 ms at $d=128$ ($10.8\times$ faster than Faiss, $83\times$ faster
+than scikit-learn).  This reflects triangle-inequality pruning on clustered
+data combined with the v2.4 leaf-bucketed SIMD sweeps.  Note that this
+edition's suite stops at $d = 128$; pruning effectiveness is expected to
+erode at substantially higher dimensionality (concentration of measure),
+which is precisely the regime the approximate indices of
+Section~\ref{sec:approx} target.
 
 \subsection{Manhattan Distance ($\ell_1$)}
 \label{sec:l1}
 
 Figure~\ref{fig:l1} reports results for the Manhattan distance metric in
-the low-dimensional regime.  Faiss does not natively support $\ell_1$
-minimisation; its flat L2 index is included here solely as a reference
-baseline to give context for absolute latency magnitudes.
+the low-dimensional regime ($N = 2.5\times10^6$).  Among the evaluated
+libraries only Annoy offers a Manhattan mode, and it is approximate;
+\texttt{VPTreeL1Index} is the only exact $\ell_1$ index in the comparison.
 
 \begin{figure}[h]
 \centering
 \begin{tikzpicture}
 \begin{axis}[
   benchstyle,
-  title={$\ell_1$ (Manhattan) ($N=500\,000$, $k=8$, $n_q=16$)},
+  title={$\ell_1$ (Manhattan) ($N=2\,500\,000$, $k=8$, $n_q=16$)},
   xlabel={Dimensionality $d$},
   ylabel={Query time (ms)},
   xtick={2,3,4,5,6,7,8,16},
   xticklabels={2,3,4,5,6,7,8,16},
   xmin=1.5, xmax=17,
-  ymin=0, ymax=3.5,
+  ymin=0, ymax=1.0,
 ]
 
 % Annoy Manhattan (approximate)
 \addplot[color=colBlue, mark=*, dashed]
-  coordinates {(2,0.05)(3,0.05)(4,0.05)(5,0.05)(6,0.05)(7,0.05)(8,0.05)(16,0.05)};
+  coordinates {(2,0.004)(3,0.005)(4,0.005)(5,0.006)(6,0.007)(7,0.006)(8,0.007)(16,0.011)};
 \addlegendentry{Annoy Manhattan (approx.)}
-
-% Faiss FlatL2 — reference only (no native L1 support)
-\addplot[color=colOrange, mark=square*, dotted]
-  coordinates {(2,0.9)(3,1.0)(4,0.9)(5,1.0)(6,1.1)(7,1.0)(8,1.2)(16,2.8)};
-\addlegendentry{Faiss \texttt{IndexFlatL2} (ref., $\ell_2$)}
 
 % PyNear VPTreeL1Index
 \addplot[color=colRed, mark=diamond*]
-  coordinates {(2,0.4)(3,0.4)(4,0.4)(5,0.5)(6,0.6)(7,0.4)(8,0.5)(16,0.5)};
+  coordinates {(2,0.46)(3,0.51)(4,0.39)(5,0.41)(6,0.36)(7,0.46)(8,0.57)(16,0.70)};
 \addlegendentry{PyNear \texttt{VPTreeL1Index}}
 
 \end{axis}
 \end{tikzpicture}
-\caption{Mean query latency (ms) vs.\ dimensionality for exact $\ell_1$
-  nearest-neighbour search.  Faiss is shown with a dotted line and labelled
-  as a reference only, as it does not support $\ell_1$ natively.
+\caption{Mean query latency (ms) vs.\ dimensionality for $\ell_1$
+  nearest-neighbour search over $N = 2.5\times10^6$ points.
   \texttt{VPTreeL1Index} is the only evaluated library offering exact
-  Manhattan-distance search, operating at 0.4–0.5 ms across the entire
-  range — $2\text{--}6\times$ faster than Faiss's L2 flat index.}
+  Manhattan-distance search, operating at 0.4--0.7 ms across the entire
+  range.  Annoy's approximate index is shown as a latency lower bound.}
 \label{fig:l1}
 \end{figure}
 
 \texttt{VPTreeL1Index} is, to our knowledge, the only evaluated library
 providing \emph{exact} $\ell_1$ nearest-neighbour search without user-side
-metric adaptation.  Its latency profile is remarkably flat: 0.4–0.5 ms across
-$d = 2\text{--}8$, rising only modestly to 0.5 ms at $d=16$.  The
-SIMD-accelerated inner loop for $\ell_1$ sustains throughput comparable to
-the $\ell_2$ variant (cf.\ Section~\ref{sec:l2-low}).
+metric adaptation.  Its latency profile is remarkably flat: 0.36--0.57 ms
+across $d = 2\text{--}8$, rising only modestly to 0.70 ms at $d=16$ — over
+$2.5$ million points.  The SIMD-accelerated inner loop for $\ell_1$ sustains
+throughput comparable to the $\ell_2$ variant
+(cf.\ Section~\ref{sec:l2-low}).
 
 \subsection{Hamming Distance — Binary Descriptors}
 \label{sec:binary}
@@ -413,48 +433,52 @@ local feature descriptors.
 
 % Annoy Hamming (approximate)
 \addplot[color=colBlue, mark=*, dashed]
-  coordinates {(32,0.1)(64,0.1)(128,0.3)(256,0.3)};
+  coordinates {(32,0.09)(64,0.24)(128,0.23)(256,0.31)};
 \addlegendentry{Annoy Hamming (approx.)}
 
 % BKTree (PyNear)
 \addplot[color=colPurple, mark=pentagon*]
-  coordinates {(32,8.5)(64,13.5)(128,21.6)(256,36.9)};
+  coordinates {(32,9.9)(64,14.0)(128,22.9)(256,39.6)};
 \addlegendentry{PyNear \texttt{BKTreeBinaryIndex}}
 
 % Faiss BinaryFlat
 \addplot[color=colOrange, mark=square*]
-  coordinates {(32,0.4)(64,0.5)(128,1.8)(256,6.9)};
+  coordinates {(32,0.29)(64,0.56)(128,1.77)(256,36.3)};
 \addlegendentry{Faiss \texttt{IndexBinaryFlat}}
 
 % PyNear VPTreeBinaryIndex
 \addplot[color=colRed, mark=diamond*]
-  coordinates {(32,3.9)(64,5.7)(128,10.7)(256,22.5)};
+  coordinates {(32,3.2)(64,4.6)(128,7.6)(256,15.9)};
 \addlegendentry{PyNear \texttt{VPTreeBinaryIndex}}
 
 \end{axis}
 \end{tikzpicture}
 \caption{Mean query latency (ms) vs.\ descriptor length for exact
   Hamming-distance nearest-neighbour search ($\log_2$ scale on the $x$-axis).
-  Faiss's flat binary index benefits from hardware popcount and
-  BLAS-style batching, outperforming \texttt{VPTreeBinaryIndex} at all
-  descriptor lengths.  \texttt{BKTreeBinaryIndex} is optimised for
-  radius/threshold queries rather than $k$-NN, explaining its comparatively
-  higher $k$-NN latency.}
+  Faiss's flat binary index remains the fastest exact method at 32--128
+  bits, but at 256 bits \texttt{VPTreeBinaryIndex} (v2.4) is now
+  $2.3\times$ faster (15.9 ms vs.\ 36.3 ms).  Faiss is measured in-process
+  here; see the OpenMP caveat in Section~\ref{sec:setup}.
+  \texttt{BKTreeBinaryIndex} is optimised for radius/threshold queries
+  rather than $k$-NN, explaining its comparatively higher $k$-NN latency.}
 \label{fig:binary}
 \end{figure}
 
-The binary experiments reveal a more competitive landscape than the
-floating-point case.  Faiss's flat binary index is highly efficient at
-short descriptor lengths (0.4 ms at 32 bits vs.\ 3.9 ms for
-\texttt{VPTreeBinaryIndex}), and diverges favourably at $d = 256$ bits
-(6.9 ms vs.\ 22.5 ms).  The performance gap is attributable to Faiss's
-batched hardware popcount operations.  \texttt{VPTreeBinaryIndex} employs
-tree-based pruning that amortises over random-access patterns; this is
-beneficial for sparse or range queries but less so for dense $k$-NN scans.
-\texttt{BKTreeBinaryIndex} is architecturally designed for threshold
-(range) queries and incurs the highest $k$-NN latency in this benchmark;
-its inclusion demonstrates the broader metric-search capabilities of the
-PyNear ecosystem beyond $k$-NN.
+The binary experiments show a split landscape.  Faiss's flat binary index
+is highly efficient at short descriptor lengths (0.29 ms at 32 bits vs.\
+3.2 ms for \texttt{VPTreeBinaryIndex}, and still $4.3\times$ faster at 128
+bits), thanks to its batched hardware-popcount scan.  At 256 bits the
+ordering now reverses: \texttt{VPTreeBinaryIndex} answers the batch in
+15.9 ms against 36.3 ms for Faiss — the leaf-bucketed popcount sweeps
+introduced in v2.4 let the tree's pruning finally pay off at the widest
+descriptor length.  Two honesty notes apply: (i) these Faiss numbers are
+measured in the same process as PyNear and may be depressed by OpenMP
+runtime contention (Section~\ref{sec:setup}); the subprocess-isolated
+comparison of Section~\ref{sec:approx-binary} is the fair reference for
+Faiss's brute-force throughput; and (ii) \texttt{BKTreeBinaryIndex} is
+architecturally designed for threshold (range) queries and incurs the
+highest $k$-NN latency in this benchmark; its inclusion demonstrates the
+broader metric-search capabilities of the PyNear ecosystem beyond $k$-NN.
 
 \subsection{Internal Distance-Metric Comparison}
 \label{sec:internal}
@@ -469,45 +493,46 @@ metric introduces any appreciable computational overhead.
 \begin{tikzpicture}
 \begin{axis}[
   benchstyle,
-  title={PyNear Internal Metric Comparison ($N=500\,000$, $k=8$, $n_q=8$)},
+  title={PyNear Internal Metric Comparison ($N=2\,500\,000$, $k=8$, $n_q=8$)},
   xlabel={Dimensionality $d$},
   ylabel={Query time (ms)},
   xtick={2,3,4,5,6,7,8,16},
   xticklabels={2,3,4,5,6,7,8,16},
   xmin=1.5, xmax=17,
-  ymin=0.30, ymax=0.75,
+  ymin=0.15, ymax=0.80,
 ]
 
 % VPTreeChebyshevIndex
 \addplot[color=colBlue, mark=*]
-  coordinates {(2,0.40)(3,0.40)(4,0.40)(5,0.50)(6,0.40)(7,0.50)(8,0.50)(16,0.50)};
+  coordinates {(2,0.37)(3,0.46)(4,0.42)(5,0.53)(6,0.54)(7,0.23)(8,0.49)(16,0.68)};
 \addlegendentry{\texttt{VPTreeChebyshevIndex} ($\ell_\infty$)}
 
 % VPTreeL1Index
 \addplot[color=colOrange, mark=square*]
-  coordinates {(2,0.40)(3,0.40)(4,0.50)(5,0.40)(6,0.40)(7,0.50)(8,0.50)(16,0.60)};
+  coordinates {(2,0.41)(3,0.36)(4,0.39)(5,0.23)(6,0.42)(7,0.31)(8,0.51)(16,0.54)};
 \addlegendentry{\texttt{VPTreeL1Index} ($\ell_1$)}
 
 % VPTreeL2Index
 \addplot[color=colGreen, mark=triangle*]
-  coordinates {(2,0.40)(3,0.40)(4,0.40)(5,0.50)(6,0.40)(7,0.40)(8,0.50)(16,0.50)};
+  coordinates {(2,0.46)(3,0.41)(4,0.47)(5,0.52)(6,0.57)(7,0.49)(8,0.51)(16,0.61)};
 \addlegendentry{\texttt{VPTreeL2Index} ($\ell_2$)}
 
 \end{axis}
 \end{tikzpicture}
 \caption{Query latency (ms) for PyNear's three main distance metrics on a
-  shared dataset ($N=500\,000$, $k=8$, $n_q=8$).  All three indices
-  operate within a narrow band of 0.40–0.60 ms, confirming that the SIMD
+  shared dataset ($N=2\,500\,000$, $k=8$, $n_q=8$).  All three indices
+  operate within a narrow band of 0.23--0.68 ms, confirming that the SIMD
   implementation of each distance kernel contributes negligible differential
   overhead.  Variations are within measurement noise.}
 \label{fig:internal}
 \end{figure}
 
 All three indices operate within a narrow latency band of
-$0.40\text{--}0.60$ ms across all tested dimensionalities, confirming
+$0.23\text{--}0.68$ ms across all tested dimensionalities, confirming
 that PyNear's SIMD kernels achieve near-equivalent throughput for $\ell_1$,
-$\ell_2$, and $\ell_\infty$ distance computations.  The minor
-fluctuations between runs are consistent with measurement noise rather than
+$\ell_2$, and $\ell_\infty$ distance computations.  The
+fluctuations between runs (e.g.\ the $\ell_\infty$ dip at $d=7$) are
+consistent with measurement noise rather than
 systematic metric-induced overhead.  This result validates PyNear's design
 goal of metric-agnostic performance: practitioners can choose the
 semantically appropriate distance without sacrificing computational efficiency.
@@ -518,17 +543,17 @@ semantically appropriate distance without sacrificing computational efficiency.
 
 PyNear's \texttt{IVFFlatL2Index} partitions the data into Voronoi cells via
 K-Means and at query time probes only $n_{\mathrm{probe}}$ of them, trading
-recall for speed.  Version 2.1 replaces the per-cluster VP-Tree traversal
-with a flat BLAS scan using the NumPy SGEMV identity and introduces a native
-C++ Lloyd's K-Means (K-Means++ initialisation, SIMD L2, OpenMP) for clustering:
+recall for speed.  The inner-cluster scan is a flat BLAS pass using the
+NumPy SGEMV identity, and clustering uses a native C\texttt{++} Lloyd's
+K-Means (K-Means++ initialisation, SIMD L2, OpenMP):
 \[
   \|q - x\|^2 = \|q\|^2 + \|x\|^2 - 2\,q^\top X,
 \]
 where $q^\top X$ is a BLAS SGEMV call $(n_c, D) \times (D,) \to (n_c,)$
 with per-cluster squared norms $\|x\|^2$ pre-computed at build time.
 This section compares \texttt{IVFFlatL2Index} against Faiss's
-\texttt{IndexIVFFlat} (canonical IVF-style approximate index) and the Faiss
-exact flat baseline. All experiments use $N = 50\,000$ data points,
+\texttt{IndexIVFFlat} (canonical IVF-style approximate index).
+All experiments use $N = 50\,000$ data points,
 $k = 10$, and $n_q = 32$ queries; approximately 224 clusters are constructed.
 
 \subsection{Query Latency vs.\ Dimensionality at Fixed Probe Budget}
@@ -556,23 +581,25 @@ representing a moderate recall-latency operating point.
 
 % Faiss IVFFlat
 \addplot[color=colBrown, mark=triangle*]
-  coordinates {(128,7.1)(256,5.6)(512,7.8)(1024,7.0)};
+  coordinates {(128,0.17)(256,0.43)(512,0.76)(1024,2.81)};
 \addlegendentry{Faiss \texttt{IndexIVFFlat}}
 
-% IVFFlatL2 (BLAS SGEMV, v2.1)
+% IVFFlatL2 (BLAS SGEMV)
 \addplot[color=colRed, mark=diamond*]
-  coordinates {(128,5.7)(256,7.6)(512,9.3)(1024,19.2)};
-\addlegendentry{PyNear \texttt{IVFFlatL2Index} (v2.1)}
+  coordinates {(128,5.6)(256,8.5)(512,9.7)(1024,21.5)};
+\addlegendentry{PyNear \texttt{IVFFlatL2Index}}
 
 \end{axis}
 \end{tikzpicture}
 \caption{Mean query latency (ms) vs.\ dimensionality for approximate
   $\ell_2$ nearest-neighbour search at $n_{\mathrm{probe}} = 20$,
   $N = 50\,000$, $k=10$, $n_q=32$.
-  \texttt{IVFFlatL2Index} (v2.1, BLAS SGEMV inner scan) outperforms
-  Faiss \texttt{IndexIVFFlat} at $d=128$ (5.7 ms vs.\ 7.1 ms) and
-  $d=512$ (9.3 ms vs.\ 7.8 ms).  Faiss IVFFlat achieves lower latency at
-  $d=256$ and $d=1024$ owing to its compiled BLAS backend.}
+  Faiss \texttt{IndexIVFFlat} is now faster at every tested
+  dimensionality (0.17--2.8 ms vs.\ 5.6--21.5 ms for the 32-query batch),
+  an $8\text{--}32\times$ raw-latency advantage from its compiled,
+  OpenMP-parallel inner scan.  \texttt{IVFFlatL2Index} nevertheless stays
+  below one millisecond per query (0.18--0.67 ms/query) with
+  perfect Recall@10.}
 \label{fig:approx-time}
 \end{figure}
 
@@ -596,10 +623,10 @@ IVF indices at the $n_{\mathrm{probe}} = 20$ operating point.
 \cmidrule(lr){2-5}
 & 128 & 256 & 512 & 1024 \\
 \midrule
-\textbf{IVFFlatL2 — Latency (ms)} & 5.7 & 7.6 & 9.3 & 19.2 \\
+\textbf{IVFFlatL2 — Latency (ms)} & 5.6 & 8.5 & 9.7 & 21.5 \\
 \textbf{IVFFlatL2 — Recall@10}   & 1.00 & 1.00 & 1.00 & 1.00 \\
 \midrule
-\textbf{Faiss IVFFlat — Latency (ms)} & 7.1 & 5.6 & 7.8 & 7.0 \\
+\textbf{Faiss IVFFlat — Latency (ms)} & 0.17 & 0.43 & 0.76 & 2.81 \\
 \textbf{Faiss IVFFlat — Recall@10}   & 1.00 & 1.00 & 1.00 & 1.00 \\
 \bottomrule
 \end{tabular}
@@ -608,10 +635,14 @@ IVF indices at the $n_{\mathrm{probe}} = 20$ operating point.
 Both IVF indices attain perfect Recall@10 ($= 1.00$) across all
 dimensionalities at $n_{\mathrm{probe}} = 20$, confirming that 20 probed
 clusters are sufficient to recover all 10 true nearest neighbours.
-\texttt{IVFFlatL2Index} (v2.1) outperforms Faiss \texttt{IndexIVFFlat}
-at $d=128$ (5.7 ms vs.\ 7.1 ms) and $d=512$ (9.3 ms vs.\ 7.8 ms).
-At $d=256$ and $d=1024$, Faiss IVFFlat achieves lower latency owing to
-its compiled BLAS backend and optimised memory layout.
+On raw latency, Faiss \texttt{IndexIVFFlat} is now ahead at every tested
+dimensionality — $32\times$ at $d=128$, narrowing to $7.7\times$ at
+$d=1024$ — a reversal of the previous edition, in which
+\texttt{IVFFlatL2Index} led at $d=128$ and $d=512$.  Faiss's compiled,
+multi-threaded inner scan has improved more than PyNear's SGEMV path on
+this hardware; we report this honestly and note that
+\texttt{IVFFlatL2Index} still answers each query in 0.18--0.67 ms at this
+operating point.
 
 \subsection{Recall--Latency Pareto Analysis}
 \label{sec:approx-pareto}
@@ -620,13 +651,20 @@ The recall--latency trade-off is controlled by sweeping
 $n_{\mathrm{probe}}$ from 1 to 80.  The key observations are:
 
 \begin{itemize}
-  \item \textbf{128-D to 1024-D:} Both indices reach Recall@10 $= 1.00$
-        already at $n_{\mathrm{probe}} = 5$, confirming that the cluster
-        partition is well-aligned with the data's local structure across
-        all tested dimensionalities.
-  \item \textbf{PyNear advantage at $d=128$ and $d=512$:}
-        \texttt{IVFFlatL2Index} is faster than Faiss IVFFlat at these
-        dimensionalities (5.7 ms vs.\ 7.1 ms; 9.3 ms vs.\ 7.8 ms).
+  \item \textbf{Recall convergence is fast for both indices:}
+        at $d=128$ both reach Recall@10 $=1.00$ at
+        $n_{\mathrm{probe}} = 5$; at $d=256$ Faiss reaches 1.00 at
+        $n_{\mathrm{probe}} = 5$ while \texttt{IVFFlatL2Index} needs
+        $n_{\mathrm{probe}} = 10$ (0.80 at $n_{\mathrm{probe}}=5$); at
+        $d=512$ \texttt{IVFFlatL2Index} reaches 1.00 at
+        $n_{\mathrm{probe}} = 5$ while Faiss is at 0.99 there and 1.00
+        from $n_{\mathrm{probe}} = 10$; at $d=1024$ Faiss is already at
+        1.00 with a single probe and \texttt{IVFFlatL2Index} from
+        $n_{\mathrm{probe}} = 5$ (2.1 ms).
+  \item \textbf{Faiss leads on raw latency:} at matched
+        $n_{\mathrm{probe}}$, Faiss \texttt{IndexIVFFlat} is faster at
+        every tested dimensionality and probe budget in this sweep
+        (roughly $8\text{--}32\times$ at $n_{\mathrm{probe}} = 20$).
   \item \textbf{Pure-Python install:} \texttt{IVFFlatL2Index}
         requires no compiled native library beyond NumPy (whose bundled
         BLAS is used for the inner-cluster SGEMV).  It shares the same
@@ -643,13 +681,13 @@ Table~\ref{tab:build} reports the wall-clock time to build each index on
 $N = 50\,000$ vectors, averaged over three runs.
 \texttt{IVFFlatL2Index} uses a native C++ Lloyd's K-Means implementation
 (K-Means++ initialisation, SIMD \texttt{dist\_l2\_f\_avx2}, OpenMP parallel
-assignment) introduced in version 2.1; Faiss \texttt{IndexIVFFlat} uses its
+assignment); Faiss \texttt{IndexIVFFlat} uses its
 own compiled K-Means.
 
 \begin{table}[h]
 \centering
 \caption{Index build time (ms), $N = 50\,000$, $k \approx 224$ clusters,
-  averaged over 3 runs.  \texttt{IVFFlatL2Index} (C++ K-Means++) is now
+  averaged over 3 runs.  \texttt{IVFFlatL2Index} (C++ K-Means++) is
   faster than Faiss \texttt{IndexIVFFlat} across all tested dimensionalities.}
 \label{tab:build}
 \renewcommand{\arraystretch}{1.25}
@@ -660,15 +698,15 @@ own compiled K-Means.
 \cmidrule(lr){2-5}
 & 128 & 256 & 512 & 1024 \\
 \midrule
-\textbf{IVFFlatL2Index} (C++ K-Means++) & 487 & 964 & 1306 & 2170 \\
-\textbf{Faiss IndexIVFFlat}              & 682 & 1120 & 2029 & 3841 \\
+\textbf{IVFFlatL2Index} (C++ K-Means++) & 367 & 492 & 911 & 1501 \\
+\textbf{Faiss IndexIVFFlat}              & 506 & 1005 & 1840 & 3655 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 With the C++ K-Means++ kernel, \texttt{IVFFlatL2Index} builds
-$1.2\text{--}1.8\times$ \emph{faster} than Faiss \texttt{IndexIVFFlat} at
-$N = 50\,000$, a complete reversal of the prior sklearn-based result.
+$1.4\text{--}2.4\times$ \emph{faster} than Faiss \texttt{IndexIVFFlat} at
+$N = 50\,000$ across all tested dimensionalities.
 Build time grows roughly linearly with $d$ for both methods.
 Section~\ref{sec:build-scale} examines how build time scales with $N$.
 
@@ -679,8 +717,8 @@ Section~\ref{sec:build-scale} examines how build time scales with $N$.
 At high descriptor dimensionality ($d \ge 128$ bits), the concentration of
 measure progressively erodes the pruning advantage of VP-Trees: distances
 between random bit-strings cluster tightly around $d/2$, making the triangle
-inequality an increasingly loose bound.  Version~2.2 introduces two
-approximate binary-search indices designed specifically for this regime:
+inequality an increasingly loose bound.  Two
+approximate binary-search indices target this regime:
 
 \begin{description}
   \item[\texttt{IVFFlatBinaryIndex}] Binary K-Means (majority-vote centroids,
@@ -701,123 +739,151 @@ approximate binary-search indices designed specifically for this regime:
     all keys within that radius in each sub-table
     ($\sum_{i=0}^{r_{\mathrm{sub}}} \binom{d/m}{i}$ lookups per table), union
     the candidate sets, and verify with full POPCNT.  Sub-strings are stored
-    as \texttt{uint64\_t} keys, requiring $d/(m) \le 8$ bytes per sub-string.
-    Recommended: $m = 8$ for $d = 512$, $m = 4$ for $d \le 256$.
+    as \texttt{uint64\_t} keys, requiring $d/m \le 64$ bits per sub-string.
 \end{description}
 
-\subsection{Query Latency vs.\ Descriptor Length (N = 100\,000)}
-\label{sec:approx-binary-100k}
+\paragraph{Methodology.}
+All measurements in this section use 24 threads, $k = 10$, 500 queries,
+and the best of five timed runs.  Because PyNear links \texttt{libgomp}
+while \texttt{faiss-cpu} links \texttt{libomp}, loading both in one process
+serialises Faiss's OpenMP-parallel flat scan (we measured a ${\sim}78\times$
+in-process slowdown); Faiss \texttt{IndexBinaryFlat} is therefore timed in a
+separate Faiss-only subprocess so that the brute-force baseline below is
+fair.  MIH and IVF measurements are unaffected by this issue.
 
-Table~\ref{tab:binary-approx-100k} reports mean per-query latency and
-Recall@10 for synthetic near-duplicate retrieval: database vectors are random
-512-bit bitstrings; queries are formed by flipping exactly 5 bits from a
-subset of database vectors.  The exact reference is Faiss
-\texttt{IndexBinaryFlat}.  All results use $N = 100\,000$, $k = 10$, and
-500 queries.
+\subsection{Wide Descriptors: 512-bit Near-Duplicate Retrieval ($N = 10^6$)}
+\label{sec:approx-binary-512}
+
+Table~\ref{tab:binary-512} reports per-query latency for the workload MIH
+is designed for: $10^6$ random 512-bit descriptors, with queries formed by
+flipping 5 random bits of existing database rows (near-duplicate retrieval,
+as arises with ORB/BRIEF/AKAZE descriptors and perceptual hashes).  All
+listed configurations reach 100\% Recall@10.
 
 \begin{table}[h]
 \centering
-\caption{Approximate binary-descriptor $k$-NN search: query latency (ms/query)
-  and Recall@10.  $N=100\,000$, $k=10$, 500 queries, Hamming radius 8,
-  near-duplicate setting (5 flipped bits).
-  MIH: $m=4$ for $d\le256$, $m=8$ for $d=512$.
-  IVFFlat: $n_{\mathrm{list}}=500$, $n_{\mathrm{probe}}=15$.
-  Faiss BinaryFlat is exact brute-force (reference).}
-\label{tab:binary-approx-100k}
+\caption{Approximate binary-descriptor $k$-NN search at $d = 512$ bits,
+  $N=1{,}000{,}000$, $k=10$, 500 near-duplicate queries (5 flipped bits),
+  24 threads, best of 5 runs.  All configurations attain 100\% Recall@10.
+  Faiss \texttt{IndexBinaryFlat} is timed in a Faiss-only subprocess.}
+\label{tab:binary-512}
 \renewcommand{\arraystretch}{1.25}
+\small
 \begin{tabular}{lccc}
 \toprule
-\multirow{2}{*}{\textbf{Method}} &
-\multicolumn{3}{c}{\textbf{Descriptor length $d$ (bits)}} \\
-\cmidrule(lr){2-4}
-& 128 & 256 & 512 \\
+\textbf{Method} & \textbf{ms/query} & \textbf{QPS} & \textbf{vs.\ Faiss flat} \\
 \midrule
-\multicolumn{4}{l}{\textit{Query latency (ms/query)}} \\
-PyNear \texttt{MIHBinaryIndex}       & 0.076 & 0.249 & 0.032 \\
-PyNear \texttt{IVFFlatBinaryIndex}   & 0.022 & 0.034 & 0.058 \\
-Faiss \texttt{IndexBinaryFlat} (exact) & 1.938 & 2.053 & 1.803 \\
-\midrule
-\multicolumn{4}{l}{\textit{Recall@10}} \\
-PyNear \texttt{MIHBinaryIndex}       & 100.0\% & 100.0\% & 100.0\% \\
-PyNear \texttt{IVFFlatBinaryIndex}   & 99.4\%  & 100.0\% & 100.0\% \\
-Faiss \texttt{IndexBinaryFlat} (exact) & 100.0\% & 100.0\% & 100.0\% \\
+PyNear \texttt{MIHBinaryIndex} ($m=8$, $r=4$) & \textbf{0.0088} & \textbf{114\,039} & $\mathbf{34\times}$ \\
+PyNear \texttt{IVFFlatBinaryIndex} ($n_{\mathrm{list}}{=}512$, $n_{\mathrm{probe}}{=}16$) & 0.021 & 47\,993 & $14.4\times$ \\
+Faiss \texttt{IndexBinaryFlat} (exact brute-force) & 0.299 & 3\,341 & $1\times$ \\
+Faiss \texttt{IndexBinaryMultiHash} & 21.612 & 46 & $0.01\times$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-At $d = 512$ (the most common case for image descriptors such as ORB and
-BRIEF-512), \texttt{MIHBinaryIndex} achieves 0.032 ms/query — a
-\textbf{56$\times$ speedup} over Faiss \texttt{IndexBinaryFlat} (1.803 ms)
-with 100\% Recall@10.  \texttt{IVFFlatBinaryIndex} achieves 0.058 ms/query
-($31\times$ speedup) with 100\% recall at the same operating point.
+On wide descriptors, \texttt{MIHBinaryIndex} finds near-duplicates at
+100\% recall $34\times$ faster than Faiss's exact, thread-matched
+brute-force scan, and Faiss's own Multi-Index Hashing implementation is not
+competitive at this width.  \texttt{IVFFlatBinaryIndex} provides a
+complementary $14\times$ speedup with a fixed, predictable per-cluster scan
+cost.  (Earlier editions of this report quoted a $257\times$ MIH speedup;
+that figure compared against an in-process Faiss scan that was serialised
+by the OpenMP runtime clash described above and is superseded by the fair
+$34\times$ figure reported here.)
 
-\subsection{Query Latency vs.\ Descriptor Length (N = 1\,000\,000)}
-\label{sec:approx-binary-1m}
+\subsection{Narrow Descriptors: SIFT1M, 128-bit Sign-Quantised ($N = 10^6$)}
+\label{sec:approx-binary-sift}
 
-Table~\ref{tab:binary-approx-1m} extends the benchmark to $N = 10^6$, the
-scale typical of large image-retrieval databases.
+The second experiment uses a real dataset: the INRIA TEXMEX SIFT1M corpus
+($10^6$ SIFT descriptors, sign-quantised to 128-bit binary codes), with
+ground truth computed by exact brute-force Hamming $k$-NN over 500 queries.
+Table~\ref{tab:binary-sift} lists representative operating points.
 
 \begin{table}[h]
 \centering
-\caption{Approximate binary-descriptor $k$-NN search at $N=1{,}000{,}000$,
-  $k=10$, 500 queries.  Configuration as in Table~\ref{tab:binary-approx-100k}
-  except $n_{\mathrm{list}}=512$, $n_{\mathrm{probe}}=16$.
-  Build time includes K-Means++ clustering (IVFFlat) or hash-table
-  construction (MIH).}
-\label{tab:binary-approx-1m}
+\caption{SIFT1M binary (128-bit), $N=1{,}000{,}000$, $k=10$, 500 queries;
+  selected operating points ($n_{\mathrm{list}} = 500$ for IVF; $m=8$ for
+  the MIH radius sweep).  The recall ceiling of ${\sim}0.845$
+  is a tie-breaking artefact of integer Hamming distances at the $k$-th
+  boundary, not missed neighbours.}
+\label{tab:binary-sift}
 \renewcommand{\arraystretch}{1.25}
-\begin{tabular}{lcccccc}
+\footnotesize
+\begin{tabular}{lccccc}
 \toprule
-\multirow{2}{*}{\textbf{Method}} &
-\multicolumn{3}{c}{\textbf{Build time (s)}} &
-\multicolumn{3}{c}{\textbf{Query time (ms/query)}} \\
-\cmidrule(lr){2-4}\cmidrule(lr){5-7}
-& $d=128$ & $d=256$ & $d=512$ & $d=128$ & $d=256$ & $d=512$ \\
+\textbf{Method} & \textbf{Config} & \textbf{Build (s)} & \textbf{ms/query} & \textbf{QPS} & \textbf{Recall@10} \\
 \midrule
-PyNear \texttt{MIHBinaryIndex}     & 4.6 & 7.7 & 13.2 & 0.117 & 0.553 & 0.037 \\
-PyNear \texttt{IVFFlatBinaryIndex} & 5.0 & 9.5 & 15.0 & 0.901 & 1.662 & 2.422 \\
-Faiss \texttt{IndexBinaryFlat} (exact) & — & — & — & 9.385 & 9.837 & 9.510 \\
-\midrule
-\multicolumn{4}{l}{\textit{Recall@10 (all methods, all $d$)}} &
-\multicolumn{3}{c}{$\ge$98.4\% (MIH: 100\%)} \\
+NumPy brute-force (naive) & — & — & 47.7 & 21 & 1.000 \\
+Faiss \texttt{IndexBinaryFlat} (exact) & subprocess & — & 0.042 & 23\,572 & — \\
+\texttt{IVFFlatBinaryIndex} & $n_{\mathrm{probe}}=31$ & 3.10 & 0.01 & 125\,776 & 0.825 \\
+\texttt{IVFFlatBinaryIndex} & $n_{\mathrm{probe}}=125$ & 3.10 & 0.02 & 56\,859 & 0.845 \\
+\texttt{IVFFlatBinaryIndex} & $n_{\mathrm{probe}}=500$ & 3.10 & 0.05 & 19\,100 & 0.845 \\
+\texttt{MIHBinaryIndex} & $m=8$, $r=4$ & 2.64 & 0.03 & 38\,554 & 0.466 \\
+\texttt{MIHBinaryIndex} & $m=8$, $r=12$ & 2.64 & 0.14 & 7\,326 & 0.799 \\
+\texttt{MIHBinaryIndex} & $m=8$, $r=24$ & 2.64 & 0.65 & 1\,541 & 0.841 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-At $d=512$ and $N=10^6$, \texttt{MIHBinaryIndex} achieves 0.037 ms/query
-— a \textbf{257$\times$ speedup} over Faiss brute-force (9.510 ms) while
-maintaining 100\% Recall@10.  The MIH advantage at $d=512$ is particularly
-strong: with $m=8$ sub-tables of 64-bit keys and $r_{\mathrm{sub}}=1$,
-each query issues only $8 \times 65 = 520$ hash lookups.  At $N=10^6$, the
-expected number of candidates per lookup is $10^6 / 2^{64} \approx 0$, so
-the candidate set is tiny and verification is near-instant.
+The honest caveat: on \emph{narrow} 128-bit descriptors at high recall, an
+optimised brute-force POPCNT scan is hard to beat — Faiss
+\texttt{IndexBinaryFlat} sustains 23\,572 QPS \emph{exactly}, faster than
+either MIH implementation above the ${\sim}0.5$ recall mark.
+\texttt{IVFFlatBinaryIndex} is the strongest PyNear option here, reaching
+the 0.845 recall ceiling at 56\,859 QPS ($n_{\mathrm{probe}}=125$),
+$2.4\times$ the throughput of the exact Faiss scan and ${\sim}2385\times$
+the naive NumPy baseline.  At matched recall, PyNear's MIH is nevertheless
+consistently competitive with Faiss's own \texttt{IndexBinaryMultiHash}
+(Table~\ref{tab:mih-vs-faiss-mih}).
 
-The MIH query time actually \emph{decreases} with $d$ at fixed $m=8$ because
-the sub-table keys become more sparse in the $2^{64}$ key space as $d$
-increases (more bits → more entropy per key → fewer collisions per bucket).
+\begin{table}[h]
+\centering
+\caption{SIFT1M (128-bit): QPS of PyNear \texttt{MIHBinaryIndex} ($m=4$)
+  vs.\ Faiss \texttt{IndexBinaryMultiHash} ($n_{\mathrm{hash}}=4$) at
+  matched Recall@10 operating points.}
+\label{tab:mih-vs-faiss-mih}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{cccc}
+\toprule
+\textbf{Recall@10} & \textbf{PyNear MIH (QPS)} & \textbf{Faiss MIH (QPS)} & \textbf{Speedup} \\
+\midrule
+0.28 & 141\,055 ($r=6$)  & 52\,346 ($n_{\mathrm{flip}}=1$) & $2.69\times$ \\
+0.53 & 9\,053 ($r=14$)   & 15\,881 ($n_{\mathrm{flip}}=2$) & $0.57\times$ \\
+0.73 & 9\,053 ($r=14$)   & 3\,456 ($n_{\mathrm{flip}}=3$)  & $2.62\times$ \\
+0.82 & 789 ($r=20$)      & 689 ($n_{\mathrm{flip}}=4$)     & $1.15\times$ \\
+0.84 & 159 ($r=24$)      & 166 ($n_{\mathrm{flip}}=5$)     & $0.96\times$ \\
+0.84 & 159 ($r=24$)      & 46 ($n_{\mathrm{flip}}=6$)      & $3.45\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsection{MIH Parametrisation Guidelines}
 \label{sec:mih-params}
 
-Optimal MIH performance depends on choosing $m$ to balance lookup count
-and candidate set size:
+Optimal MIH performance depends on choosing $m$ (and the query radius $r$)
+to balance lookup count against candidate-set size.  The configurations
+used above illustrate the two regimes:
 
 \begin{center}
 \renewcommand{\arraystretch}{1.2}
-\begin{tabular}{ccccc}
+\begin{tabular}{cccccl}
 \toprule
-$d$ (bits) & $m$ & sub-bits & $r_{\mathrm{sub}}$ & lookups/query \\
+$d$ (bits) & $m$ & sub-bits & $r$ & $r_{\mathrm{sub}}$ & lookups/query \\
 \midrule
-128 & 4 & 32 & 2 & $4 \times 529 = 2{,}116$ \\
-256 & 4 & 64 & 2 & $4 \times 2{,}081 = 8{,}324$ \\
-512 & 8 & 64 & 1 & $8 \times 65 = 520$ \\
+512 & 8 & 64 & 4 & 0 & $8 \times 1 = 8$ \\
+128 & 8 & 16 & 12 & 1 & $8 \times \sum_{i=0}^{1}\binom{16}{i} = 136$ \\
+128 & 4 & 32 & 14 & 3 & $4 \times \sum_{i=0}^{3}\binom{32}{i} = 21\,956$ \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-For $d=256$ and $d=128$, a larger $r_{\mathrm{sub}}=2$ is used to ensure
-good recall; the higher lookup count is compensated by the larger key space
-relative to $N$.
+For wide descriptors and small radii (the near-duplicate regime), the
+per-query lookup count is tiny and the $2^{64}$ sub-key space is sparse
+relative to $N$, so candidate sets are near-empty and verification is
+near-instant — this is where the $34\times$ result of
+Section~\ref{sec:approx-binary-512} comes from.  For narrow descriptors,
+raising $r$ to chase recall inflates the enumeration combinatorially,
+which is why brute force overtakes MIH at high recall on 128-bit data.
 
 % =============================================================================
 \section{Build-Time Scalability}
@@ -857,37 +923,38 @@ which translates into a steeper but still sub-second curve up to $N = 10^6$.
 
 % Faiss IndexFlatL2
 \addplot[color=colOrange, mark=square*]
-  coordinates {(10000,0.1)(50000,0.5)(100000,1.6)(250000,7.2)(500000,4.7)(1000000,54.5)};
+  coordinates {(10000,0.1)(50000,0.4)(100000,1.2)(250000,6.8)(500000,21.9)(1000000,8.6)};
 \addlegendentry{Faiss \texttt{IndexFlatL2}}
 
 % PyNear VPTreeL2Index
 \addplot[color=colRed, mark=diamond*]
-  coordinates {(10000,4)(50000,7)(100000,14)(250000,42)(500000,96)(1000000,267)};
+  coordinates {(10000,3.3)(50000,5.3)(100000,12.5)(250000,31.2)(500000,83.9)(1000000,139.2)};
 \addlegendentry{PyNear \texttt{VPTreeL2Index}}
 
 \end{axis}
 \end{tikzpicture}
 \caption{Exact-index build time (ms, log--log) vs.\ dataset size $N$, $d=32$.
   Faiss \texttt{IndexFlatL2} requires no structural work (copy only), giving
-  an $O(N)$ lower bound.  \texttt{VPTreeL2Index} follows an $O(N \log N)$
-  curve, from 4 ms at $N=10\,000$ to 267 ms at $N=10^6$ — well within
-  one-second build budgets for all tested sizes.}
+  an $O(N)$ lower bound (its non-monotonic 500k/1M points reflect allocator
+  noise at sub-25-ms timescales).  \texttt{VPTreeL2Index} follows an
+  $O(N \log N)$ curve, from 3.3 ms at $N=10\,000$ to 139 ms at $N=10^6$ —
+  well within one-second build budgets for all tested sizes.}
 \label{fig:build-exact}
 \end{figure}
 
-The $O(N \log N)$ growth of \texttt{VPTreeL2Index} results in a
-$5\text{--}18\times$ overhead vs.\ Faiss's copy-only flat index at large $N$,
-which is expected and acceptable: the VP-Tree build cost is paid once and
-amortised over all subsequent queries, which benefit from $O(\log N)$ tree
-traversal (with best-first pruning) rather than $O(N)$ linear scan —
-yielding up to $39\times$ lower query latency at $d=512$.
-The level-parallel build (all nodes at each tree depth processed concurrently
-with per-thread scratch buffers) gives a $2.2\times$ build speedup at
-$N=10^5\text{--}5\times10^5$.  On Linux systems where Intel TBB is available,
-\texttt{std::execution::par\_unseq} is additionally applied to \texttt{nth\_element}
-at the root partition, providing further improvement at $N \ge 5\times10^5$;
-on macOS and TBB-free Linux environments the standard serial
-\texttt{nth\_element} is used instead.
+The $O(N \log N)$ growth of \texttt{VPTreeL2Index} results in a build-time
+overhead of roughly $4\text{--}16\times$ vs.\ Faiss's copy-only flat index
+at large $N$, which is expected and acceptable: the VP-Tree build cost is
+paid once (139 ms for $10^6$ points) and amortised over all subsequent
+queries, which benefit from tree pruning with leaf-bucketed SIMD sweeps
+rather than an $O(N)$ linear scan — yielding $4\text{--}11\times$ lower
+query latency at $d=32\text{--}128$ (Section~\ref{sec:l2-high}).
+The build is level-parallel: all nodes at each tree depth are processed
+concurrently with per-thread scratch buffers.  On Linux systems where Intel
+TBB is available, \texttt{std::execution::par\_unseq} is additionally
+applied to \texttt{nth\_element} at the root partition; on macOS and
+TBB-free Linux environments the standard serial \texttt{nth\_element} is
+used instead.
 
 \subsection{Approximate Index: IVFFlatL2Index vs.\ Faiss IndexIVFFlat}
 \label{sec:build-approx-scale}
@@ -915,12 +982,12 @@ cases, so the K-Means problem grows with $N$.
 
 % Faiss IndexIVFFlat
 \addplot[color=colOrange, mark=square*]
-  coordinates {(10000,139)(50000,694)(100000,1376)(250000,3311)(500000,6979)(1000000,14994)};
+  coordinates {(10000,73.6)(50000,560.1)(100000,1193.4)(250000,3031.1)(500000,6239.6)(1000000,13435.7)};
 \addlegendentry{Faiss \texttt{IndexIVFFlat}}
 
 % PyNear IVFFlatL2Index (C++ K-Means++)
 \addplot[color=colRed, mark=diamond*]
-  coordinates {(10000,26)(50000,653)(100000,2410)(250000,10378)(500000,28855)(1000000,81186)};
+  coordinates {(10000,30.8)(50000,387.2)(100000,1385.7)(250000,6565.8)(500000,18374.1)(1000000,48549.1)};
 \addlegendentry{PyNear \texttt{IVFFlatL2Index} (C++ K-Means++)}
 
 \end{axis}
@@ -929,9 +996,9 @@ cases, so the K-Means problem grows with $N$.
   $d=128$, $k = \lfloor\sqrt{N}\rfloor$.
   \texttt{IVFFlatL2Index} (C++ K-Means++ with SIMD + OpenMP) is
   \emph{faster} than Faiss \texttt{IndexIVFFlat} at $N \le 50\,000$
-  (29 ms vs.\ 137 ms at $N=10\,000$; 530 ms vs.\ 658 ms at $N=50\,000$).
+  (31 ms vs.\ 74 ms at $N=10\,000$; 387 ms vs.\ 560 ms at $N=50\,000$).
   At larger $N$ Faiss's highly optimised compiled K-Means takes over,
-  reaching ${\sim}5\times$ faster at $N=10^6$.}
+  reaching ${\sim}3.6\times$ faster at $N=10^6$.}
 \label{fig:build-approx}
 \end{figure}
 
@@ -945,21 +1012,23 @@ cases, so the K-Means problem grows with $N$.
 \toprule
 \textbf{N} & \textbf{IVFFlatL2 (C++ K-Means++)} & \textbf{Faiss IndexIVFFlat} \\
 \midrule
-10\,000  & \textbf{26}    & 139    \\
-50\,000  & \textbf{653}   & 694    \\
-100\,000 & 2\,410  & \textbf{1\,376}  \\
-250\,000 & 10\,378  & \textbf{3\,311}  \\
-500\,000 & 28\,855 & \textbf{6\,979}  \\
-1\,000\,000 & 81\,186 & \textbf{14\,994} \\
+10\,000  & \textbf{31}    & 74    \\
+50\,000  & \textbf{387}   & 560   \\
+100\,000 & 1\,386  & \textbf{1\,193}  \\
+250\,000 & 6\,566  & \textbf{3\,031}  \\
+500\,000 & 18\,374 & \textbf{6\,240}  \\
+1\,000\,000 & 48\,549 & \textbf{13\,436} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 The crossover from PyNear-faster to Faiss-faster occurs between $N=50\,000$
 and $N=100\,000$.  Below that threshold the C++ K-Means++ kernel
-($\approx k=100\text{--}224$ clusters) enjoys a start-up advantage — Faiss
+($\approx k=100\text{--}224$ clusters) enjoys a start-up advantage
+($2.4\times$ faster at $N=10\,000$) — Faiss
 allocates more resources for its K-Means iteration budget.  Above $N=100\,000$
-Faiss's compiled BLAS-based centroid updates dominate.
+Faiss's compiled BLAS-based centroid updates dominate, reaching
+$3.6\times$ faster at $N=10^6$.
 For large-scale workloads ($N \ge 250\,000$) users requiring short build
 times may prefer Faiss IVF; for small-to-medium datasets \texttt{IVFFlatL2Index}
 is the faster choice while offering the same Python-only install footprint.
@@ -972,58 +1041,61 @@ is the faster choice while offering the same Python-only install footprint.
 VP-Trees offer the best exact-search latency in this regime across all three
 distance metrics tested ($\ell_1$, $\ell_2$, $\ell_\infty$).  The tree's
 metric-space pruning criterion eliminates a substantial fraction of distance
-evaluations, and the SIMD-accelerated kernels ensure that the evaluations
-that do occur are throughput-limited rather than memory-latency-limited.
+evaluations, and with v2.4's 32-point leaf buckets the evaluations that do
+occur run as contiguous SIMD sweeps, keeping latency essentially flat
+(0.4--0.9 ms) even at $N = 2.5\times10^6$.
 scikit-learn's kd-tree degrades rapidly beyond $d = 8$ due to increasing
 overlap between ball partitions; Faiss's flat scan is memory-bandwidth-bound
-and grows steadily with $d$.
+and grows steadily with both $d$ and $N$.
 
-\paragraph{High dimensionality ($d = 128\text{--}512$) — exact.}
-\texttt{VPTreeL2Index} remains the most efficient exact method at $d=512$
-(2.2 ms vs.\ 85.4 ms for Faiss flat, 483.2 ms for scikit-learn), a $39\times$
-advantage over Faiss.  The best-first search strategy and cache-friendly data
-layout (introduced in v2.1) deliver a $3.3\times$ speedup at $d=512$
-compared to the prior DFS-based traversal.  The tree's pruning effectiveness
+\paragraph{Moderate-to-high dimensionality ($d = 32\text{--}128$) — exact.}
+\texttt{VPTreeL2Index} remains the most efficient exact method at $d=128$
+(0.49 ms vs.\ 5.3 ms for Faiss flat, 40.8 ms for scikit-learn), an
+$11\times$ advantage over Faiss.  The tree's pruning effectiveness
 degrades with dimension — a manifestation of the concentration of measure
-phenomenon — but remains significant for clustered datasets even at 512 dimensions.
+phenomenon — and this edition's exact float suite deliberately stops at
+$d=128$; beyond that the approximate indices below are the appropriate
+tool.
 
 \paragraph{High dimensionality ($d = 128\text{--}1024$) — approximate.}
-The BLAS-optimised \texttt{IVFFlatL2Index} (v2.1) delivers compelling
-approximate-search performance.  At $d=128$ it outperforms Faiss
-\texttt{IndexIVFFlat} (5.7 ms vs.\ 7.1 ms) and at $d=512$
-(9.3 ms vs.\ 7.8 ms) while maintaining perfect Recall@10.
-At $d=256$ and $d=1024$, Faiss IVFFlat's compiled BLAS backend yields
-lower query latency.  Build time with the C++ K-Means++ kernel is
-\emph{faster} than Faiss IVF at $N \le 50\,000$ and within
-$1.4\text{--}5\times$ at larger scales.
-For workloads where $N \ge 250\,000$ and build time is critical,
-Faiss IVF remains the faster option; at smaller $N$, or when a pure-Python
-install (NumPy only) or the exact-to-approximate fallback via a single
-parameter change are operationally valuable, \texttt{IVFFlatL2Index}
-is the preferable choice.
+\texttt{IVFFlatL2Index} maintains perfect Recall@10 at
+$n_{\mathrm{probe}}=20$ with 0.18--0.67 ms per query, but the raw-latency
+comparison has reversed since the previous edition: Faiss
+\texttt{IndexIVFFlat} is now faster at every tested dimensionality
+($8\text{--}32\times$ at $n_{\mathrm{probe}}=20$).  Where PyNear's IVF
+retains an edge is build time — $1.4\text{--}2.4\times$ faster than Faiss
+at $N = 50\,000$ across $d=128$--$1024$, and faster overall up to
+$N \approx 10^5$ — plus the pure-Python install footprint and the
+exact-search fallback via $n_{\mathrm{probe}} = n_{\mathrm{clusters}}$.
+For raw approximate query throughput at high dimensionality, Faiss IVF is
+the better choice on this hardware.
 
 \paragraph{Binary descriptors — exact.}
 Faiss's flat binary index is the fastest exact binary search method at
-all descriptor lengths.  \texttt{VPTreeBinaryIndex} remains
-viable for moderate lengths ($\leq 64$ bits, $< 6$ ms) and for workloads
-where tree-based pruning amortises the per-query cost.
+32--128 bits, but at 256 bits \texttt{VPTreeBinaryIndex} (v2.4,
+leaf-bucketed popcount sweeps) is now $2.3\times$ faster (15.9 ms vs.\
+36.3 ms in-process).  Since the exact suite times Faiss in the same
+process as PyNear, its numbers may be depressed by the OpenMP runtime
+clash (Section~\ref{sec:setup}); the subprocess-isolated measurement of
+Section~\ref{sec:approx-binary} remains the fair reference for Faiss's
+brute-force throughput.
 \texttt{BKTreeBinaryIndex} is best suited to range queries
 (\texttt{find\_threshold}), where its B-K tree structure is optimal, and
 should not be interpreted as a general-purpose $k$-NN competitor.
 
-\paragraph{Binary descriptors — approximate (v2.2).}
-The new \texttt{MIHBinaryIndex} and \texttt{IVFFlatBinaryIndex} (Section~\ref{sec:approx-binary})
-decisively outperform exact brute-force binary search at high dimensionality.
-At $d=512$, $N=100\,000$: \texttt{MIHBinaryIndex} achieves 0.032 ms/query
-($56\times$ over Faiss flat) with 100\% Recall@10; at $N=10^6$ the speedup
-grows to $257\times$ (0.037 ms vs.\ 9.5 ms) because the key space becomes
-increasingly sparse relative to $N$.  The MIH technique is particularly
-well-suited to the near-duplicate image-retrieval use case (ORB, BRIEF,
-AKAZE descriptors) where true nearest neighbours lie within Hamming radius 8
-of 512-bit descriptors.  \texttt{IVFFlatBinaryIndex} provides a complementary
-trade-off: slightly higher recall and predictable per-cluster scan cost,
-making it preferable when the query radius is unknown or the data distribution
-is non-uniform.
+\paragraph{Binary descriptors — approximate.}
+\texttt{MIHBinaryIndex} and \texttt{IVFFlatBinaryIndex}
+(Section~\ref{sec:approx-binary}) decisively outperform exact brute-force
+binary search in the wide-descriptor, near-duplicate regime: at $d=512$,
+$N=10^6$, MIH reaches 0.0088 ms/query (114\,039 QPS) at 100\% Recall@10,
+$34\times$ faster than the thread-matched Faiss \texttt{IndexBinaryFlat}
+scan, with Faiss's own MIH three orders of magnitude behind.  On narrow
+128-bit descriptors the picture is more nuanced: \texttt{IVFFlatBinaryIndex}
+offers the best throughput at the recall ceiling (56\,859 QPS at 0.845),
+while an optimised brute-force scan beats MIH above the ${\sim}0.5$ recall
+mark.  Choose MIH for wide descriptors and small-radius/near-duplicate
+retrieval; choose IVF or brute force for high-recall search on narrow
+descriptors.
 
 % =============================================================================
 \section{Conclusion}
@@ -1032,35 +1104,42 @@ is non-uniform.
 PyNear's VP-Tree family provides highly competitive exact $k$-nearest-neighbour
 search across $\ell_1$, $\ell_2$, and $\ell_\infty$ distance metrics,
 delivering the lowest latency among all evaluated exact methods across the
-full tested dimensionality range ($d = 2\text{--}512$) without requiring BLAS,
+full tested dimensionality range ($d = 2\text{--}128$) without requiring BLAS,
 GPU, or any native runtime dependency beyond NumPy.
-Version 2.1's exact-index improvements (best-first traversal, cache-friendly
-layout, FMA kernels, spread-maximising VP selection) deliver a $3.3\times$
-query-latency reduction at $d=512$: from 7.3 ms to 2.2 ms, compared to
-85.4 ms for Faiss \texttt{IndexFlatL2} and 483 ms for scikit-learn.  The SIMD-accelerated
-distance kernels ensure that all three metric variants operate within a
-narrow, near-identical latency band ($\pm 15\%$), allowing practitioners to
+Version 2.4's leaf bucketing — 32-point leaves scanned as contiguous SIMD
+sweeps, with best-first descent and pooled per-query heaps — keeps exact
+query latency in the 0.4--0.9 ms band even at $N = 2.5\times10^6$
+(low-dimensional suite) and at 0.49 ms for $d=128$, $N=120\,000$:
+$11\times$ faster than Faiss \texttt{IndexFlatL2} and $83\times$ faster
+than scikit-learn at that dimensionality.  It also carries the exact binary
+index past Faiss at wide descriptors: at 256 bits,
+\texttt{VPTreeBinaryIndex} is $2.3\times$ faster than
+\texttt{IndexBinaryFlat} measured in-process.  The SIMD-accelerated
+distance kernels keep all three float metric variants within a narrow
+0.23--0.68 ms band, allowing practitioners to
 select the semantically appropriate metric without performance penalties.
 
-Version 2.1 introduces two major improvements to \texttt{IVFFlatL2Index}:
-a BLAS-backed inner-cluster flat scan (NumPy SGEMV), enabling competitive
-query performance — outperforming Faiss \texttt{IndexIVFFlat} at $d=128$ and
-$d=512$ while maintaining perfect Recall@10 at $n_{\mathrm{probe}} = 20$ —
-and a native C++ Lloyd's K-Means (K-Means++ init, SIMD L2, OpenMP) that
-replaces the prior sklearn dependency and delivers build times
-$1.2\text{--}1.8\times$ faster than Faiss IVF at $N=50\,000$, and
-$4.7\times$ faster at $N=10\,000$.  At larger scales ($N \ge 100\,000$)
-Faiss's compiled K-Means is faster, with the gap widening to ${\sim}5\times$
-at $N=10^6$.
+In the approximate $\ell_2$ regime, \texttt{IVFFlatL2Index} sustains
+perfect Recall@10 at $n_{\mathrm{probe}}=20$ with sub-millisecond per-query
+latency, and its C++ K-Means++ builder constructs the index
+$1.4\text{--}2.4\times$ faster than Faiss IVF at $N=50\,000$ (crossover
+near $N=10^5$; Faiss builds $3.6\times$ faster at $N=10^6$).  On raw query
+latency, however, Faiss \texttt{IndexIVFFlat} now leads at every tested
+dimensionality — PyNear's IVF value proposition is the build speed at small
+$N$, the NumPy-only footprint, and the single-parameter exact fallback,
+not peak throughput.
 
-Version~2.2 adds \texttt{MIHBinaryIndex} and \texttt{IVFFlatBinaryIndex},
-delivering $56\text{--}257\times$ speedups over exact binary brute-force at
-$d=512$ while maintaining $\ge 98\%$ Recall@10, directly targeting
-large-scale image-descriptor retrieval workloads.
+For approximate binary search, \texttt{MIHBinaryIndex} delivers a
+$34\times$ speedup over a thread-matched exact brute-force scan on 512-bit
+near-duplicate retrieval at $N=10^6$ with 100\% Recall@10, and
+\texttt{IVFFlatBinaryIndex} reaches the SIFT1M recall ceiling at
+$2.4\times$ the throughput of exact search — while on narrow descriptors
+at high recall, exact brute force remains the honest recommendation.
 
-Future work includes extending the SIMD kernels to AVX-512 for wider
-vectorisation, investigating product-quantisation-based inner-cluster
-compression to reduce the latency of high-dimensional IVFFlatL2Index probes, and
+Future work includes evaluating the exact float suite beyond $d=128$ under
+the new leaf-bucketed traversal, narrowing the raw-latency gap of
+\texttt{IVFFlatL2Index} through a compiled inner scan,
+product-quantisation-based inner-cluster compression, and
 evaluating performance on non-clustered (adversarial) data distributions.
 
 \paragraph{Static index limitation.}
