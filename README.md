@@ -356,7 +356,7 @@ recall and tuning `n_probe` for your dataset.
 
 #### Why approximate search? The curse of dimensionality
 
-Tree pruning loses traction as dimensionality grows: in high-$n$ spaces, nearly all points concentrate in a thin shell near the boundary and distances between any two points become almost equal, leaving the tree nothing to prune. That's why exact tree search offers diminishing returns beyond $d \approx 256$ and why approximate methods (IVF-style probing) take over.
+Tree pruning loses traction as dimensionality grows: in high-N spaces, nearly all points concentrate in a thin shell near the boundary and distances between any two points become almost equal, leaving the tree nothing to prune. That's why exact tree search offers diminishing returns beyond $d \approx 256$ and why approximate methods (IVF-style probing) take over.
 
 [Full derivation, with volume integrals and a numerical illustration →](./docs/approximate.md#why-approximate-search-the-curse-of-dimensionality)
 
