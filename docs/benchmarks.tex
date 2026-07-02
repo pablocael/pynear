@@ -67,7 +67,7 @@
        for Exact and Approximate $k$-Nearest-Neighbour Search}
 \author{PyNear Development Team \\[4pt]
         \small \url{https://github.com/pablocael/pynear} \\[2pt]
-        \small Third edition — PyNear version 2.4}
+        \small Third edition — PyNear version 2.5}
 \date{July 2026}
 
 % =============================================================================
@@ -82,7 +82,7 @@ library implementing exact and approximate $k$-nearest-neighbour
 ($k$-NN) search via Vantage-Point Trees (VP-Trees), IVF-style approximate
 indices, and Multi-Index Hashing, with SIMD-accelerated distance kernels.
 This third edition of the report re-measures every experiment with
-PyNear version 2.4, whose exact indices gained \emph{leaf bucketing}:
+PyNear version 2.5, whose exact indices gained \emph{leaf bucketing}:
 tree splitting stops at 32-point leaves, which are then scanned as
 contiguous SIMD sweeps, combined with best-first descent and pooled
 per-query heaps.
@@ -145,7 +145,7 @@ family, which implements an inverted file (IVF) scheme over Voronoi cells
 with a configurable probe budget, alongside \texttt{MIHBinaryIndex}
 (Multi-Index Hashing) for approximate Hamming-distance search.
 
-Version 2.4, evaluated in this edition, reworks the exact-index hot paths:
+Version 2.5, evaluated in this edition, reworks the exact-index hot paths:
 tree splitting now stops at 32-point \emph{leaf buckets} that are scanned as
 contiguous SIMD sweeps (the strategy used by Faiss and scikit-learn leaf
 nodes), combined with direct mandatory-child descent, pooled per-query
@@ -272,7 +272,7 @@ the dataset five-fold with respect to the previous one
 \caption{Mean query latency (ms) vs.\ dimensionality for exact $\ell_2$
   nearest-neighbour search in the low-dimensionality regime.  Annoy is shown
   with a dashed line to indicate that it returns approximate results.
-  Despite the five-fold larger dataset, \texttt{VPTreeL2Index} (v2.4, leaf
+  Despite the five-fold larger dataset, \texttt{VPTreeL2Index} (v2.5, leaf
   bucketing) stays essentially flat at 0.4--0.9 ms across the entire range,
   undercutting Faiss's flat scan by roughly an order of magnitude and
   scikit-learn by up to $27\times$ at $d=16$.}
@@ -282,7 +282,7 @@ the dataset five-fold with respect to the previous one
 \texttt{VPTreeL2Index} achieves the lowest latency among exact methods
 throughout the low-dimensional range, with query times between 0.36 ms and
 0.86 ms over $2.5$ million points — a near-flat profile that reflects the
-v2.4 leaf-bucketed traversal.  scikit-learn's kd-tree is competitive at
+v2.5 leaf-bucketed traversal.  scikit-learn's kd-tree is competitive at
 $d = 2\text{--}3$ but grows steadily with $d$, reaching 22.9 ms at $d = 16$.
 Faiss's flat index scans all $N$ points per query and grows from 4.6 ms at
 $d=2$ to 13.9 ms at $d = 16$; measured in-process it is
@@ -354,7 +354,7 @@ most efficient exact method at all tested dimensionalities: 0.10 ms at
 $d=32$ ($4.4\times$ faster than Faiss), 0.33 ms at $d=64$ ($4.0\times$),
 and 0.49 ms at $d=128$ ($10.8\times$ faster than Faiss, $83\times$ faster
 than scikit-learn).  This reflects triangle-inequality pruning on clustered
-data combined with the v2.4 leaf-bucketed SIMD sweeps.  Note that this
+data combined with the v2.5 leaf-bucketed SIMD sweeps.  Note that this
 edition's suite stops at $d = 128$; pruning effectiveness is expected to
 erode at substantially higher dimensionality (concentration of measure),
 which is precisely the regime the approximate indices of
@@ -1048,7 +1048,7 @@ is the faster choice while offering the same Python-only install footprint.
 VP-Trees offer the best exact-search latency in this regime across all three
 distance metrics tested ($\ell_1$, $\ell_2$, $\ell_\infty$).  The tree's
 metric-space pruning criterion eliminates a substantial fraction of distance
-evaluations, and with v2.4's 32-point leaf buckets the evaluations that do
+evaluations, and with v2.5's 32-point leaf buckets the evaluations that do
 occur run as contiguous SIMD sweeps, keeping latency essentially flat
 (0.4--0.9 ms) even at $N = 2.5\times10^6$.
 scikit-learn's kd-tree degrades rapidly beyond $d = 8$ due to increasing

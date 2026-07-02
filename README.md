@@ -435,7 +435,7 @@ See [docs/demos.md](./docs/demos.md) for full details.
 
 ## Benchmarks
 
-### HNSW family (v2.4) — query latency vs Faiss IndexHNSWFlat
+### HNSW family (v2.5) — query latency vs Faiss IndexHNSWFlat
 
 Single machine, N=20k, ef_construction=200, ef_search=256, k=10, 8-thread build:
 
@@ -460,7 +460,7 @@ and faster than Faiss's own `IndexBinaryMultiHash` at matched recall on SIFT1M.
 
 [**Full benchmark report (PDF)**](./docs/benchmarks.pdf) — formal evaluation against
 Faiss, scikit-learn, and Annoy across L2 / L1 / Hamming, dimensionalities from
-2-D to 1024-D, both exact and approximate modes. (Refreshed July 2026 for v2.4;
+2-D to 1024-D, both exact and approximate modes. (Refreshed July 2026 for v2.5;
 its approximate-binary section uses the same thread-matched, subprocess-isolated
 methodology as [results/faiss_comparison.md](./results/faiss_comparison.md).)
 
