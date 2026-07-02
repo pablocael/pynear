@@ -107,6 +107,7 @@ Faiss's scans — see the methodology note below). Reproducible via
 | **IVF build time**, 50k float vectors, 128–1024-D | **0.37–1.5 s** | 0.51–3.7 s | **PyNear 1.4–2.4× faster builds** |
 | Exact **binary** k-NN (brute force's home turf) | `VPTreeBinaryIndex` 3.2–15.9 ms | `IndexBinaryFlat` **0.15–0.29 ms** | **Faiss wins at every width** — use PyNear's MIH/IVF for binary instead |
 | Approximate **float** L2 raw latency, 128–1024-D | `IVFFlatL2Index` 5.6–21.5 ms | `IndexIVFFlat` **0.2–2.8 ms** | **Faiss wins 8–32×** (BLAS inner scan) |
+| **HNSW** batch queries, 100k × 128-D, matched recall | `HNSWL2Index` ~40k QPS | `IndexHNSWFlat` **~64k QPS** | **Faiss 1.6–1.9× faster** — though PyNear's SQ8 beats Faiss's `IndexHNSWSQ` up to 1.6× at mid-recall |
 
 The last two rows are deliberate: where Faiss is better we say so, and the
 [full PDF report](./docs/benchmarks.pdf) keeps every losing number. PyNear's
@@ -446,6 +447,8 @@ Single machine, N=20k, ef_construction=200, ef_search=256, k=10, 8-thread build:
 | 768 | 349 µs | **173 µs** | 94 µs | 0.86 / 0.86 |
 
 **Build time** at N=20k, d=128 with `n_threads=24`: pynear 0.25s vs Faiss 0.26s — competitive.
+
+Full recall-vs-throughput frontier against Faiss `IndexHNSWFlat`/`IndexHNSWSQ` (subprocess-isolated, ef sweep 16–1024): [results/hnsw_faiss_comparison.md](./results/hnsw_faiss_comparison.md) — Faiss leads the float pair 1.6–1.9×; PyNear leads the quantised pair through the mid-recall band. Reproduce with `python -m pynear.benchmark.hnsw_faiss_benchmark`.
 
 Use `HNSWL2IndexSQ8` when memory matters: ~4× smaller index, query 2-3× faster than the float HNSW. Recall drops ~1-3% at the same `ef_search`.
 

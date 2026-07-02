@@ -718,6 +718,77 @@ Build time grows roughly linearly with $d$ for both methods.
 Section~\ref{sec:build-scale} examines how build time scales with $N$.
 
 % =============================================================================
+\section{Graph-Based Search: HNSW vs.\ Faiss HNSW}
+\label{sec:hnsw}
+
+PyNear's HNSW family (\texttt{HNSWL2Index} and the int8-quantised
+\texttt{HNSWL2IndexSQ8}) is compared against its direct Faiss counterparts,
+\texttt{IndexHNSWFlat} and \texttt{IndexHNSWSQ} (8-bit scalar quantiser), on
+$N = 100\,000$ clustered 128-D float vectors: identical data, $M = 16$,
+$\mathrm{ef}_{\mathrm{construction}} = 200$, batches of 1\,000 queries at
+$k = 10$ on 24 threads, sweeping
+$\mathrm{ef}_{\mathrm{search}} \in \{16, \dots, 1024\}$ to trace each
+system's recall--throughput frontier (best of 5 runs per point).  Faiss is
+measured in a Faiss-only subprocess (Section~\ref{sec:setup});
+reproduce with \texttt{python -m pynear.benchmark.hnsw\_faiss\_benchmark}.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  benchstyle,
+  ymode=log,
+  xmin=0.27, xmax=0.92,
+  ymin=15000, ymax=2000000,
+  xlabel={Recall@10},
+  ylabel={Queries per second (log scale)},
+  legend style={at={(0.03,0.03)}, anchor=south west},
+  legend cell align=left,
+]
+\addplot[color=colRed, mark=*]
+  coordinates {(0.314,676194)(0.427,458828)(0.551,261511)(0.683,146987)(0.773,86045)(0.819,55735)(0.851,40248)};
+\addlegendentry{PyNear \texttt{HNSWL2Index}}
+\addplot[color=colRed, dashed, mark=o]
+  coordinates {(0.331,645550)(0.440,425707)(0.547,254610)(0.626,140701)(0.694,74488)(0.739,43953)(0.796,28213)};
+\addlegendentry{PyNear \texttt{HNSWL2IndexSQ8}}
+\addplot[color=colOrange, mark=square*]
+  coordinates {(0.308,1189162)(0.429,729124)(0.569,395743)(0.694,214315)(0.772,122969)(0.843,64446)(0.892,23327)};
+\addlegendentry{Faiss \texttt{IndexHNSWFlat}}
+\addplot[color=colOrange, dashed, mark=square]
+  coordinates {(0.286,1368530)(0.396,863315)(0.537,477410)(0.659,99451)(0.742,47666)(0.815,27989)(0.868,30965)};
+\addlegendentry{Faiss \texttt{IndexHNSWSQ} (8-bit)}
+\end{axis}
+\end{tikzpicture}
+\caption{HNSW recall--throughput frontiers ($N = 10^5$, $d = 128$,
+  $k = 10$, $M = 16$, 24 threads, log-scale QPS; markers are
+  $\mathrm{ef}_{\mathrm{search}} = 16, 32, 64, 128, 256, 512, 1024$ left
+  to right on each curve).  Faiss \texttt{IndexHNSWFlat} leads the float
+  comparison at every operating point; in the quantised pair, PyNear's
+  \texttt{HNSWL2IndexSQ8} is ahead of Faiss \texttt{IndexHNSWSQ} through
+  the mid-recall band.  The recall ceiling reflects tie-heavy clustered
+  data, not divergent graph quality.}
+\label{fig:hnsw-pareto}
+\end{figure}
+
+The float comparison goes to Faiss: \texttt{IndexHNSWFlat} delivers
+$1.6$--$1.9\times$ the throughput of \texttt{HNSWL2Index} at matched
+recall (e.g.\ ${\sim}64\,\mathrm{k}$ vs.\ ${\sim}40\,\mathrm{k}$ QPS near
+$\mathrm{Recall}@10 = 0.85$) and extends to a higher recall ceiling at
+equal $\mathrm{ef}_{\mathrm{search}}$ (0.892 vs.\ 0.851 at
+$\mathrm{ef} = 1024$).  Build times are comparable at 24 threads
+(PyNear 0.92\,s vs.\ Faiss 0.78\,s float; 0.95\,s vs.\ 0.66\,s
+quantised).  The quantised comparison is more even: PyNear's
+\texttt{HNSWL2IndexSQ8} leads Faiss \texttt{IndexHNSWSQ} by up to
+$1.6\times$ through the mid-recall band ($140.7$k vs.\ $99.5$k QPS at
+$\mathrm{ef} = 128$; $74.5$k vs.\ $47.7$k at $\mathrm{ef} = 256$), while
+Faiss regains the lead at the extremes of the sweep.  Where PyNear's HNSW
+family differentiates itself is capability rather than raw float
+throughput: a binary/Hamming HNSW, the MIH-seeded variant of
+Section~\ref{sec:approx-binary}, in-place \texttt{add}/\texttt{remove}/%
+\texttt{rebuild} with filtered search, and per-shard pickling via
+\texttt{ShardedHNSWIndex}.
+
+% =============================================================================
 \section{Approximate Binary-Descriptor Search}
 \label{sec:approx-binary}
 
