@@ -53,7 +53,8 @@ all three regimes instead of forcing every problem through the same tool:
 
 - **Low-to-mid dimensions (a few up to ~256-D)** — exact tree search wins. A
   **VP-Tree** prunes by distance to vantage points and returns the *true*
-  nearest neighbours, no recall loss, no tuning.
+  nearest neighbours, no recall loss, no tuning — [12–13× faster than
+  Faiss's brute-force scan](#pynear-vs-faiss-in-numbers) on the same data.
 - **High-dimensional float vectors (512–1024-D embeddings)** — exact pruning
   collapses (the *curse of dimensionality*), so **IVF-Flat** trades a sliver of
   recall for large speed-ups.
@@ -88,6 +89,38 @@ all three regimes instead of forcing every problem through the same tool:
 | **Zero native deps** | ✅ NumPy only | ❌ compiled lib + optional GPU | ❌ | ❌ |
 
 [Full comparison →](./docs/comparison.md)
+
+### PyNear vs Faiss, in numbers
+
+All measured July 2026 on a 24-core machine, **with Faiss running in its own
+process** so the numbers are fair (two OpenMP runtimes in one process throttle
+Faiss's scans — see the methodology note below). Reproducible via
+`demo_faiss_comparison.py` and the [benchmark suite](./pynear/benchmark/).
+
+| Workload | PyNear | Faiss | Verdict |
+|---|---|---|---|
+| **Exact float k-NN**, 2.5M × 16-D, batch of 16 | `VPTreeL2Index` **0.86 ms** | `IndexFlatL2` 11.4 ms | **PyNear 13× faster** — and exact, no recall loss |
+| **Exact float k-NN**, 120k × 128-D | `VPTreeL2Index` **0.49 ms** | `IndexFlatL2` 5.7 ms | **PyNear 12× faster** |
+| **512-bit near-duplicates**, 1M codes, 100% Recall@10 | `MIHBinaryIndex` **114,039 QPS** | `IndexBinaryFlat` 3,341 QPS | **PyNear 34× faster** |
+| Same workload vs Faiss's own MIH | **114,039 QPS** | `IndexBinaryMultiHash` 46 QPS | **PyNear ~2,500× faster** |
+| **SIFT1M 128-bit**, MIH vs MIH at matched recall | — | — | **PyNear up to 3.5× faster** across the recall curve |
+| **IVF build time**, 50k float vectors, 128–1024-D | **0.37–1.5 s** | 0.51–3.7 s | **PyNear 1.4–2.4× faster builds** |
+| Exact **binary** k-NN (brute force's home turf) | `VPTreeBinaryIndex` 3.2–15.9 ms | `IndexBinaryFlat` **0.15–0.29 ms** | **Faiss wins at every width** — use PyNear's MIH/IVF for binary instead |
+| Approximate **float** L2 raw latency, 128–1024-D | `IVFFlatL2Index` 5.6–21.5 ms | `IndexIVFFlat` **0.2–2.8 ms** | **Faiss wins 8–32×** (BLAS inner scan) |
+
+The last two rows are deliberate: where Faiss is better we say so, and the
+[full PDF report](./docs/benchmarks.pdf) keeps every losing number. PyNear's
+case is **exact search that prunes** (metric trees beat brute force by an
+order of magnitude below ~256-D), **wide-binary/near-duplicate retrieval**
+(MIH's pigeonhole guarantee at 100% recall), zero native dependencies, and a
+one-line `pip install`.
+
+> **Methodology note:** PyNear links libgomp and `faiss-cpu` links libomp.
+> Loaded into one process, the two OpenMP runtimes contend and Faiss's flat
+> scans degrade dramatically (~78× on binary popcount scans here). Benchmarks
+> that compare the two libraries in a single process — including some of our
+> own older numbers — flatter PyNear. All Faiss figures above were measured
+> in a Faiss-only subprocess.
 
 ---
 
