@@ -796,7 +796,48 @@ complementary $14\times$ speedup with a fixed, predictable per-cluster scan
 cost.  (Earlier editions of this report quoted a $257\times$ MIH speedup;
 that figure compared against an in-process Faiss scan that was serialised
 by the OpenMP runtime clash described above and is superseded by the fair
-$34\times$ figure reported here.)
+$34\times$ figure reported here.)  Figure~\ref{fig:binary-512-qps}
+visualises the four methods on a logarithmic throughput axis.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  benchstyle,
+  height=0.5\linewidth,
+  ybar,
+  bar width=34pt,
+  ymode=log,
+  log origin=infty,
+  ymin=10, ymax=2000000,
+  ylabel={Queries per second (log scale)},
+  symbolic x coords={PyNear MIH, PyNear IVF, Faiss Flat, Faiss MIH},
+  xtick={PyNear MIH, PyNear IVF, Faiss Flat, Faiss MIH},
+  x tick label style={font=\footnotesize},
+  enlarge x limits=0.18,
+  nodes near coords,
+  every node near coord/.append style={font=\footnotesize},
+  point meta=explicit symbolic,
+]
+\addplot[ybar, bar shift=0pt, fill=colRed!85,    draw=colRed!50!black]
+  coordinates {(PyNear MIH, 114039) [114\,039]};
+\addplot[ybar, bar shift=0pt, fill=colBrown!75,  draw=colBrown!50!black]
+  coordinates {(PyNear IVF, 47993) [47\,993]};
+\addplot[ybar, bar shift=0pt, fill=colOrange!85, draw=colOrange!50!black]
+  coordinates {(Faiss Flat, 3341) [3\,341]};
+\addplot[ybar, bar shift=0pt, fill=colPurple!75, draw=colPurple!50!black]
+  coordinates {(Faiss MIH, 46) [46]};
+\end{axis}
+\end{tikzpicture}
+\caption{Throughput at 100\% Recall@10 for 512-bit near-duplicate
+  retrieval ($N = 10^6$, $k=10$, 24 threads; data of
+  Table~\ref{tab:binary-512}, log scale).  PyNear
+  \texttt{MIHBinaryIndex} sustains $34\times$ the throughput of Faiss's
+  subprocess-isolated exact scan; Faiss's own MIH implementation is
+  ${\sim}2{,}500\times$ slower at this descriptor width.}
+\label{fig:binary-512-qps}
+\end{figure}
+
 
 \subsection{Narrow Descriptors: SIFT1M, 128-bit Sign-Quantised ($N = 10^6$)}
 \label{sec:approx-binary-sift}
@@ -841,7 +882,8 @@ the 0.845 recall ceiling at 56\,859 QPS ($n_{\mathrm{probe}}=125$),
 $2.4\times$ the throughput of the exact Faiss scan and ${\sim}2385\times$
 the naive NumPy baseline.  At matched recall, PyNear's MIH is nevertheless
 consistently competitive with Faiss's own \texttt{IndexBinaryMultiHash}
-(Table~\ref{tab:mih-vs-faiss-mih}).
+(Table~\ref{tab:mih-vs-faiss-mih}); Figure~\ref{fig:sift-pareto} shows the
+full recall--throughput landscape.
 
 \begin{table}[h]
 \centering
@@ -863,6 +905,44 @@ consistently competitive with Faiss's own \texttt{IndexBinaryMultiHash}
 \bottomrule
 \end{tabular}
 \end{table}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  benchstyle,
+  ymode=log,
+  xmin=0.24, xmax=0.88,
+  ymin=30, ymax=400000,
+  xlabel={Recall@10},
+  ylabel={Queries per second (log scale)},
+  legend style={at={(0.03,0.03)}, anchor=south west},
+  legend cell align=left,
+]
+\addplot[color=colRed, mark=*]
+  coordinates {(0.466,38554)(0.652,18158)(0.799,7326)(0.832,4254)(0.841,1541)};
+\addlegendentry{PyNear \texttt{MIHBinaryIndex} ($m=8$, $r=4..24$)}
+\addplot[color=colBrown, mark=square*]
+  coordinates {(0.825,125776)(0.842,87783)(0.845,56859)};
+\addlegendentry{PyNear \texttt{IVFFlatBinaryIndex} ($n_{\mathrm{probe}}=31..125$)}
+\addplot[color=colPurple, mark=triangle*]
+  coordinates {(0.28,52346)(0.53,15881)(0.73,3456)(0.82,689)(0.84,166)};
+\addlegendentry{Faiss \texttt{IndexBinaryMultiHash} ($n_{\mathrm{flip}}=1..5$)}
+\addplot[color=colOrange, dashed, no marks, domain=0.24:0.88] {23572};
+\addlegendentry{Faiss \texttt{IndexBinaryFlat} (exact, 23\,572 QPS)}
+\end{axis}
+\end{tikzpicture}
+\caption{SIFT1M 128-bit: throughput vs.\ Recall@10 ($N = 10^6$, $k = 10$,
+  500 queries, 24 threads; log-scale QPS).  Up and to the right is better.
+  Each marker is one measured operating point from
+  Tables~\ref{tab:binary-sift} and~\ref{tab:mih-vs-faiss-mih}.  PyNear's
+  MIH sweep dominates Faiss's \texttt{IndexBinaryMultiHash} across the
+  curve, and \texttt{IVFFlatBinaryIndex} dominates everything at the
+  ${\sim}0.845$ tie-limited recall ceiling; the dashed line is Faiss's
+  subprocess-isolated exact scan, which beats both MIH implementations
+  above the ${\sim}0.5$ recall mark — the caveat stated in the text.}
+\label{fig:sift-pareto}
+\end{figure}
 
 \subsection{MIH Parametrisation Guidelines}
 \label{sec:mih-params}
