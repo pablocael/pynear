@@ -12,8 +12,9 @@ What sharding buys you
   speed; cross-shard queries also work but scan all shards.
 - **Faster incremental rebuilds.** Only the affected shard rebuilds
   on a big add/remove, not the whole index.
-- **Parallel build for free.** Each shard builds independently —
-  one OS thread per shard.
+- **Parallel build for free.** Shard builds are dispatched across a
+  shared thread pool, so independent shards build concurrently
+  (bounded so per-index OpenMP threads don't oversubscribe cores).
 - **Manageable pickle files.** Each shard is a normal pickle the
   user can copy, version, gzip, or ship to S3 individually.
 
@@ -56,8 +57,9 @@ from __future__ import annotations
 import json
 import os
 import pickle
+import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -104,6 +106,9 @@ class ShardedHNSWIndex:
         self._ctor_kwargs = dict(index_ctor_kwargs)
         # shard_key (str/int) → pynear index instance
         self._shards: Dict[ShardKey, Any] = {}
+        # Lazily created, cached thread pool (not picklable — see __getstate__).
+        self._executor: Optional[ThreadPoolExecutor] = None
+        self._executor_size: int = 0
 
     # ─── Build / mutate ─────────────────────────────────────────────────
 
@@ -117,20 +122,30 @@ class ShardedHNSWIndex:
         vectors: 2D array, shape (N, D)
         shard_keys: per-row label, length N. Each unique value becomes
             a shard. Strings or ints both work.
+
+        Shards build in parallel on a thread pool (the underlying
+        index releases the GIL during `set`). Concurrency is capped
+        so that per-index OpenMP threads (`n_threads` ctor kwarg)
+        don't oversubscribe the machine.
         """
         if len(shard_keys) != len(vectors):
             raise ValueError(
                 f"shard_keys length {len(shard_keys)} != vectors length {len(vectors)}"
             )
         # Group row indices by shard key, then build each shard
-        groups: Dict[ShardKey, List[int]] = {}
-        for i, k in enumerate(shard_keys):
-            groups.setdefault(k, []).append(i)
+        groups = self._group_by_key(shard_keys)
+        items = list(groups.items())
 
-        self._shards.clear()
-        for key, row_ids in groups.items():
+        def _build(item: Tuple[ShardKey, List[int]]) -> Tuple[ShardKey, Any]:
+            key, row_ids = item
             idx = self._index_cls(**self._ctor_kwargs)
             idx.set(vectors[row_ids])
+            return key, idx
+
+        self._shards.clear()
+        # Results arrive in submission order, so shard insertion order
+        # (and thus cross-shard tie-breaking) matches the serial build.
+        for key, idx in self._map_parallel(_build, items, self._build_concurrency(len(items))):
             self._shards[key] = idx
 
     def add(
@@ -159,15 +174,22 @@ class ShardedHNSWIndex:
             new_ids[shard] = list(shard_idx.add(vectors))
             return new_ids
 
-        # Per-row routing
+        # Per-row routing: fan the per-shard appends out on the thread
+        # pool (bounded like `set` to avoid OpenMP oversubscription).
+        assert shard_keys is not None  # guaranteed by the exactly-one check above
         if len(shard_keys) != len(vectors):
             raise ValueError("shard_keys length must match vectors length")
-        groups: Dict[ShardKey, List[int]] = {}
-        for i, k in enumerate(shard_keys):
-            groups.setdefault(k, []).append(i)
-        for key, row_ids in groups.items():
-            shard_idx = self._get_or_create(key)
-            new_ids[key] = list(shard_idx.add(vectors[row_ids]))
+        groups = self._group_by_key(shard_keys)
+        # Create missing shards up-front on this thread so shard dict
+        # insertion order stays deterministic (first-appearance order).
+        items = [(key, self._get_or_create(key), row_ids) for key, row_ids in groups.items()]
+
+        def _add(item: Tuple[ShardKey, Any, List[int]]) -> Tuple[ShardKey, List[int]]:
+            key, shard_idx, row_ids = item
+            return key, list(shard_idx.add(vectors[row_ids]))
+
+        for key, ids in self._map_parallel(_add, items, self._build_concurrency(len(items))):
+            new_ids[key] = ids
         return new_ids
 
     def remove(self, node_id: int, shard: ShardKey) -> None:
@@ -198,8 +220,8 @@ class ShardedHNSWIndex:
         """Top-k nearest neighbours across one or all shards.
 
         shard: if provided, query only that shard (fast — one HNSW
-            call). If None, query every shard in parallel via a
-            ThreadPool and merge results.
+            call). If None, query every shard in parallel on a cached
+            per-instance thread pool and merge results.
         n_workers: parallelism for cross-shard queries (default:
             number of shards, capped at os.cpu_count()).
 
@@ -228,32 +250,56 @@ class ShardedHNSWIndex:
             i, d = idx.searchKNN(queries, k)
             return key, i, d
 
-        per_shard_results: List[Tuple[ShardKey, List, List]] = []
-        if n_workers <= 1 or len(shard_items) <= 1:
-            per_shard_results = [_run(it) for it in shard_items]
-        else:
-            with ThreadPoolExecutor(max_workers=n_workers) as ex:
-                per_shard_results = list(ex.map(_run, shard_items))
+        per_shard_results: List[Tuple[ShardKey, List, List]] = self._map_parallel(
+            _run, shard_items, n_workers
+        )
 
         # Merge per-query: combine all shards' top-k, re-sort, take top-k.
         # Each shard returns farthest-first within top-k; we materialise
         # nearest-first for merging then re-flip on the way out to keep
         # the established pynear convention.
+        #
+        # Vectorised: pad each shard's (possibly ragged) rows into a
+        # (n_queries, n_shards*k) distance matrix — columns laid out
+        # shard-major, nearest-first within each shard — then a single
+        # stable argsort per query reproduces the historical Python
+        # stable sort exactly (ties keep shard-then-position order).
         n_queries = len(queries)
+        n_shards = len(per_shard_results)
+        shard_key_list: List[ShardKey] = [key for key, _, _ in per_shard_results]
+
+        total_cols = n_shards * k
+        dist_mat = np.full((n_queries, total_cols), np.inf, dtype=np.float64)
+        id_mat = np.full((n_queries, total_cols), -1, dtype=np.int64)
+        counts = np.zeros(n_queries, dtype=np.int64)
+        for s, (_key, idx_per_q, dist_per_q) in enumerate(per_shard_results):
+            base = s * k
+            for qi in range(min(n_queries, len(idx_per_q))):
+                m = len(idx_per_q[qi])
+                if m == 0:
+                    continue
+                # Shard rows are farthest-first → reverse to nearest-first
+                dist_mat[qi, base:base + m] = np.asarray(dist_per_q[qi], dtype=np.float64)[::-1]
+                id_mat[qi, base:base + m] = np.asarray(idx_per_q[qi], dtype=np.int64)[::-1]
+                counts[qi] += m
+
+        order = np.argsort(dist_mat, axis=1, kind="stable")[:, :k]  # nearest first
+        top_dist = np.take_along_axis(dist_mat, order, axis=1)
+        top_ids = np.take_along_axis(id_mat, order, axis=1)
+        top_shard = order // k  # column → shard ordinal
+
         out_idx: List[List[Tuple[ShardKey, int]]] = [[] for _ in range(n_queries)]
         out_dist: List[List[float]] = [[] for _ in range(n_queries)]
         for qi in range(n_queries):
-            combined: List[Tuple[float, ShardKey, int]] = []
-            for key, idx_per_q, dist_per_q in per_shard_results:
-                if qi >= len(idx_per_q): continue
-                # Each shard's row is farthest-first → reverse for nearest-first sort
-                for shard_local_id, dist in zip(idx_per_q[qi][::-1], dist_per_q[qi][::-1]):
-                    combined.append((float(dist), key, int(shard_local_id)))
-            combined.sort(key=lambda t: t[0])  # nearest first
-            combined = combined[:k]
+            m = int(min(k, counts[qi]))  # drop +inf padding
+            if m == 0:
+                continue
             # Flip back to farthest-first to match pynear convention
-            out_idx[qi] = [(key, sid) for _, key, sid in combined[::-1]]
-            out_dist[qi] = [d for d, _, _ in combined[::-1]]
+            out_idx[qi] = [
+                (shard_key_list[s], int(sid))
+                for s, sid in zip(top_shard[qi, m - 1::-1], top_ids[qi, m - 1::-1])
+            ]
+            out_dist[qi] = [float(d) for d in top_dist[qi, m - 1::-1]]
 
         return out_idx, out_dist
 
@@ -261,11 +307,12 @@ class ShardedHNSWIndex:
         self,
         queries: np.ndarray,
         shard: Optional[ShardKey] = None,
-    ) -> Tuple[List[Tuple[ShardKey, int]], List[float]]:
+    ) -> Tuple[List[Tuple[Optional[ShardKey], int]], List[float]]:
         """Top-1 nearest neighbour. Returns parallel lists of
-        (shard_key, shard_local_id) tuples and distances."""
+        (shard_key, shard_local_id) tuples and distances; rows with no
+        match yield ``(None, -1)`` with distance ``inf``."""
         idx, dist = self.searchKNN(queries, k=1, shard=shard)
-        out_idx: List[Tuple[ShardKey, int]] = []
+        out_idx: List[Tuple[Optional[ShardKey], int]] = []
         out_dist: List[float] = []
         for row_i, row_d in zip(idx, dist):
             if row_i:
@@ -365,6 +412,89 @@ class ShardedHNSWIndex:
         return inst
 
     # ─── Internal helpers ───────────────────────────────────────────────
+
+    def __getstate__(self) -> Dict[str, Any]:
+        # ThreadPoolExecutors aren't picklable; drop the cached pool.
+        state = self.__dict__.copy()
+        state["_executor"] = None
+        state["_executor_size"] = 0
+        return state
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self._executor = None
+        self._executor_size = 0
+
+    def _get_executor(self, min_workers: int) -> ThreadPoolExecutor:
+        """Return the cached per-instance thread pool, lazily created.
+
+        The pool is sized `min(32, cpu_count)` by default and only
+        recreated (grown) if a caller explicitly needs more workers.
+        """
+        # Backwards-compat with instances unpickled from older versions
+        # that never had the attributes.
+        ex = getattr(self, "_executor", None)
+        size = getattr(self, "_executor_size", 0)
+        want = max(min(32, (os.cpu_count() or 4)), min_workers)
+        if ex is None or size < min_workers:
+            if ex is not None:
+                ex.shutdown(wait=False)
+            ex = ThreadPoolExecutor(max_workers=want, thread_name_prefix="pynear-shard")
+            self._executor = ex
+            self._executor_size = want
+        return ex
+
+    def _map_parallel(
+        self,
+        fn: Callable[[Any], Any],
+        items: Sequence[Any],
+        max_concurrency: int,
+    ) -> List[Any]:
+        """Run `fn` over `items` on the cached pool, preserving order.
+
+        Worker exceptions propagate to the caller (re-raised while the
+        result list is consumed). `max_concurrency` bounds how many
+        `fn` calls run simultaneously; <=1 (or a single item) runs
+        serially on the calling thread.
+        """
+        if max_concurrency <= 1 or len(items) <= 1:
+            return [fn(it) for it in items]
+        ex = self._get_executor(min(max_concurrency, len(items)))
+        if max_concurrency < min(self._executor_size, len(items)):
+            # Pool is wider than the requested concurrency — bound the
+            # number of in-flight fn calls without shrinking the pool.
+            sem = threading.Semaphore(max_concurrency)
+
+            def bounded(it: Any) -> Any:
+                with sem:
+                    return fn(it)
+
+            return list(ex.map(bounded, items))
+        return list(ex.map(fn, items))
+
+    def _build_concurrency(self, n_tasks: int) -> int:
+        """How many shard builds/adds may run at once.
+
+        Each underlying index may itself run `n_threads` OpenMP threads
+        during set/add, so concurrent builds are capped at
+        cpu_count // n_threads to avoid oversubscription.
+        """
+        cpu = os.cpu_count() or 4
+        n_threads = self._ctor_kwargs.get("n_threads", 1)
+        try:
+            n_threads = int(n_threads)
+        except (TypeError, ValueError):
+            n_threads = 1
+        cap = max(1, cpu // n_threads) if n_threads > 1 else cpu
+        return max(1, min(n_tasks, cap))
+
+    @staticmethod
+    def _group_by_key(shard_keys: Sequence[ShardKey]) -> Dict[ShardKey, List[int]]:
+        """Group row indices by their per-row shard key."""
+        groups: Dict[ShardKey, List[int]] = {}
+        for i, k in enumerate(shard_keys):
+            groups.setdefault(k, []).append(i)
+        return groups
 
     def _get_or_create(self, key: ShardKey) -> Any:
         if key not in self._shards:

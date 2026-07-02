@@ -14,6 +14,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -55,6 +56,67 @@ template <typename distT> struct DistNodeMax {
     }
 };
 
+// Thread-safe pool of versioned visited-stamp arrays (hnswlib pattern).
+// A search checks a list out (RAII VisitedGuard below), bumps its epoch,
+// stamps nodes it visits, and returns the list on scope exit. The pool
+// grows on demand, so it works for any number of concurrent searches —
+// including searches running on non-OpenMP threads — and is just a
+// vector pop/push per search when uncontended.
+class VisitedListPool {
+public:
+    struct VisitedList {
+        std::vector<uint32_t> stamps;
+        uint32_t version = 0;
+        // Start a fresh visit epoch and make sure `stamps` covers n nodes.
+        // Same versioning scheme as before: a node is "visited" iff its
+        // stamp equals the current epoch; on wrap-around we zero the array.
+        uint32_t advance(size_t n) {
+            if (stamps.size() < n) stamps.resize(n, 0u);
+            ++version;
+            if (version == 0) {
+                std::fill(stamps.begin(), stamps.end(), 0u);
+                version = 1;
+            }
+            return version;
+        }
+    };
+
+    std::unique_ptr<VisitedList> acquire() {
+        {
+            std::lock_guard<std::mutex> lock(_mtx);
+            if (!_free.empty()) {
+                std::unique_ptr<VisitedList> vl = std::move(_free.back());
+                _free.pop_back();
+                return vl;
+            }
+        }
+        return std::make_unique<VisitedList>();
+    }
+
+    void release(std::unique_ptr<VisitedList> vl) {
+        std::lock_guard<std::mutex> lock(_mtx);
+        _free.push_back(std::move(vl));
+    }
+
+private:
+    std::mutex _mtx;
+    std::vector<std::unique_ptr<VisitedList>> _free;
+};
+
+// RAII checkout of a VisitedList from a VisitedListPool.
+class VisitedGuard {
+public:
+    explicit VisitedGuard(VisitedListPool& pool) : _pool(&pool), _vl(pool.acquire()) {}
+    ~VisitedGuard() { _pool->release(std::move(_vl)); }
+    VisitedGuard(const VisitedGuard&) = delete;
+    VisitedGuard& operator=(const VisitedGuard&) = delete;
+    VisitedListPool::VisitedList& operator*() { return *_vl; }
+
+private:
+    VisitedListPool* _pool;
+    std::unique_ptr<VisitedListPool::VisitedList> _vl;
+};
+
 template <typename T, typename distT, distT (*distance_fn)(const T&, const T&)>
 class HNSWIndex {
 public:
@@ -68,31 +130,38 @@ public:
           _entry_point(-1),
           _top_level(-1),
           _dim(0),
-          _rng(seed),
           _seed_used(seed),
           _n_threads(n_threads) {
         if (M < 2) throw std::invalid_argument("M must be >= 2");
         if (ef_construction < 1) throw std::invalid_argument("ef_construction must be >= 1");
     }
 
-    int n_threads() const { return _n_threads; }
-    void set_n_threads(int n) { _n_threads = n; }
-
     // Profiling: total distance calls since last reset. Useful for comparing
     // beam-search efficiency against Faiss's hnsw_stats.ndis.
-    mutable uint64_t _dist_calls = 0;
-    uint64_t dist_calls() const { return _dist_calls; }
-    void reset_dist_calls() { _dist_calls = 0; }
+    //
+    // Wrapped in a copyable relaxed-atomic so parallel batch queries can
+    // bump it without a data race — a bare std::atomic member would delete
+    // the index's move constructor (adapters are returned by value for
+    // pybind11 pickle).
+    struct RelaxedCounter {
+        std::atomic<uint64_t> value{0};
+        RelaxedCounter() = default;
+        RelaxedCounter(const RelaxedCounter& o) noexcept
+            : value(o.value.load(std::memory_order_relaxed)) {}
+        RelaxedCounter& operator=(const RelaxedCounter& o) noexcept {
+            value.store(o.value.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            return *this;
+        }
+        void operator+=(uint64_t n) noexcept { value.fetch_add(n, std::memory_order_relaxed); }
+    };
+    mutable RelaxedCounter _dist_calls;
+    uint64_t dist_calls() const { return _dist_calls.value.load(std::memory_order_relaxed); }
+    void reset_dist_calls() { _dist_calls.value.store(0, std::memory_order_relaxed); }
 
     void set_ef(size_t ef_search) { _ef_search = ef_search; }
     size_t ef_search() const { return _ef_search; }
     size_t size() const { return _examples.size(); }
     size_t dim() const { return _dim; }
-    int32_t entry_point() const { return _entry_point; }
-    int32_t top_level() const { return _top_level; }
-    const std::vector<float>& flat_backing() const { return _flat_backing; }
-    const std::vector<int32_t>& levels() const { return _levels; }
-    const std::vector<std::vector<std::vector<int32_t>>>& adjacency() const { return _adjacency; }
 
     // Build the index from a batch of input vectors (rebuilds from scratch).
     void set(const std::vector<T>& data) {
@@ -137,6 +206,7 @@ public:
         _layer0_adj.assign(_examples.size() * _M_max0, -1);
         _layer0_count.assign(_examples.size(), 0);
         _deleted.assign(_examples.size(), 0u);
+        _num_deleted = 0;
         if constexpr (std::is_same_v<T, FlatSpan>) {
             // Precompute ||v_i||² for the dot-product distance trick.
             _norms_sq.assign(_examples.size(), 0.0f);
@@ -146,9 +216,10 @@ public:
         }
         init_thread_resources(_examples.size());
 
-        _during_build = true;
         if (_n_threads <= 1) {
             // Sequential build — fully deterministic given the seed.
+            // _during_build stays false so read_neighbours() reads the
+            // adjacency in place, with no locking or copying.
             for (size_t i = 0; i < _examples.size(); i++) {
                 add_point(static_cast<int32_t>(i));
             }
@@ -157,12 +228,13 @@ public:
             // modifications; reads in search_layer take shared locks via
             // read_neighbours(). Graph topology is non-deterministic across
             // runs but search quality is comparable to the sequential build.
+            _during_build = true;
 #pragma omp parallel for schedule(dynamic, 64) num_threads(_n_threads)
             for (int64_t i = 0; i < (int64_t)_examples.size(); i++) {
                 add_point(static_cast<int32_t>(i));
             }
+            _during_build = false;
         }
-        _during_build = false;
     }
 
     // ─── Incremental mutation API ──────────────────────────────────────────
@@ -193,14 +265,17 @@ public:
 
         // Extend storage in lockstep with set()'s allocation shape.
         if constexpr (std::is_same_v<T, FlatSpan>) {
+            const float* old_base = _flat_backing.data();
             _flat_backing.resize(new_n * _dim);
             for (size_t i = 0; i < added; i++) {
                 std::memcpy(_flat_backing.data() + (old_n + i) * _dim,
                             data[i].ptr, _dim * sizeof(float));
             }
             _examples.resize(new_n);
-            // Repoint every span — _flat_backing may have reallocated.
-            for (size_t i = 0; i < new_n; i++) {
+            // Repoint spans only if _flat_backing actually reallocated;
+            // otherwise only the freshly appended rows need pointers.
+            const size_t repoint_from = (_flat_backing.data() == old_base) ? old_n : 0;
+            for (size_t i = repoint_from; i < new_n; i++) {
                 _examples[i] = FlatSpan{_flat_backing.data() + i * _dim, _dim};
             }
             _norms_sq.resize(new_n);
@@ -208,12 +283,14 @@ public:
                 _norms_sq[old_n + i] = vec_l2sq_avx2(_examples[old_n + i].ptr, _dim);
             }
         } else if constexpr (std::is_same_v<T, SQ8Span>) {
+            const int8_t* old_base = _sq8_backing.data();
             _sq8_backing.resize(new_n * _dim);
             for (size_t i = 0; i < added; i++) {
                 std::memcpy(_sq8_backing.data() + (old_n + i) * _dim, data[i].ptr, _dim);
             }
             _examples.resize(new_n);
-            for (size_t i = 0; i < new_n; i++) {
+            const size_t repoint_from = (_sq8_backing.data() == old_base) ? old_n : 0;
+            for (size_t i = repoint_from; i < new_n; i++) {
                 _examples[i] = SQ8Span{_sq8_backing.data() + i * _dim, _dim};
             }
         } else {
@@ -227,40 +304,43 @@ public:
         _layer0_adj.resize(new_n * _M_max0, -1);
         _layer0_count.resize(new_n, 0);
         _deleted.resize(new_n, 0u);
-        // Per-thread visited buffers must cover the new node id space.
-        for (auto& v : _visited_per_thread) v.resize(new_n, 0u);
-        // Re-allocate the per-node lock array; std::shared_mutex is not
-        // movable so we have to re-create. add() is the single mutator
-        // here — concurrent searches on the same index are disallowed
-        // (caller's responsibility), so the realloc is safe.
-        _node_locks = std::unique_ptr<std::shared_mutex[]>(new std::shared_mutex[new_n]);
-        _num_locks = new_n;
+        // Visited-stamp arrays live in the pool and grow lazily on checkout
+        // (VisitedList::advance), so nothing to resize here.
+        //
+        // Grow the per-node lock array geometrically. std::shared_mutex is
+        // not movable so growth means re-creating the whole array — doing
+        // that only on capacity exhaustion (doubling) keeps add() amortised
+        // O(added) instead of O(N) per call. Locks are only ever taken
+        // during a build/weave; add() is the single mutator here and
+        // concurrent searches are disallowed (caller's responsibility), so
+        // the realloc is safe.
+        if (new_n > _num_locks) {
+            size_t new_cap = std::max(new_n, _num_locks * 2);
+            _node_locks = std::unique_ptr<std::shared_mutex[]>(new std::shared_mutex[new_cap]);
+            _num_locks = new_cap;
+        }
 
-        _during_build = true;
-#if defined(ENABLE_OMP_PARALLEL)
-        // Parallel weave just like set(). Each add_point() takes
-        // per-node shared_mutex locks via read_neighbours() / its
-        // own write paths, so multiple inserters don't corrupt each
-        // other's adjacency lists. The order in which new ids get
-        // inserted is non-deterministic across threads, so the
-        // resulting graph differs slightly run-to-run — same property
-        // as parallel set().
-        if (_n_threads > 1) {
-            #pragma omp parallel for num_threads(static_cast<int>(_n_threads)) schedule(dynamic, 16)
-            for (int64_t i = 0; i < static_cast<int64_t>(added); i++) {
-                add_point(static_cast<int32_t>(old_n + i));
-            }
-        } else {
+        if (_n_threads <= 1) {
+            // Sequential weave — _during_build stays false so
+            // read_neighbours() reads the adjacency in place, lock-free.
             for (size_t i = 0; i < added; i++) {
                 add_point(static_cast<int32_t>(old_n + i));
             }
+        } else {
+            // Parallel weave just like set(). Each add_point() takes
+            // per-node shared_mutex locks via read_neighbours() / its
+            // own write paths, so multiple inserters don't corrupt each
+            // other's adjacency lists. The order in which new ids get
+            // inserted is non-deterministic across threads, so the
+            // resulting graph differs slightly run-to-run — same property
+            // as parallel set().
+            _during_build = true;
+#pragma omp parallel for num_threads(static_cast<int>(_n_threads)) schedule(dynamic, 16)
+            for (int64_t i = 0; i < static_cast<int64_t>(added); i++) {
+                add_point(static_cast<int32_t>(old_n + i));
+            }
+            _during_build = false;
         }
-#else
-        for (size_t i = 0; i < added; i++) {
-            add_point(static_cast<int32_t>(old_n + i));
-        }
-#endif
-        _during_build = false;
 
         std::vector<int32_t> ids(added);
         for (size_t i = 0; i < added; i++) ids[i] = static_cast<int32_t>(old_n + i);
@@ -270,7 +350,10 @@ public:
     // Mark a node deleted (lazy). Out-of-range / already-deleted is a no-op.
     void remove(int32_t node_id) {
         if (node_id < 0 || (size_t)node_id >= _deleted.size()) return;
-        _deleted[node_id] = 1u;
+        if (!_deleted[node_id]) {
+            _deleted[node_id] = 1u;
+            _num_deleted++;
+        }
     }
 
     // Compact away tombstones. Builds a fresh graph from the live vectors
@@ -309,14 +392,7 @@ public:
         return mapping;
     }
 
-    // Read-only access to the tombstone bitmap (for tests / introspection).
-    const std::vector<uint8_t>& deleted() const { return _deleted; }
-
-    size_t num_deleted() const {
-        size_t n = 0;
-        for (uint8_t b : _deleted) if (b) n++;
-        return n;
-    }
+    size_t num_deleted() const { return _num_deleted; }
 
     // Query: returns top-k indices and distances per query.
     // Convention matches VPTreeNumpyAdapter: distances within the top-k are
@@ -337,7 +413,7 @@ public:
 
         if (_entry_point < 0 || _examples.empty()) return;
 
-        for (size_t qi = 0; qi < nq; qi++) {
+        auto process_query = [&](size_t qi) {
             std::vector<DistNode<distT>> top = search_one(queries[qi], k, filter_mask);
             // top is sorted nearest → farthest. Reverse for pynear's convention.
             indices_out[qi].reserve(top.size());
@@ -346,9 +422,29 @@ public:
                 indices_out[qi].push_back(it->node_id);
                 distances_out[qi].push_back(it->distance);
             }
+        };
+
+#ifdef _OPENMP
+        if (_n_threads > 1 && nq > 1) {
+            // Queries are independent and the graph is read-only during
+            // search (visited state comes from the thread-safe pool, and
+            // _dist_calls is a relaxed atomic), so each query produces
+            // exactly the same result as in the serial loop below.
+#pragma omp parallel for schedule(dynamic) num_threads(_n_threads)
+            for (int64_t qi = 0; qi < static_cast<int64_t>(nq); qi++) {
+                process_query(static_cast<size_t>(qi));
+            }
+            return;
+        }
+#endif
+        for (size_t qi = 0; qi < nq; qi++) {
+            process_query(qi);
         }
     }
 
+    // Convenience wrapper: k=1 searchKNN unwrapped to flat outputs.
+    // Queries with no eligible result (empty index / fully filtered)
+    // keep the -1 / zero-distance placeholders.
     void search1NN(const std::vector<T>& queries,
                    std::vector<int64_t>& indices_out,
                    std::vector<distT>& distances_out,
@@ -357,13 +453,13 @@ public:
         indices_out.assign(nq, -1);
         distances_out.assign(nq, distT{});
 
-        if (_entry_point < 0 || _examples.empty()) return;
-
+        std::vector<std::vector<int64_t>> indices;
+        std::vector<std::vector<distT>> distances;
+        searchKNN(queries, 1, indices, distances, filter_mask);
         for (size_t qi = 0; qi < nq; qi++) {
-            std::vector<DistNode<distT>> top = search_one(queries[qi], 1, filter_mask);
-            if (!top.empty()) {
-                indices_out[qi] = top.front().node_id;
-                distances_out[qi] = top.front().distance;
+            if (!indices[qi].empty()) {
+                indices_out[qi] = indices[qi].front();
+                distances_out[qi] = distances[qi].front();
             }
         }
     }
@@ -422,16 +518,25 @@ public:
 
         // Reconstitute the per-node "layer 0 + upper" view for pickle.
         // Layer 0 lives in the flat buffer; upper layers in the nested vector.
+        //
+        // Layer count comes from _levels[i] + 1, NOT _adjacency[i].size():
+        // level-0 nodes keep their _adjacency entry empty (memory saving),
+        // but they still serialise the same "1 layer" record as before —
+        // for nodes with upper layers _adjacency[i].size() == _levels[i]+1,
+        // so the emitted bytes are identical to the historical format.
         for (size_t i = 0; i < _adjacency.size(); i++) {
             adj_offsets.push_back(static_cast<int32_t>(flat_adj.size()));
             int32_t before = static_cast<int32_t>(flat_adj.size());
-            int32_t nlayers = static_cast<int32_t>(_adjacency[i].size());
+            int32_t nlayers = _levels[i] + 1;
             // sizes header — layer 0 size from flat buffer, upper from nested
             for (int32_t l = 0; l < nlayers; l++) {
                 if (l == 0) {
                     flat_adj.push_back(_layer0_count[i]);
                 } else {
-                    flat_adj.push_back(static_cast<int32_t>(_adjacency[i][l].size()));
+                    flat_adj.push_back(
+                        l < (int32_t)_adjacency[i].size()
+                            ? static_cast<int32_t>(_adjacency[i][l].size())
+                            : 0);
                 }
             }
             // edge lists — same source as the sizes header above
@@ -441,7 +546,7 @@ public:
                     for (int32_t k = 0; k < cnt; k++) {
                         flat_adj.push_back(_layer0_adj[(size_t)i * _M_max0 + k]);
                     }
-                } else {
+                } else if (l < (int32_t)_adjacency[i].size()) {
                     for (int32_t e : _adjacency[i][l]) flat_adj.push_back(e);
                 }
             }
@@ -468,7 +573,6 @@ public:
         _ef_search = ef_search;
         _mL = 1.0 / std::log(static_cast<double>(M));
         _seed_used = seed;
-        _rng.seed(seed);
 
         _levels = std::move(levels);
         _entry_point = entry;
@@ -510,6 +614,9 @@ public:
         } else {
             _deleted.assign(n, 0u);
         }
+        // The tombstone count is derived state — recompute it once here.
+        _num_deleted = 0;
+        for (uint8_t b : _deleted) if (b) _num_deleted++;
         if constexpr (std::is_same_v<T, FlatSpan>) {
             // Re-populate precomputed norms after deserialise — they aren't
             // serialised because they are a function of the vectors.
@@ -522,7 +629,10 @@ public:
         for (size_t i = 0; i < n; i++) {
             int32_t start = adj_offsets[2 * i];
             int32_t nlayers = _levels[i] + 1;
-            _adjacency[i].resize(nlayers);
+            // Level-0 nodes keep _adjacency[i] empty — their single layer
+            // lives in the flat layer-0 buffer. Works for both old pickles
+            // (which stored "1 layer, empty" for them) and new ones.
+            if (nlayers > 1) _adjacency[i].resize(nlayers);
             int32_t cursor = start;
             std::vector<int32_t> layer_sizes(nlayers);
             for (int32_t l = 0; l < nlayers; l++) {
@@ -545,7 +655,6 @@ public:
     }
 
     size_t M() const { return _M; }
-    size_t M_max0() const { return _M_max0; }
     size_t ef_construction() const { return _ef_construction; }
 
     void clear() {
@@ -554,11 +663,11 @@ public:
         _sq8_backing.clear();
         _levels.clear();
         _deleted.clear();
+        _num_deleted = 0;
         _adjacency.clear();
         _layer0_adj.clear();
         _layer0_count.clear();
-        _visited_per_thread.clear();
-        _visited_version_per_thread.clear();
+        _visited_pool.reset();
         _rng_per_thread.clear();
         _node_locks.reset();
         _num_locks = 0;
@@ -573,7 +682,10 @@ private:
 
     int32_t random_level() {
         std::uniform_real_distribution<double> u(0.0, 1.0);
-        auto& rng = _rng_per_thread.empty() ? _rng : _rng_per_thread[omp_get_thread_num()];
+        // _rng_per_thread is always populated before add_point() can run —
+        // every build path (set / add / deserialize) calls
+        // init_thread_resources() first.
+        auto& rng = _rng_per_thread[omp_get_thread_num()];
         double r;
         do { r = u(rng); } while (r <= 0.0);  // avoid log(0)
         return static_cast<int32_t>(-std::log(r) * _mL);
@@ -651,9 +763,25 @@ private:
     // std::pop_heap so we control the underlying allocation (reserve to
     // avoid reallocations in the inner loop). std::priority_queue hides its
     // container and reallocates on growth.
+    //
+    // Optional `extra_seeds`: additional entry nodes (e.g. from an MIH
+    // lookup) pre-inserted into both the candidate queue and the result set
+    // with their true distances, de-duplicated via the visited buffer, so
+    // they participate fully in the beam.
+    // Optional `known_query_norm_sq`: caller-supplied ||q||² (FlatSpan path
+    // only). During build the query IS the freshly inserted point, whose
+    // norm already sits in _norms_sq — passing it avoids recomputing it per
+    // layer. The stored value comes from the exact same vec_l2sq_avx2 call
+    // on the same data, so distances are bit-identical either way.
     std::vector<DistNode<distT>>
-    search_layer(const T& query, int32_t entry, size_t ef, int32_t layer) const {
-        const uint32_t ver = next_visited_version();
+    search_layer(const T& query, int32_t entry, size_t ef, int32_t layer,
+                 const std::vector<int32_t>* extra_seeds = nullptr,
+                 const float* known_query_norm_sq = nullptr) const {
+        // Check a visited-stamp array out of the pool for the duration of
+        // this beam search (returned by the guard's destructor).
+        VisitedGuard vguard(*_visited_pool);
+        auto& vlist = *vguard;
+        const uint32_t ver = vlist.advance(_examples.size());
 
         DistNodeMin<distT> min_cmp;
         DistNodeMax<distT> max_cmp;
@@ -662,22 +790,115 @@ private:
         // only meaningful for the FlatSpan/float-L2 path).
         float query_norm_sq = 0.0f;
         if constexpr (std::is_same_v<T, FlatSpan>) {
-            query_norm_sq = vec_l2sq_avx2(query.ptr, query.sz);
+            query_norm_sq = known_query_norm_sq
+                                ? *known_query_norm_sq
+                                : vec_l2sq_avx2(query.ptr, query.sz);
         }
 
         // Candidates: min-heap by distance (explore nearest first).
         // Results:    max-heap by distance (drop the farthest when full).
         std::vector<DistNode<distT>> candidates;
         std::vector<DistNode<distT>> results;
-        candidates.reserve(ef * 2 + 8);
+        candidates.reserve(ef * 2 + (extra_seeds ? extra_seeds->size() : 0) + 8);
         results.reserve(ef + 1);
 
-        distT d_entry = distance_fn(query, _examples[entry]);
-        candidates.push_back({d_entry, entry});
-        std::push_heap(candidates.begin(), candidates.end(), min_cmp);
-        results.push_back({d_entry, entry});
-        std::push_heap(results.begin(), results.end(), max_cmp);
-        visited_buf()[entry] = ver;
+        auto& vis = vlist.stamps;
+
+        // Admit a scored node into the beam: push into candidates + results,
+        // pop the farthest result once the beam exceeds ef. Shared by every
+        // distance path below.
+        auto try_add = [&](distT d, int32_t n) {
+            if (results.size() < ef || d < results.front().distance) {
+                candidates.push_back({d, n});
+                std::push_heap(candidates.begin(), candidates.end(), min_cmp);
+                results.push_back({d, n});
+                std::push_heap(results.begin(), results.end(), max_cmp);
+                if (results.size() > ef) {
+                    std::pop_heap(results.begin(), results.end(), max_cmp);
+                    results.pop_back();
+                }
+            }
+        };
+
+        // Seed the beam. Unlike try_add, seeds always enter the candidate
+        // queue (the beam must explore from them) even when they don't make
+        // the result set.
+        auto seed = [&](int32_t node) {
+            if (node < 0 || node >= (int32_t)_examples.size()) return;
+            if (vis[node] == ver) return;
+            vis[node] = ver;
+            distT d = distance_fn(query, _examples[node]);
+            candidates.push_back({d, node});
+            std::push_heap(candidates.begin(), candidates.end(), min_cmp);
+            if (results.size() < ef || d < results.front().distance) {
+                results.push_back({d, node});
+                std::push_heap(results.begin(), results.end(), max_cmp);
+                if (results.size() > ef) {
+                    std::pop_heap(results.begin(), results.end(), max_cmp);
+                    results.pop_back();
+                }
+            }
+        };
+        seed(entry);
+        if (extra_seeds) {
+            for (int32_t s : *extra_seeds) seed(s);
+        }
+
+        // Shared scaffolding for the SQ8/FlatSpan batched fast paths. Three
+        // layered optimisations, following Faiss's HNSW.cpp pattern:
+        //
+        //   (a) Pre-pass over the neighbour list that prefetches
+        //       each visited-array entry into L1. This is what
+        //       Faiss does (`vt.prefetch(v1)`) — for typical
+        //       neighbour counts (M_max0 = 32) all visited entries
+        //       fit in a few cache lines; prefetching them ahead
+        //       hides the L2/L3 visited-check latency.
+        //   (b) Filter to unvisited and prefetch each unvisited
+        //       vector's first cache line.
+        //   (c) Single batched SIMD distance call — supplied by the
+        //       caller as `compute(vptr, ids, n, dists)`; `get_ptr`
+        //       extracts the raw vector pointer for a node id.
+        constexpr size_t MAX_BATCH = 512;
+        auto process_batch = [&](const NeighbourView& nv,
+                                 auto&& get_ptr, auto&& compute) {
+            const size_t cap = std::min(nv.count, MAX_BATCH);
+#if defined(__AVX__) || defined(__AVX2__)
+            // (a) prefetch visited-array entries.
+            for (size_t ni = 0; ni < cap; ni++) {
+                _mm_prefetch(
+                    reinterpret_cast<const char*>(&vis[nv.ptr[ni]]),
+                    _MM_HINT_T0);
+            }
+#endif
+            int32_t unvis[MAX_BATCH];
+            decltype(get_ptr(int32_t{0})) vptr[MAX_BATCH];
+            size_t n_unvis = 0;
+            for (size_t ni = 0; ni < cap; ni++) {
+                int32_t n = nv.ptr[ni];
+                if (vis[n] == ver) continue;
+                vis[n] = ver;
+                unvis[n_unvis] = n;
+                vptr[n_unvis] = get_ptr(n);
+#if defined(__AVX__) || defined(__AVX2__)
+                // (b) prefetch this unvisited vector's first cache line
+                // — the rest will stream in via HW prefetcher once the
+                // load pattern is established.
+                _mm_prefetch(reinterpret_cast<const char*>(vptr[n_unvis]),
+                             _MM_HINT_T0);
+#endif
+                n_unvis++;
+            }
+            if (n_unvis == 0) return;
+
+            // (c) batched distances, then admit into the beam.
+            distT dists[MAX_BATCH];
+            compute(vptr, unvis, n_unvis, dists);
+            _dist_calls += n_unvis;
+            for (size_t i = 0; i < n_unvis; i++) {
+                try_add(dists[i], unvis[i]);
+            }
+        };
+        (void)process_batch;  // unused for the generic (non-span) T path
 
         while (!candidates.empty()) {
             DistNode<distT> cur = candidates.front();
@@ -691,145 +912,56 @@ private:
             NeighbourView nv = read_neighbours(cur.node_id, layer);
             if (nv.count == 0) continue;
 
-            auto& vis = visited_buf();
-
             if constexpr (std::is_same_v<T, SQ8Span>) {
                 // SQ8 fast path: int8 storage, int32 distance via
                 // batch_l2sq_sq8_avx2 (32 lanes per AVX2 op, 4× wider than
                 // float). Per-vector data is 4× smaller too — much friendlier
                 // to L2/L3 cache.
-                constexpr size_t MAX_BATCH = 512;
-                const size_t cap = std::min(nv.count, MAX_BATCH);
-#if defined(__AVX__) || defined(__AVX2__)
-                for (size_t ni = 0; ni < cap; ni++) {
-                    _mm_prefetch(reinterpret_cast<const char*>(&vis[nv.ptr[ni]]),
-                                 _MM_HINT_T0);
-                }
-#endif
-                int32_t unvis[MAX_BATCH];
-                const int8_t* vptr[MAX_BATCH];
-                size_t n_unvis = 0;
-                for (size_t ni = 0; ni < cap; ni++) {
-                    int32_t n = nv.ptr[ni];
-                    if (vis[n] == ver) continue;
-                    vis[n] = ver;
-                    unvis[n_unvis] = n;
-                    vptr[n_unvis] = _examples[n].ptr;
-#if defined(__AVX__) || defined(__AVX2__)
-                    _mm_prefetch(reinterpret_cast<const char*>(vptr[n_unvis]),
-                                 _MM_HINT_T0);
-#endif
-                    n_unvis++;
-                }
-                if (n_unvis == 0) continue;
-
-                int32_t dists_i32[MAX_BATCH];
+                process_batch(
+                    nv,
+                    [&](int32_t n) -> const int8_t* { return _examples[n].ptr; },
+                    [&](auto vptr, const int32_t*, size_t n, distT* dists) {
 #if defined(__AVX512F__)
-                // AVX-512 SQ8: 64 int8 lanes/op (vs AVX2's 32), ~2× throughput
-                // on supporting hardware. We dispatch one-at-a-time because
-                // the single-distance AVX-512 kernel is already very wide.
-                for (size_t bi = 0; bi < n_unvis; bi++) {
-                    dists_i32[bi] = dist_l2sq_sq8_avx512(query.ptr, vptr[bi], query.sz);
-                }
-#else
-                batch_l2sq_sq8_avx2(query.ptr, query.sz, vptr,
-                                    n_unvis, dists_i32);
-#endif
-                _dist_calls += n_unvis;
-
-                for (size_t i = 0; i < n_unvis; i++) {
-                    distT d = static_cast<distT>(dists_i32[i]);
-                    int32_t n = unvis[i];
-                    if (results.size() < ef || d < results.front().distance) {
-                        candidates.push_back({d, n});
-                        std::push_heap(candidates.begin(), candidates.end(), min_cmp);
-                        results.push_back({d, n});
-                        std::push_heap(results.begin(), results.end(), max_cmp);
-                        if (results.size() > ef) {
-                            std::pop_heap(results.begin(), results.end(), max_cmp);
-                            results.pop_back();
+                        // AVX-512 SQ8: 64 int8 lanes/op (vs AVX2's 32), ~2×
+                        // throughput on supporting hardware. We dispatch
+                        // one-at-a-time because the single-distance AVX-512
+                        // kernel is already very wide.
+                        for (size_t bi = 0; bi < n; bi++) {
+                            dists[bi] = static_cast<distT>(
+                                dist_l2sq_sq8_avx512(query.ptr, vptr[bi], query.sz));
                         }
-                    }
-                }
+#else
+                        int32_t dists_i32[MAX_BATCH];
+                        batch_l2sq_sq8_avx2(query.ptr, query.sz, vptr,
+                                            n, dists_i32);
+                        for (size_t i = 0; i < n; i++) {
+                            dists[i] = static_cast<distT>(dists_i32[i]);
+                        }
+#endif
+                    });
             } else if constexpr (std::is_same_v<T, FlatSpan>) {
-                // Float-vector fast path. Three layered optimisations,
-                // following Faiss's HNSW.cpp pattern:
-                //
-                //   (a) Pre-pass over the neighbour list that prefetches
-                //       each visited-array entry into L1. This is what
-                //       Faiss does (`vt.prefetch(v1)`) — for typical
-                //       neighbour counts (M_max0 = 32) all visited entries
-                //       fit in a few cache lines; prefetching them ahead
-                //       hides the L2/L3 visited-check latency.
-                //   (b) Filter to unvisited and prefetch each unvisited
-                //       vector's first cache line.
-                //   (c) Single 4-way batched SIMD distance call.
-                constexpr size_t MAX_BATCH = 512;
-                const size_t cap = std::min(nv.count, MAX_BATCH);
-
-#if defined(__AVX__) || defined(__AVX2__)
-                // (a) prefetch visited-array entries.
-                for (size_t ni = 0; ni < cap; ni++) {
-                    _mm_prefetch(
-                        reinterpret_cast<const char*>(&vis[nv.ptr[ni]]),
-                        _MM_HINT_T0);
-                }
-#endif
-
-                int32_t unvis[MAX_BATCH];
-                const float* vptr[MAX_BATCH];
-                size_t n_unvis = 0;
-                for (size_t ni = 0; ni < cap; ni++) {
-                    int32_t n = nv.ptr[ni];
-                    if (vis[n] == ver) continue;
-                    vis[n] = ver;
-                    unvis[n_unvis] = n;
-                    vptr[n_unvis] = _examples[n].ptr;
-#if defined(__AVX__) || defined(__AVX2__)
-                    // (b) prefetch this unvisited vector's first cache line
-                    // — the rest will stream in via HW prefetcher once the
-                    // load pattern is established.
-                    _mm_prefetch(reinterpret_cast<const char*>(vptr[n_unvis]),
-                                 _MM_HINT_T0);
-#endif
-                    n_unvis++;
-                }
-                if (n_unvis == 0) continue;
-
-                // (c) Dot-product batch: compute q·v for each unvisited
-                // neighbour, then reconstruct ||q-v||² via the identity
+                // Float-vector fast path. Dot-product batch: compute q·v for
+                // each unvisited neighbour, then reconstruct ||q-v||² via
                 //   ||q-v||² = ||q||² + ||v||² − 2 q·v
                 // using precomputed _norms_sq[v]. One FMA per chunk (dot)
                 // instead of two (sub + square), so per-distance FLOPs halve.
-                float dots[MAX_BATCH];
+                process_batch(
+                    nv,
+                    [&](int32_t n) -> const float* { return _examples[n].ptr; },
+                    [&](auto vptr, const int32_t* ids, size_t n, distT* dists) {
+                        float dots[MAX_BATCH];
 #if defined(__AVX512F__)
-                // AVX-512 path: 16 floats/op, 8 accumulators saturate FMA
-                // throughput on Zen 4 / Sapphire Rapids / Xeon Gold.
-                batch_dot_f_avx512_8(query.ptr, query.sz, vptr, n_unvis, dots);
+                        // AVX-512 path: 16 floats/op, 8 accumulators saturate
+                        // FMA throughput on Zen 4 / Sapphire Rapids / Xeon Gold.
+                        batch_dot_f_avx512_8(query.ptr, query.sz, vptr, n, dots);
 #else
-                batch_dot_f_avx2_8(query.ptr, query.sz, vptr, n_unvis, dots);
+                        batch_dot_f_avx2_8(query.ptr, query.sz, vptr, n, dots);
 #endif
-                float dists[MAX_BATCH];
-                for (size_t i = 0; i < n_unvis; i++) {
-                    float d_sq = query_norm_sq + _norms_sq[unvis[i]] - 2.0f * dots[i];
-                    dists[i] = d_sq < 0.0f ? 0.0f : d_sq;  // guard against fp noise
-                }
-                _dist_calls += n_unvis;
-
-                for (size_t i = 0; i < n_unvis; i++) {
-                    distT d = dists[i];
-                    int32_t n = unvis[i];
-                    if (results.size() < ef || d < results.front().distance) {
-                        candidates.push_back({d, n});
-                        std::push_heap(candidates.begin(), candidates.end(), min_cmp);
-                        results.push_back({d, n});
-                        std::push_heap(results.begin(), results.end(), max_cmp);
-                        if (results.size() > ef) {
-                            std::pop_heap(results.begin(), results.end(), max_cmp);
-                            results.pop_back();
+                        for (size_t i = 0; i < n; i++) {
+                            float d_sq = query_norm_sq + _norms_sq[ids[i]] - 2.0f * dots[i];
+                            dists[i] = d_sq < 0.0f ? 0.0f : d_sq;  // guard against fp noise
                         }
-                    }
-                }
+                    });
             } else {
                 // Generic path — used for binary/Hamming and any other T.
                 for (size_t ni = 0; ni < nv.count; ni++) {
@@ -837,16 +969,7 @@ private:
                     if (vis[n] == ver) continue;
                     vis[n] = ver;
                     distT d = distance_fn(query, _examples[n]);
-                    if (results.size() < ef || d < results.front().distance) {
-                        candidates.push_back({d, n});
-                        std::push_heap(candidates.begin(), candidates.end(), min_cmp);
-                        results.push_back({d, n});
-                        std::push_heap(results.begin(), results.end(), max_cmp);
-                        if (results.size() > ef) {
-                            std::pop_heap(results.begin(), results.end(), max_cmp);
-                            results.pop_back();
-                        }
-                    }
+                    try_add(d, n);
                 }
             }
         }
@@ -932,9 +1055,15 @@ private:
         _levels[pidx] = level;
         // Upper layers go into the nested vector. Layer 0 lives in
         // _layer0_adj (flat) and is initialised to count=0 by set().
-        _adjacency[pidx].assign(level + 1, std::vector<int32_t>{});
-        for (int32_t l = 1; l <= level; l++) {
-            _adjacency[pidx][l].reserve(_M);
+        // Level-0 nodes (~94 % of them) keep _adjacency[pidx] EMPTY — their
+        // only layer is layer 0, which never touches the nested vector.
+        // Readers handle this: read_neighbours() and the reverse-edge path
+        // both bounds-check the layer against _adjacency[node].size().
+        if (level > 0) {
+            _adjacency[pidx].assign(level + 1, std::vector<int32_t>{});
+            for (int32_t l = 1; l <= level; l++) {
+                _adjacency[pidx][l].reserve(_M);
+            }
         }
 
         // Snapshot entry point + top level under the entry lock. The greedy
@@ -960,11 +1089,18 @@ private:
             current = greedy_descent(_examples[pidx], current, l);
         }
 
+        // The new point's ||·||² is already stored (FlatSpan path) — reuse it
+        // in every search_layer call below instead of recomputing per layer.
+        const float* known_norm_sq = nullptr;
+        if constexpr (std::is_same_v<T, FlatSpan>) {
+            known_norm_sq = &_norms_sq[pidx];
+        }
+
         // From min(level, top_level) down to layer 0, build candidates and connect.
         int32_t start_layer = std::min(level, snap_top);
         for (int32_t l = start_layer; l >= 0; l--) {
-            auto candidates = search_layer(_examples[pidx], current, _ef_construction, l);
-            size_t M_max = (l == 0) ? _M_max0 : _M;
+            auto candidates = search_layer(_examples[pidx], current, _ef_construction, l,
+                                           nullptr, known_norm_sq);
 
             std::vector<int32_t> chosen = select_neighbours_heuristic(_examples[pidx],
                                                                      candidates,
@@ -990,19 +1126,59 @@ private:
                         _layer0_adj[(size_t)c * _M_max0 + cnt] = pidx;
                         cnt++;
                     } else {
-                        // Slot full — apply α-heuristic over existing edges + new one.
+                        // Slot full — apply α-heuristic over existing edges +
+                        // new one. Distance computations dominate here, so
+                        // run them OUTSIDE the exclusive lock: snapshot the
+                        // neighbour list, unlock, score + select, re-lock and
+                        // install only if the list is unchanged. If another
+                        // inserter modified it meanwhile, redo the whole
+                        // prune under the lock (the pre-computed result may
+                        // be based on stale edges) — correctness over speed.
+                        // Vector data (_examples) is immutable during build,
+                        // so the unlocked distance reads are safe.
+                        std::vector<int32_t> snap(
+                            _layer0_adj.data() + (size_t)c * _M_max0,
+                            _layer0_adj.data() + (size_t)c * _M_max0 + cnt);
+                        wlock.unlock();
+
                         std::vector<DistNode<distT>> nc;
-                        nc.reserve(_M_max0 + 1);
-                        for (int32_t i = 0; i < cnt; i++) {
-                            int32_t n = _layer0_adj[(size_t)c * _M_max0 + i];
+                        nc.reserve(snap.size() + 1);
+                        for (int32_t n : snap) {
                             nc.push_back({distance_fn(_examples[c], _examples[n]), n});
                         }
                         nc.push_back({distance_fn(_examples[c], _examples[pidx]), pidx});
                         auto kept = select_neighbours_heuristic(_examples[c], nc, _M_max0);
-                        for (size_t i = 0; i < kept.size(); i++) {
-                            _layer0_adj[(size_t)c * _M_max0 + i] = kept[i];
+
+                        wlock.lock();
+                        const int32_t* cur_ptr = _layer0_adj.data() + (size_t)c * _M_max0;
+                        const bool unchanged =
+                            cnt == (int32_t)snap.size() &&
+                            std::equal(snap.begin(), snap.end(), cur_ptr);
+                        if (unchanged) {
+                            for (size_t i = 0; i < kept.size(); i++) {
+                                _layer0_adj[(size_t)c * _M_max0 + i] = kept[i];
+                            }
+                            cnt = static_cast<int32_t>(kept.size());
+                        } else if (cnt < (int32_t)_M_max0) {
+                            // List shrank while unlocked — plain append,
+                            // exactly what the fast path would have done.
+                            _layer0_adj[(size_t)c * _M_max0 + cnt] = pidx;
+                            cnt++;
+                        } else {
+                            // List changed and is still full — redo the
+                            // prune under the lock on the current edges.
+                            nc.clear();
+                            for (int32_t i = 0; i < cnt; i++) {
+                                int32_t n = _layer0_adj[(size_t)c * _M_max0 + i];
+                                nc.push_back({distance_fn(_examples[c], _examples[n]), n});
+                            }
+                            nc.push_back({distance_fn(_examples[c], _examples[pidx]), pidx});
+                            kept = select_neighbours_heuristic(_examples[c], nc, _M_max0);
+                            for (size_t i = 0; i < kept.size(); i++) {
+                                _layer0_adj[(size_t)c * _M_max0 + i] = kept[i];
+                            }
+                            cnt = static_cast<int32_t>(kept.size());
                         }
-                        cnt = static_cast<int32_t>(kept.size());
                     }
                 } else {
                     if (l >= (int32_t)_adjacency[c].size()) continue;
@@ -1044,9 +1220,11 @@ private:
     }
 
     // Query path: greedy descent to layer 0, then full beam search.
-    // Returns up to k results sorted nearest → farthest.
+    // Returns up to k results sorted nearest → farthest. Optional
+    // `extra_seeds` are forwarded to the layer-0 beam (see search_layer).
     std::vector<DistNode<distT>> search_one(const T& query, size_t k,
-                                             const uint8_t* filter_mask = nullptr) const {
+                                             const uint8_t* filter_mask = nullptr,
+                                             const std::vector<int32_t>* extra_seeds = nullptr) const {
         int32_t current = _entry_point;
         for (int32_t l = _top_level; l > 0; l--) {
             current = greedy_descent(query, current, l);
@@ -1055,14 +1233,15 @@ private:
         // than k so we still return k *eligible* results after filtering.
         // Cap inflation at 8× to avoid pathological blow-up for very
         // selective filters (caller should pre-partition / shard).
-        const bool has_tombstones = !_deleted.empty() && num_deleted() > 0;
+        const size_t n_deleted = num_deleted();
+        const bool has_tombstones = n_deleted > 0;
         const bool has_filter = filter_mask != nullptr;
         size_t fetch_k = k;
         if (has_tombstones || has_filter) {
-            fetch_k = std::min(k * 8, std::max<size_t>(k * 2, k + num_deleted()));
+            fetch_k = std::min(k * 8, std::max<size_t>(k * 2, k + n_deleted));
         }
         size_t ef = std::max(_ef_search, fetch_k);
-        auto layer0 = search_layer(query, current, ef, 0);
+        auto layer0 = search_layer(query, current, ef, 0, extra_seeds);
 
         std::sort(layer0.begin(), layer0.end(),
                   [](const DistNode<distT>& a, const DistNode<distT>& b) {
@@ -1101,88 +1280,10 @@ public:
     search_one_with_seeds(const T& query, size_t k,
                           const std::vector<int32_t>& extra_seeds) const {
         if (_entry_point < 0 || _examples.empty()) return {};
-
-        int32_t current = _entry_point;
-        for (int32_t l = _top_level; l > 0; l--) {
-            current = greedy_descent(query, current, l);
-        }
-        size_t ef = std::max(_ef_search, k);
-        auto layer0 = search_layer_with_seeds(query, current, extra_seeds, ef, 0);
-
-        std::sort(layer0.begin(), layer0.end(),
-                  [](const DistNode<distT>& a, const DistNode<distT>& b) {
-                      return a.distance < b.distance;
-                  });
-        if (layer0.size() > k) layer0.resize(k);
-        return layer0;
+        return search_one(query, k, nullptr, &extra_seeds);
     }
 
 private:
-    // Like search_layer, but pre-seeds both the candidate queue and the
-    // result set with `primary_entry` and every node in `extra_seeds`,
-    // de-duplicated.
-    std::vector<DistNode<distT>>
-    search_layer_with_seeds(const T& query, int32_t primary_entry,
-                            const std::vector<int32_t>& extra_seeds,
-                            size_t ef, int32_t layer) const {
-        const uint32_t ver = next_visited_version();
-
-        DistNodeMin<distT> min_cmp;
-        DistNodeMax<distT> max_cmp;
-
-        std::vector<DistNode<distT>> candidates;
-        std::vector<DistNode<distT>> results;
-        candidates.reserve(ef * 2 + extra_seeds.size() + 8);
-        results.reserve(ef + 1);
-
-        auto& vis = visited_buf();
-        auto seed = [&](int32_t node) {
-            if (node < 0 || node >= (int32_t)_examples.size()) return;
-            if (vis[node] == ver) return;
-            vis[node] = ver;
-            distT d = distance_fn(query, _examples[node]);
-            candidates.push_back({d, node});
-            std::push_heap(candidates.begin(), candidates.end(), min_cmp);
-            if (results.size() < ef || d < results.front().distance) {
-                results.push_back({d, node});
-                std::push_heap(results.begin(), results.end(), max_cmp);
-                if (results.size() > ef) {
-                    std::pop_heap(results.begin(), results.end(), max_cmp);
-                    results.pop_back();
-                }
-            }
-        };
-
-        seed(primary_entry);
-        for (int32_t s : extra_seeds) seed(s);
-
-        while (!candidates.empty()) {
-            DistNode<distT> cur = candidates.front();
-            std::pop_heap(candidates.begin(), candidates.end(), min_cmp);
-            candidates.pop_back();
-            if (results.size() >= ef && cur.distance > results.front().distance) break;
-            NeighbourView nv = read_neighbours(cur.node_id, layer);
-            if (nv.count == 0) continue;
-            for (size_t ni = 0; ni < nv.count; ni++) {
-                int32_t n = nv.ptr[ni];
-                if (vis[n] == ver) continue;
-                vis[n] = ver;
-                distT d = distance_fn(query, _examples[n]);
-                if (results.size() < ef || d < results.front().distance) {
-                    candidates.push_back({d, n});
-                    std::push_heap(candidates.begin(), candidates.end(), min_cmp);
-                    results.push_back({d, n});
-                    std::push_heap(results.begin(), results.end(), max_cmp);
-                    if (results.size() > ef) {
-                        std::pop_heap(results.begin(), results.end(), max_cmp);
-                        results.pop_back();
-                    }
-                }
-            }
-        }
-        return results;
-    }
-
     // ─── State ──────────────────────────────────────────────────────────────
 
     size_t _M;
@@ -1210,6 +1311,10 @@ private:
     // graph reachability) but excludes them from results. Compact away with
     // rebuild().
     std::vector<uint8_t> _deleted;
+    // Number of set bits in _deleted, kept in sync by remove()/set()/
+    // deserialize() so num_deleted() is O(1). Derived state — never
+    // serialised.
+    size_t _num_deleted = 0;
 
     // Layer 0 lives in a contiguous flat buffer for cache locality on
     // queries. Each node owns a fixed-size slot of _M_max0 int32 IDs at
@@ -1223,15 +1328,13 @@ private:
     std::vector<std::vector<std::vector<int32_t>>> _adjacency;
         // _adjacency[node][layer] = neighbour IDs at that layer (only layer >= 1)
 
-    std::mt19937 _rng;
     uint64_t _seed_used = 42;
     int _n_threads = 1;
 
-    // Versioned visited lists — one per thread so parallel build can run
-    // search_layer concurrently without trampling each other's state.
-    // For single-threaded search (post-build) we use slot 0.
-    mutable std::vector<std::vector<uint32_t>> _visited_per_thread;
-    mutable std::vector<uint32_t> _visited_version_per_thread;
+    // Pool of versioned visited lists — each search (build-time or query)
+    // checks one out for its duration, so any number of concurrent searches
+    // work regardless of which thread runs them (OpenMP or not).
+    mutable std::unique_ptr<VisitedListPool> _visited_pool;
 
     // Per-thread RNGs for parallel random_level(). Each is seeded from
     // (_seed_used + thread_id) to keep per-thread sequences distinct and
@@ -1248,26 +1351,13 @@ private:
     mutable std::unique_ptr<std::mutex> _entry_lock;
     mutable bool _during_build = false;
 
-    uint32_t next_visited_version() const {
-        int tid = omp_get_thread_num();
-        auto& ver = _visited_version_per_thread[tid];
-        auto& vec = _visited_per_thread[tid];
-        ++ver;
-        if (ver == 0) {
-            std::fill(vec.begin(), vec.end(), 0u);
-            ver = 1;
-        }
-        return ver;
-    }
-
-    std::vector<uint32_t>& visited_buf() const {
-        return _visited_per_thread[omp_get_thread_num()];
-    }
-
     void init_thread_resources(size_t n) {
+        // RNGs are indexed by omp_get_thread_num() inside parallel regions
+        // that request num_threads(_n_threads) — size for whichever is
+        // larger so the index can never run past the end.
         int max_threads = std::max(1, omp_get_max_threads());
-        _visited_per_thread.assign(max_threads, std::vector<uint32_t>(n, 0u));
-        _visited_version_per_thread.assign(max_threads, 0u);
+        max_threads = std::max(max_threads, _n_threads);
+        _visited_pool = std::make_unique<VisitedListPool>();
         _rng_per_thread.clear();
         _rng_per_thread.reserve(max_threads);
         for (int t = 0; t < max_threads; t++) {

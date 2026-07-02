@@ -47,6 +47,28 @@ def recall_at_k(pred_idx, ref_idx, k: int) -> float:
     return sum(len(set(pred_idx[i]) & set(ref_idx[i].tolist())) for i in range(n)) / (n * k)
 
 
+def run_case(rows, name, cfg, make_index, db, q, ref, k, faiss_api=False):
+    """Construct an index, time set()/searchKNN(), compute recall, append a row.
+
+    Construction (via `make_index`) happens outside the timed sections;
+    only the build and the batch query are measured.
+    """
+    idx = make_index()
+    if faiss_api:
+        t0 = time.perf_counter(); idx.add(db); build_s = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        _, ix = idx.search(q, k)
+        query_s = time.perf_counter() - t0
+        pred = ix.tolist()
+    else:
+        t0 = time.perf_counter(); idx.set(db); build_s = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        pi, _ = idx.searchKNN(q, k=k)
+        query_s = time.perf_counter() - t0
+        pred = np.array(pi)[:, ::-1]
+    rows.append((name, cfg, build_s, query_s / len(q) * 1e3, recall_at_k(pred, ref, k)))
+
+
 # ── benchmark scenarios ─────────────────────────────────────────────────────
 
 
@@ -60,39 +82,29 @@ def bench_float_l2(n: int = 20_000, d: int = 128, k: int = 10):
 
     # pynear HNSW, single-threaded build (default)
     for ef in (32, 64, 128, 256):
-        idx = pynear.HNSWL2Index(M=16, ef_construction=200, ef_search=ef)
-        t0 = time.perf_counter(); idx.set(db); build_s = time.perf_counter() - t0
-        t0 = time.perf_counter()
-        pi, _ = idx.searchKNN(q, k=k)
-        query_s = time.perf_counter() - t0
-        pi = np.array(pi)[:, ::-1]
-        rows.append(("pynear.HNSWL2Index", f"M=16,ef={ef},nt=1", build_s,
-                     query_s / len(q) * 1e3, recall_at_k(pi, ref, k)))
+        run_case(rows, "pynear.HNSWL2Index", f"M=16,ef={ef},nt=1",
+                 lambda ef=ef: pynear.HNSWL2Index(M=16, ef_construction=200, ef_search=ef),
+                 db, q, ref, k)
 
     # pynear HNSW, parallel build
     nt = max(1, (os.cpu_count() or 1))
     for ef in (64, 256):
-        idx = pynear.HNSWL2Index(M=16, ef_construction=200, ef_search=ef, n_threads=nt)
-        t0 = time.perf_counter(); idx.set(db); build_s = time.perf_counter() - t0
-        t0 = time.perf_counter()
-        pi, _ = idx.searchKNN(q, k=k)
-        query_s = time.perf_counter() - t0
-        pi = np.array(pi)[:, ::-1]
-        rows.append(("pynear.HNSWL2Index", f"M=16,ef={ef},nt={nt}", build_s,
-                     query_s / len(q) * 1e3, recall_at_k(pi, ref, k)))
+        run_case(rows, "pynear.HNSWL2Index", f"M=16,ef={ef},nt={nt}",
+                 lambda ef=ef: pynear.HNSWL2Index(M=16, ef_construction=200, ef_search=ef, n_threads=nt),
+                 db, q, ref, k)
 
     # Faiss HNSW
     if HAS_FAISS:
-        for ef in (32, 64, 128, 256):
+        def make_faiss_hnsw(ef):
             idx = faiss.IndexHNSWFlat(d, 16)
             idx.hnsw.efConstruction = 200
             idx.hnsw.efSearch = ef
-            t0 = time.perf_counter(); idx.add(db); build_s = time.perf_counter() - t0
-            t0 = time.perf_counter()
-            _, ix = idx.search(q, k)
-            query_s = time.perf_counter() - t0
-            rows.append(("faiss.IndexHNSWFlat", f"M=16,ef={ef}", build_s, query_s / len(q) * 1e3,
-                         recall_at_k(ix.tolist(), ref, k)))
+            return idx
+
+        for ef in (32, 64, 128, 256):
+            run_case(rows, "faiss.IndexHNSWFlat", f"M=16,ef={ef}",
+                     lambda ef=ef: make_faiss_hnsw(ef),
+                     db, q, ref, k, faiss_api=True)
 
     return rows
 
@@ -108,28 +120,17 @@ def bench_binary_hamming(n: int = 20_000, d_bytes: int = 16, k: int = 10):
     rows = []
 
     for ef in (32, 64, 128):
-        idx = pynear.HNSWBinaryIndex(M=16, ef_construction=200, ef_search=ef)
-        t0 = time.perf_counter(); idx.set(db); build_s = time.perf_counter() - t0
-        t0 = time.perf_counter()
-        pi, _ = idx.searchKNN(q, k=k)
-        query_s = time.perf_counter() - t0
-        pi = np.array(pi)[:, ::-1]
-        rows.append(("pynear.HNSWBinaryIndex", f"M=16,ef={ef}", build_s,
-                     query_s / len(q) * 1e3, recall_at_k(pi, ref, k)))
+        run_case(rows, "pynear.HNSWBinaryIndex", f"M=16,ef={ef}",
+                 lambda ef=ef: pynear.HNSWBinaryIndex(M=16, ef_construction=200, ef_search=ef),
+                 db, q, ref, k)
 
     for ef in (32, 64, 128):
-        idx = pynear.MIHSeededHNSWBinaryIndex(
-            M=16, ef_construction=200, ef_search=ef,
-            mih_m=8, mih_radius=8,
-        )
-        t0 = time.perf_counter(); idx.set(db); build_s = time.perf_counter() - t0
-        t0 = time.perf_counter()
-        pi, _ = idx.searchKNN(q, k=k)
-        query_s = time.perf_counter() - t0
-        pi = np.array(pi)[:, ::-1]
-        rows.append(("pynear.MIHSeededHNSWBinaryIndex",
-                     f"M=16,ef={ef},mih_r=8", build_s,
-                     query_s / len(q) * 1e3, recall_at_k(pi, ref, k)))
+        run_case(rows, "pynear.MIHSeededHNSWBinaryIndex", f"M=16,ef={ef},mih_r=8",
+                 lambda ef=ef: pynear.MIHSeededHNSWBinaryIndex(
+                     M=16, ef_construction=200, ef_search=ef,
+                     mih_m=8, mih_radius=8,
+                 ),
+                 db, q, ref, k)
 
     return rows
 
