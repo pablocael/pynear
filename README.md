@@ -122,6 +122,30 @@ pip install pynear
 Requires Python 3.8+ and NumPy ≥ 1.21.2.  Pre-built wheels are available for
 Linux, macOS (x86-64 and Apple Silicon), and Windows — no compiler needed.
 
+### CPU baseline and build tuning
+
+Pre-built x86-64 wheels target **AVX2** (plus FMA and POPCNT) — any Intel or
+AMD CPU from 2013 (Haswell) onwards. AVX-512 is never included in wheels, so
+they run identically on every AVX2-capable machine. ARM wheels use NEON,
+which is part of the base ISA.
+
+When building from source, the `PYNEAR_MARCH` environment variable replaces
+the AVX2 baseline with an arbitrary `-march=` target:
+
+```console
+# Maximum performance on this machine — enables AVX-512 where present
+PYNEAR_MARCH=native pip install --no-binary :all: pynear
+
+# Portable build for pre-2013 CPUs without AVX2
+PYNEAR_MARCH=x86-64 pip install --no-binary :all: pynear
+```
+
+To force the scalar (non-SIMD) kernels, e.g. as a benchmarking baseline:
+
+```console
+CFLAGS=-DPYNEAR_FORCE_SCALAR pip install --no-binary :all: pynear
+```
+
 ---
 
 ## Quick start
@@ -318,6 +342,21 @@ index.set(data)
 blob = pickle.dumps(index)
 index2 = pickle.loads(blob)
 ```
+
+### Threads and the GIL
+
+Heavy index calls (`set`, `add`, `searchKNN`, `search1NN`, `searchKNN_arrays`,
+…) release the GIL while the C++ core runs, so other Python threads keep
+executing during builds and searches. The concurrency rules are the same as
+faiss and hnswlib:
+
+- **Concurrent searches** on the same index from multiple Python threads are
+  safe.
+- **Mutating** an index (`set`, `add`, `remove`, `rebuild`) concurrently with
+  *any* other call on that same index is undefined — serialise mutations with
+  your own lock if threads share an index.
+- `ShardedHNSWIndex` parallelises internally: builds and cross-shard queries
+  run their shards in parallel.
 
 ### Tree inspection
 

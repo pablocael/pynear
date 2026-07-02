@@ -32,6 +32,52 @@ def _tbb_available():
             except OSError:
                 pass
 
+def _target_machine():
+    """Best-effort *target* architecture (not necessarily the host's).
+
+    On macOS, cibuildwheel signals cross-compilation through ARCHFLAGS
+    (e.g. "-arch x86_64" when building x86_64 wheels on an arm64 host),
+    so prefer that over platform.machine().
+    """
+    if sys.platform == "darwin":
+        archflags = os.environ.get("ARCHFLAGS", "")
+        if "arm64" in archflags:
+            return "arm64"
+        if "x86_64" in archflags:
+            return "x86_64"
+    return platform.machine()
+
+
+def _simd_flags(machine):
+    """Deterministic SIMD flags for gcc/clang builds.
+
+    Default x86-64 baseline is AVX2: `-mavx2 -mfma -mpopcnt` (any
+    Haswell-or-newer CPU, 2013+). Wheels built in CI therefore always
+    target the same ISA regardless of the build runner's CPU — in
+    particular AVX-512 is never emitted, so wheels cannot SIGILL on
+    machines without it. DistanceFunctions.hpp picks its kernels at
+    compile time from __AVX__/__AVX2__/__AVX512F__/__ARM_NEON, so these
+    flags fully determine which SIMD path ships.
+
+    On aarch64/arm64 no flags are needed (and x86 flags like -mavx are
+    rejected by the compiler): NEON is implied by the base ISA.
+
+    The PYNEAR_MARCH environment variable replaces the baseline entirely
+    with `-march=$PYNEAR_MARCH`:
+
+        PYNEAR_MARCH=native pip install .   # max-perf build for this
+                                            # machine (AVX-512 if present)
+        PYNEAR_MARCH=x86-64 pip install .   # portable pre-AVX2 build
+    """
+    march = os.environ.get("PYNEAR_MARCH")
+    if march:
+        return ["-march=" + march]
+    if machine in ("x86_64", "AMD64", "amd64"):
+        return ["-mavx2", "-mfma", "-mpopcnt"]
+    # aarch64 / arm64 / anything else: no x86 flags.
+    return []
+
+
 if sys.platform == "win32":
     # /arch:AVX2 enables AVX2 + FMA + BMI + F16C — needed for the
     # _mm256_cvtepi8_epi16, _mm256_madd_epi16 (SQ8 kernels) and
@@ -43,14 +89,14 @@ if sys.platform == "win32":
     extra_macros = [("ENABLE_OMP_PARALLEL", "1")]
 elif sys.platform == "darwin":
     # ARCHFLAGS is set by cibuildwheel when cross-compiling (e.g. arm64 host -> x86_64 target).
-    # When set, avoid -march=native (which would tune for the host, not the target).
+    # _target_machine() honours it, so x86_64 cross-builds get the same AVX2
+    # baseline as native builds (every Intel Mac that can run a supported
+    # macOS has AVX2). Note: such wheels cannot be import-tested under
+    # Rosetta 2 on macOS <= 14 (Rosetta there stops at SSE4.2) — see
+    # CIBW_TEST_SKIP in the CI workflow.
     archflags = os.environ.get("ARCHFLAGS", "")
-    is_x86_64 = "x86_64" in archflags or (not archflags and platform.machine() == "x86_64")
     is_cross_compiling = bool(archflags)
-    march = [] if archflags else ["-march=native"]
-    # When cross-compiling for x86_64 on Apple Silicon (Rosetta 2), AVX is not supported
-    # by Rosetta 2 (only up to SSE4.2), so -mavx would cause "Illegal instruction" at import.
-    avx = ["-mavx"] if (is_x86_64 and not is_cross_compiling) else []
+    simd = _simd_flags(_target_machine())
     # When cross-compiling (ARCHFLAGS set), Homebrew LLVM is arm64-only:
     #   - its libomp.dylib cannot satisfy x86_64 link requests
     #   - its LTO bitcode (LLVM 22) is incompatible with the Apple linker's LTO reader (LLVM 15)
@@ -63,13 +109,13 @@ elif sys.platform == "darwin":
         lto = ["-flto"]
         omp_compile = ["-fopenmp"]
         omp_link = ["-fopenmp", "-lomp"]
-    extra_compile_args = lto + ["-Wall"] + march + avx + omp_compile
+    extra_compile_args = lto + ["-Wall", "-O3", "-fno-math-errno"] + simd + omp_compile
     extra_link_args = omp_link
     # Apple libc++ does not ship std::execution::par_unseq without explicit PSTL;
     # level-parallel OMP build still applies, only the TBB nth_element is disabled.
     extra_macros = [("ENABLE_OMP_PARALLEL", "1")]
 else:
-    extra_compile_args = ["-flto", "-Wall", "-march=native", "-mavx", "-fopenmp"]
+    extra_compile_args = ["-flto", "-Wall", "-O3", "-fno-math-errno"] + _simd_flags(_target_machine()) + ["-fopenmp"]
     extra_link_args = ["-fopenmp", "-lgomp"]
     extra_macros = [("ENABLE_OMP_PARALLEL", "1")]
     # Enable TBB parallel nth_element only when libtbb is available (not present

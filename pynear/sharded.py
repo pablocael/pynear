@@ -247,10 +247,19 @@ class ShardedHNSWIndex:
 
         def _run(item):
             key, idx = item
+            # Prefer the dense-array variant (nearest-first (n, k) numpy
+            # arrays, tail-padded) when the wrapped index provides it — it
+            # avoids boxing one PyObject per result element. Fall back to
+            # the list API for index classes that predate searchKNN_arrays
+            # (or foreign classes that never grow it).
+            search_arrays = getattr(idx, "searchKNN_arrays", None)
+            if search_arrays is not None:
+                ids, dists = search_arrays(queries, k)
+                return key, ids, dists, True
             i, d = idx.searchKNN(queries, k)
-            return key, i, d
+            return key, i, d, False
 
-        per_shard_results: List[Tuple[ShardKey, List, List]] = self._map_parallel(
+        per_shard_results: List[Tuple[ShardKey, Any, Any, bool]] = self._map_parallel(
             _run, shard_items, n_workers
         )
 
@@ -266,14 +275,34 @@ class ShardedHNSWIndex:
         # stable sort exactly (ties keep shard-then-position order).
         n_queries = len(queries)
         n_shards = len(per_shard_results)
-        shard_key_list: List[ShardKey] = [key for key, _, _ in per_shard_results]
+        shard_key_list: List[ShardKey] = [key for key, _, _, _ in per_shard_results]
 
         total_cols = n_shards * k
         dist_mat = np.full((n_queries, total_cols), np.inf, dtype=np.float64)
         id_mat = np.full((n_queries, total_cols), -1, dtype=np.int64)
         counts = np.zeros(n_queries, dtype=np.int64)
-        for s, (_key, idx_per_q, dist_per_q) in enumerate(per_shard_results):
+        for s, (_key, idx_per_q, dist_per_q, is_arrays) in enumerate(per_shard_results):
             base = s * k
+            if is_arrays:
+                # searchKNN_arrays rows are already NEAREST-FIRST with tail
+                # padding (id == -1; dist == +inf or INT64_MAX). Equivalence
+                # with the legacy list path below: that path reverses each
+                # farthest-first row on insert, so both paths place a query's
+                # j-th-nearest hit from this shard at column base + j
+                # (shard-major column order preserved). Normalising padded
+                # distances to +inf makes dist_mat / id_mat bit-identical to
+                # the matrices the list path builds (its padding is the
+                # +inf / -1 prefill), so the stable argsort — and therefore
+                # the output column ordering and tie behaviour (shard order,
+                # then nearest-first position within a shard) — is unchanged.
+                ids_arr = np.asarray(idx_per_q, dtype=np.int64)
+                dst_arr = np.asarray(dist_per_q, dtype=np.float64)
+                nq = min(n_queries, ids_arr.shape[0])
+                pad = ids_arr[:nq] == -1
+                dist_mat[:nq, base:base + k] = np.where(pad, np.inf, dst_arr[:nq])
+                id_mat[:nq, base:base + k] = ids_arr[:nq]
+                counts[:nq] += k - pad.sum(axis=1)
+                continue
             for qi in range(min(n_queries, len(idx_per_q))):
                 m = len(idx_per_q[qi])
                 if m == 0:

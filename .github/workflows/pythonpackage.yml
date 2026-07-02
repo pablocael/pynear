@@ -32,6 +32,20 @@ jobs:
           LDFLAGS="-L/opt/homebrew/opt/llvm/lib -L/usr/local/opt/llvm/lib"
           CPPFLAGS="-I/opt/homebrew/opt/llvm/include -I/usr/local/opt/llvm/include"
         CIBW_BEFORE_BUILD_MACOS: clang --version
+        # Import-and-query smoke test for every built wheel — catches a
+        # wrong SIMD baseline (SIGILL) at build time instead of on user
+        # machines.
+        CIBW_TEST_COMMAND: >-
+          python -c "import numpy as np, pynear;
+          idx = pynear.VPTreeL2Index();
+          idx.set(np.random.rand(256, 8).astype(np.float32));
+          i, d = idx.searchKNN(np.random.rand(4, 8).astype(np.float32), 3);
+          assert len(i) == 4 and len(i[0]) == 3"
+        # macOS x86_64 wheels are cross-compiled and would be tested under
+        # Rosetta 2 on the arm64 runner. Rosetta on macOS 14 supports only
+        # up to SSE4.2, so the AVX2 baseline would trap there even though
+        # the wheel runs fine on real Intel Macs (all of which have AVX2).
+        CIBW_TEST_SKIP: "*-macosx_x86_64"
         CIBW_BUILD_VERBOSITY: 1
     - uses: actions/upload-artifact@v4
       with:

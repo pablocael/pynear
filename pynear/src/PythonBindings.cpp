@@ -10,9 +10,11 @@
 #include <cassert>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <omp.h>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include <BKTree.hpp>
@@ -100,6 +102,51 @@ static void quantize_sq8(const float* src, size_t n, float inv_scale, int8_t* ds
         else if (v < -128) v = -128;
         dst[i] = static_cast<int8_t>(v);
     }
+}
+
+// ── searchKNN_arrays shared implementation ───────────────────────────────────
+// Allocates the two (n, k) output arrays with the GIL HELD, grabs their raw
+// buffers, then releases the GIL and invokes `core(idx, dist)` — a callable
+// that runs the existing C++ list-of-lists search core — and copies each row
+// straight into the buffers. The `py::gil_scoped_release` scope contains only
+// plain C++ (the callable must not touch the Python C API: no py:: calls, no
+// casts, no allocations of Python objects).
+//
+// Output rows are NEAREST-FIRST along axis 1 (faiss-style).
+// `core_farthest_first` says whether the core's rows follow pynear's
+// farthest-first list convention (VPTree / HNSW / MIH-seeded) and must be
+// reversed on copy, or are already ascending (MIH, IVF).
+//
+// Rows shorter than k are padded at the tail: padded ids are -1 and padded
+// distances are `pad_dist` (+inf for float distances, INT64_MAX for integer
+// Hamming distances).
+template <class DistT, class CoreFn>
+static std::pair<py::array_t<int64_t>, py::array_t<DistT>>
+knn_to_arrays(size_t n, size_t k, DistT pad_dist, bool core_farthest_first, CoreFn&& core) {
+    py::array_t<int64_t> ids({(py::ssize_t)n, (py::ssize_t)k});
+    py::array_t<DistT> dists({(py::ssize_t)n, (py::ssize_t)k});
+    int64_t* ids_ptr = ids.mutable_data();
+    DistT* dists_ptr = dists.mutable_data();
+    {
+        py::gil_scoped_release release;
+        std::vector<std::vector<int64_t>> idx;
+        std::vector<std::vector<DistT>> dist;
+        core(idx, dist);
+        for (size_t i = 0; i < n; i++) {
+            size_t m = (i < idx.size()) ? idx[i].size() : (size_t)0;
+            if (m > k) m = k;
+            for (size_t j = 0; j < m; j++) {
+                size_t src = core_farthest_first ? (m - 1 - j) : j;
+                ids_ptr[i * k + j] = idx[i][src];
+                dists_ptr[i * k + j] = dist[i][src];
+            }
+            for (size_t j = m; j < k; j++) {
+                ids_ptr[i * k + j] = -1;
+                dists_ptr[i * k + j] = pad_dist;
+            }
+        }
+    }
+    return std::make_pair(std::move(ids), std::move(dists));
 }
 
 // ── Shared HNSW pickle helpers ───────────────────────────────────────────────
@@ -206,6 +253,22 @@ public:
             }
         }
         return std::make_tuple(std::move(indexes), std::move(distances));
+    }
+
+    std::pair<py::array_t<int64_t>, py::array_t<float>>
+    searchKNN_arrays(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k) {
+        std::vector<arrayf> spans = rows_to_spans(queries, "searchKNN_arrays");
+        return knn_to_arrays<float>(spans.size(), k, std::numeric_limits<float>::infinity(), true,
+            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<float>>& dist) {
+                std::vector<typename vptree::VPTree<arrayf, float, distance>::VPTreeSearchResultElement> results;
+                tree.searchKNN(spans, k, results);
+                idx.resize(results.size());
+                dist.resize(results.size());
+                for (size_t i = 0; i < results.size(); i++) {
+                    idx[i] = std::move(results[i].indexes);
+                    dist[i] = std::move(results[i].distances);
+                }
+            });
     }
 
     std::tuple<std::vector<int64_t>, std::vector<float>>
@@ -327,6 +390,31 @@ public:
             }
         }
         return std::make_tuple(std::move(indexes), std::move(distances));
+    }
+
+    std::pair<py::array_t<int64_t>, py::array_t<float>>
+    searchKNN_arrays(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k) {
+        Rows2D r = as_rows_2d(queries, "searchKNN_arrays");
+        return knn_to_arrays<float>(r.n, k, std::numeric_limits<float>::infinity(), true,
+            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<float>>& dist) {
+                std::vector<float> qnorm(r.n * r.d);
+                normalize_rows(r.ptr, qnorm.data(), r.n, r.d);
+                std::vector<arrayf> spans = make_row_spans(qnorm.data(), r.n, r.d);
+
+                std::vector<typename vptree::VPTree<arrayf, float, dist_l2_f_avx2>::VPTreeSearchResultElement> results;
+                tree.searchKNN(spans, k, results);
+                idx.resize(results.size());
+                dist.resize(results.size());
+                for (size_t i = 0; i < results.size(); i++) {
+                    idx[i] = std::move(results[i].indexes);
+                    dist[i] = std::move(results[i].distances);
+                    // dist_l2_f_avx2 returns sqrt(L2²) → square then halve for cosine distance.
+                    for (size_t j = 0; j < dist[i].size(); j++) {
+                        float l2 = dist[i][j];
+                        dist[i][j] = (l2 * l2) * 0.5f;
+                    }
+                }
+            });
     }
 
     std::tuple<std::vector<int64_t>, std::vector<float>>
@@ -457,6 +545,21 @@ public:
         return std::make_tuple(std::move(idx), std::move(dist));
     }
 
+    std::pair<py::array_t<int64_t>, py::array_t<float>>
+    searchKNN_arrays(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k,
+                     py::object filter = py::none()) {
+        std::vector<arrayf> spans = rows_to_spans(queries, "searchKNN_arrays");
+        const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
+        return knn_to_arrays<float>(spans.size(), k, std::numeric_limits<float>::infinity(), true,
+            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<float>>& dist) {
+                hnsw.searchKNN(spans, k, idx, dist, mask);
+                // Same L2² → L2 conversion as searchKNN.
+                for (auto& row : dist) {
+                    for (float& v : row) v = std::sqrt(v);
+                }
+            });
+    }
+
     std::tuple<std::vector<int64_t>, std::vector<float>>
     search1NN(py::array_t<float, py::array::c_style | py::array::forcecast> queries,
               py::object filter = py::none()) {
@@ -562,6 +665,25 @@ public:
             }
         }
         return std::make_tuple(std::move(idx), std::move(dist));
+    }
+
+    std::pair<py::array_t<int64_t>, py::array_t<float>>
+    searchKNN_arrays(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k,
+                     py::object filter = py::none()) {
+        Rows2D r = as_rows_2d(queries, "searchKNN_arrays");
+        const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
+        return knn_to_arrays<float>(r.n, k, std::numeric_limits<float>::infinity(), true,
+            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<float>>& dist) {
+                std::vector<float> qnorm(r.n * r.d);
+                normalize_rows(r.ptr, qnorm.data(), r.n, r.d);
+                std::vector<arrayf> spans = make_row_spans(qnorm.data(), r.n, r.d);
+
+                hnsw.searchKNN(spans, k, idx, dist, mask);
+                // L2² → cosine distance (d_cos = L2² / 2 for unit vectors).
+                for (auto& row : dist) {
+                    for (float& v : row) v = v * 0.5f;
+                }
+            });
     }
 
     std::tuple<std::vector<int64_t>, std::vector<float>>
@@ -714,6 +836,38 @@ public:
         return std::make_tuple(std::move(idx), std::move(dist_f));
     }
 
+    std::pair<py::array_t<int64_t>, py::array_t<float>>
+    searchKNN_arrays(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k,
+                     py::object filter = py::none()) {
+        Rows2D r = as_rows_2d(queries, "searchKNN_arrays");
+        if (_scale <= 0.0f) {
+            // Empty index — every row is padding (mirrors searchKNN's early return).
+            return knn_to_arrays<float>(r.n, k, std::numeric_limits<float>::infinity(), true,
+                [](std::vector<std::vector<int64_t>>&, std::vector<std::vector<float>>&) {});
+        }
+        const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
+        return knn_to_arrays<float>(r.n, k, std::numeric_limits<float>::infinity(), true,
+            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<float>>& dist) {
+                std::vector<int8_t> q_buf(r.n * r.d);
+                quantize_sq8(r.ptr, r.n * r.d, 1.0f / _scale, q_buf.data());
+                std::vector<SQ8Span> qspans(r.n);
+                for (size_t i = 0; i < r.n; i++) {
+                    qspans[i] = SQ8Span{q_buf.data() + i * r.d, r.d};
+                }
+
+                std::vector<std::vector<int32_t>> dist_i;
+                hnsw.searchKNN(qspans, k, idx, dist_i, mask);
+                // int32 squared-quantised distance → float L2 (same as searchKNN).
+                dist.resize(idx.size());
+                for (size_t i = 0; i < idx.size(); i++) {
+                    dist[i].reserve(dist_i[i].size());
+                    for (int32_t di : dist_i[i]) {
+                        dist[i].push_back(_scale * std::sqrt(static_cast<float>(di)));
+                    }
+                }
+            });
+    }
+
     std::tuple<std::vector<int64_t>, std::vector<float>>
     search1NN(py::array_t<float, py::array::c_style | py::array::forcecast> queries,
               py::object filter = py::none()) {
@@ -823,6 +977,16 @@ public:
         return std::make_tuple(std::move(idx), std::move(dist));
     }
 
+    std::pair<py::array_t<int64_t>, py::array_t<int64_t>>
+    searchKNN_arrays(const ndarrayli& queries, size_t k,
+                     py::object filter = py::none()) {
+        const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
+        return knn_to_arrays<int64_t>(queries.size(), k, std::numeric_limits<int64_t>::max(), true,
+            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<int64_t>>& dist) {
+                hnsw.searchKNN(queries, k, idx, dist, mask);
+            });
+    }
+
     std::tuple<std::vector<int64_t>, std::vector<int64_t>>
     search1NN(const ndarrayli& queries,
               py::object filter = py::none()) {
@@ -906,12 +1070,16 @@ public:
         mih.set(data);
     }
 
-    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<int64_t>>>
-    searchKNN(const ndarrayli& queries, size_t k) {
+    // GIL-free search core shared by searchKNN and searchKNN_arrays. Fills
+    // farthest-first rows (pynear's list convention). Contains no Python API
+    // calls, so it is safe to run with the GIL released.
+    void searchKNN_core(const ndarrayli& queries, size_t k,
+                        std::vector<std::vector<int64_t>>& all_idx,
+                        std::vector<std::vector<int64_t>>& all_dist) {
         size_t nq = queries.size();
-        std::vector<std::vector<int64_t>> all_idx(nq), all_dist(nq);
+        all_idx.assign(nq, std::vector<int64_t>());
+        all_dist.assign(nq, std::vector<int64_t>());
 
-        py::gil_scoped_release release;
         for (size_t qi = 0; qi < nq; qi++) {
             // 1. MIH small-radius lookup. We ask for up to ef_search candidates
             //    so the seed set is as informative as possible without
@@ -938,7 +1106,24 @@ public:
                 all_dist[qi].push_back(it->distance);
             }
         }
+    }
+
+    std::tuple<std::vector<std::vector<int64_t>>, std::vector<std::vector<int64_t>>>
+    searchKNN(const ndarrayli& queries, size_t k) {
+        std::vector<std::vector<int64_t>> all_idx, all_dist;
+        {
+            py::gil_scoped_release release;
+            searchKNN_core(queries, k, all_idx, all_dist);
+        }
         return std::make_tuple(std::move(all_idx), std::move(all_dist));
+    }
+
+    std::pair<py::array_t<int64_t>, py::array_t<int64_t>>
+    searchKNN_arrays(const ndarrayli& queries, size_t k) {
+        return knn_to_arrays<int64_t>(queries.size(), k, std::numeric_limits<int64_t>::max(), true,
+            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<int64_t>>& dist) {
+                searchKNN_core(queries, k, idx, dist);
+            });
     }
 
     std::tuple<std::vector<int64_t>, std::vector<int64_t>>
@@ -994,6 +1179,21 @@ public:
             }
         }
         return std::make_tuple(std::move(indexes), std::move(distances));
+    }
+
+    std::pair<py::array_t<int64_t>, py::array_t<int64_t>>
+    searchKNN_arrays(const ndarrayli &queries, size_t k) {
+        return knn_to_arrays<int64_t>(queries.size(), k, std::numeric_limits<int64_t>::max(), true,
+            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<int64_t>>& dist) {
+                std::vector<typename vptree::VPTree<arrayli, int64_t, distance>::VPTreeSearchResultElement> results;
+                tree.searchKNN(queries, k, results);
+                idx.resize(results.size());
+                dist.resize(results.size());
+                for (size_t i = 0; i < results.size(); ++i) {
+                    idx[i] = std::move(results[i].indexes);
+                    dist[i] = std::move(results[i].distances);
+                }
+            });
     }
 
     std::tuple<std::vector<int64_t>, std::vector<int64_t>> search1NN(const ndarrayli &queries) {
@@ -1091,6 +1291,17 @@ public:
         return out;
     }
 
+    std::pair<py::array_t<int64_t>, py::array_t<int64_t>>
+    searchKNN_arrays(const ndarrayli& queries, size_t k) {
+        // IVF's list rows are already ascending (nearest-first) — no reverse.
+        return knn_to_arrays<int64_t>(queries.size(), k, std::numeric_limits<int64_t>::max(), false,
+            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<int64_t>>& dist) {
+                auto out = _index.searchKNN(queries, k);
+                idx = std::move(std::get<0>(out));
+                dist = std::move(std::get<1>(out));
+            });
+    }
+
     int32_t nlist()  const { return _index.nlist(); }
     int32_t nprobe() const { return _index.nprobe(); }
     void set_nprobe(int32_t nprobe) { _index.set_nprobe(nprobe); }
@@ -1121,6 +1332,18 @@ public:
         return out;
     }
 
+    std::pair<py::array_t<int64_t>, py::array_t<int64_t>>
+    searchKNN_arrays(const ndarrayli& queries, size_t k, int32_t radius = 8) {
+        // MIH's list rows are already ascending (nearest-first) — no reverse.
+        // Radius-limited rows with fewer than k hits get tail padding.
+        return knn_to_arrays<int64_t>(queries.size(), k, std::numeric_limits<int64_t>::max(), false,
+            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<int64_t>>& dist) {
+                auto out = _index.searchKNN(queries, k, radius);
+                idx = std::move(std::get<0>(out));
+                dist = std::move(std::get<1>(out));
+            });
+    }
+
     int32_t m()      const { return _index.m(); }
     size_t  n()      const { return _index.n(); }
     size_t  nbytes() const { return _index.nbytes(); }
@@ -1131,6 +1354,15 @@ private:
 
 static const char *index_set = "Add vectors to index";
 static const char *index_topk = "Batch find top-k vectors in index and return indices and distances";
+static const char *index_topk_arrays =
+    "Batch top-k search returning dense numpy arrays.\n\n"
+    "Returns (ids, distances), each of shape (n_queries, k). Unlike searchKNN\n"
+    "(which returns per-query lists ordered farthest-first), rows here are\n"
+    "ordered NEAREST-FIRST along axis 1 (faiss-style). ids dtype is int64;\n"
+    "distances dtype matches the index distance type: float32 for\n"
+    "float/cosine/SQ8 indexes, int64 for hamming indexes. Rows with fewer\n"
+    "than k results are padded at the end: entries with id == -1 are padding,\n"
+    "and their distances are +inf (float) or INT64_MAX (int64).";
 static const char *index_top1 = "Batch find closest vectors in index and return indices and distances";
 static const char *index_string = "Return a debug string representation of the tree";
 static const char *index_find_threshold = "Batch find all vectors below the distance threshold";
@@ -1207,6 +1439,8 @@ static py::class_<Adapter> bind_hnsw_common(py::module_& m, const char* name,
         .def("set", &Adapter::set, py::arg("vectors"))
         .def("searchKNN", &Adapter::searchKNN,
              py::arg("vectors"), py::arg("k"), py::arg("filter") = py::none())
+        .def("searchKNN_arrays", &Adapter::searchKNN_arrays, index_topk_arrays,
+             py::arg("vectors"), py::arg("k"), py::arg("filter") = py::none())
         .def("search1NN", &Adapter::search1NN,
              py::arg("vectors"), py::arg("filter") = py::none())
         .def("set_ef", &Adapter::set_ef, py::arg("ef_search"))
@@ -1238,6 +1472,7 @@ PYBIND11_MODULE(_pynear, m) {
         .def("set", &VPTreeNumpyAdapter<dist_l2_f_avx2>::set, index_set, py::arg("vectors"))
         .def("to_string", &VPTreeNumpyAdapter<dist_l2_f_avx2>::to_string, index_string)
         .def("searchKNN", &VPTreeNumpyAdapter<dist_l2_f_avx2>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("searchKNN_arrays", &VPTreeNumpyAdapter<dist_l2_f_avx2>::searchKNN_arrays, index_topk_arrays, py::arg("vectors"), py::arg("k"))
         .def("search1NN", &VPTreeNumpyAdapter<dist_l2_f_avx2>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapter<dist_l2_f_avx2>::get_state, &VPTreeNumpyAdapter<dist_l2_f_avx2>::set_state));
 
@@ -1246,6 +1481,7 @@ PYBIND11_MODULE(_pynear, m) {
         .def("set", &VPTreeNumpyAdapter<dist_l1_f_avx2>::set, index_set, py::arg("vectors"))
         .def("to_string", &VPTreeNumpyAdapter<dist_l1_f_avx2>::to_string, index_string)
         .def("searchKNN", &VPTreeNumpyAdapter<dist_l1_f_avx2>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("searchKNN_arrays", &VPTreeNumpyAdapter<dist_l1_f_avx2>::searchKNN_arrays, index_topk_arrays, py::arg("vectors"), py::arg("k"))
         .def("search1NN", &VPTreeNumpyAdapter<dist_l1_f_avx2>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapter<dist_l1_f_avx2>::get_state, &VPTreeNumpyAdapter<dist_l1_f_avx2>::set_state));
 
@@ -1254,6 +1490,7 @@ PYBIND11_MODULE(_pynear, m) {
         .def("set", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::set, index_set, py::arg("vectors"))
         .def("to_string", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::to_string, index_string)
         .def("searchKNN", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("searchKNN_arrays", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::searchKNN_arrays, index_topk_arrays, py::arg("vectors"), py::arg("k"))
         .def("search1NN", &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::get_state, &VPTreeNumpyAdapter<dist_chebyshev_f_avx2>::set_state));
 
@@ -1262,6 +1499,7 @@ PYBIND11_MODULE(_pynear, m) {
         .def("set", &VPTreeCosineNumpyAdapter::set, index_set, py::arg("vectors"))
         .def("to_string", &VPTreeCosineNumpyAdapter::to_string, index_string)
         .def("searchKNN", &VPTreeCosineNumpyAdapter::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("searchKNN_arrays", &VPTreeCosineNumpyAdapter::searchKNN_arrays, index_topk_arrays, py::arg("vectors"), py::arg("k"))
         .def("search1NN", &VPTreeCosineNumpyAdapter::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeCosineNumpyAdapter::get_state, &VPTreeCosineNumpyAdapter::set_state));
 
@@ -1295,6 +1533,8 @@ PYBIND11_MODULE(_pynear, m) {
         .def("set", &MIHSeededHNSWBinaryAdapter::set, py::arg("vectors"))
         .def("searchKNN", &MIHSeededHNSWBinaryAdapter::searchKNN,
              py::arg("vectors"), py::arg("k"))
+        .def("searchKNN_arrays", &MIHSeededHNSWBinaryAdapter::searchKNN_arrays, index_topk_arrays,
+             py::arg("vectors"), py::arg("k"))
         .def("search1NN", &MIHSeededHNSWBinaryAdapter::search1NN, py::arg("vectors"))
         .def("set_ef", &MIHSeededHNSWBinaryAdapter::set_ef, py::arg("ef_search"))
         .def("set_mih_radius", &MIHSeededHNSWBinaryAdapter::set_mih_radius,
@@ -1308,6 +1548,7 @@ PYBIND11_MODULE(_pynear, m) {
         .def("set", &VPTreeNumpyAdapterBinary<dist_hamming_512>::set, index_set, py::arg("vectors"))
         .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming_512>::to_string, index_string)
         .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming_512>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("searchKNN_arrays", &VPTreeNumpyAdapterBinary<dist_hamming_512>::searchKNN_arrays, index_topk_arrays, py::arg("vectors"), py::arg("k"))
         .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming_512>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapterBinary<dist_hamming_512>::get_state, &VPTreeNumpyAdapterBinary<dist_hamming_512>::set_state));
 
@@ -1316,6 +1557,7 @@ PYBIND11_MODULE(_pynear, m) {
         .def("set", &VPTreeNumpyAdapterBinary<dist_hamming_256>::set, index_set, py::arg("vectors"))
         .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming_256>::to_string, index_string)
         .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming_256>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("searchKNN_arrays", &VPTreeNumpyAdapterBinary<dist_hamming_256>::searchKNN_arrays, index_topk_arrays, py::arg("vectors"), py::arg("k"))
         .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming_256>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapterBinary<dist_hamming_256>::get_state, &VPTreeNumpyAdapterBinary<dist_hamming_256>::set_state));
 
@@ -1324,6 +1566,7 @@ PYBIND11_MODULE(_pynear, m) {
         .def("set", &VPTreeNumpyAdapterBinary<dist_hamming_128>::set, index_set, py::arg("vectors"))
         .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming_128>::to_string, index_string)
         .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming_128>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("searchKNN_arrays", &VPTreeNumpyAdapterBinary<dist_hamming_128>::searchKNN_arrays, index_topk_arrays, py::arg("vectors"), py::arg("k"))
         .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming_128>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapterBinary<dist_hamming_128>::get_state, &VPTreeNumpyAdapterBinary<dist_hamming_128>::set_state));
 
@@ -1332,6 +1575,7 @@ PYBIND11_MODULE(_pynear, m) {
         .def("set", &VPTreeNumpyAdapterBinary<dist_hamming_64>::set, index_set, py::arg("vectors"))
         .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming_64>::to_string, index_string)
         .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming_64>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("searchKNN_arrays", &VPTreeNumpyAdapterBinary<dist_hamming_64>::searchKNN_arrays, index_topk_arrays, py::arg("vectors"), py::arg("k"))
         .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming_64>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapterBinary<dist_hamming_64>::get_state, &VPTreeNumpyAdapterBinary<dist_hamming_64>::set_state));
 
@@ -1340,6 +1584,7 @@ PYBIND11_MODULE(_pynear, m) {
         .def("set", &VPTreeNumpyAdapterBinary<dist_hamming>::set, index_set, py::arg("vectors"))
         .def("to_string", &VPTreeNumpyAdapterBinary<dist_hamming>::to_string, index_string)
         .def("searchKNN", &VPTreeNumpyAdapterBinary<dist_hamming>::searchKNN, index_topk, py::arg("vectors"), py::arg("k"))
+        .def("searchKNN_arrays", &VPTreeNumpyAdapterBinary<dist_hamming>::searchKNN_arrays, index_topk_arrays, py::arg("vectors"), py::arg("k"))
         .def("search1NN", &VPTreeNumpyAdapterBinary<dist_hamming>::search1NN, index_top1, py::arg("vectors"))
         .def(py::pickle(&VPTreeNumpyAdapterBinary<dist_hamming>::get_state, &VPTreeNumpyAdapterBinary<dist_hamming>::set_state));
 
@@ -1399,6 +1644,8 @@ PYBIND11_MODULE(_pynear, m) {
         .def("set", &IVFFlatBinaryNumpyAdapter::set, index_set, py::arg("vectors"))
         .def("searchKNN", &IVFFlatBinaryNumpyAdapter::searchKNN, index_topk,
              py::arg("vectors"), py::arg("k"))
+        .def("searchKNN_arrays", &IVFFlatBinaryNumpyAdapter::searchKNN_arrays, index_topk_arrays,
+             py::arg("vectors"), py::arg("k"))
         .def("nlist",      &IVFFlatBinaryNumpyAdapter::nlist)
         .def("nprobe",     &IVFFlatBinaryNumpyAdapter::nprobe)
         .def("set_nprobe", &IVFFlatBinaryNumpyAdapter::set_nprobe, py::arg("nprobe"));
@@ -1412,6 +1659,8 @@ PYBIND11_MODULE(_pynear, m) {
              py::arg("m") = 8)
         .def("set", &MIHBinaryNumpyAdapter::set, index_set, py::arg("vectors"))
         .def("searchKNN", &MIHBinaryNumpyAdapter::searchKNN, index_topk,
+             py::arg("vectors"), py::arg("k"), py::arg("radius") = 8)
+        .def("searchKNN_arrays", &MIHBinaryNumpyAdapter::searchKNN_arrays, index_topk_arrays,
              py::arg("vectors"), py::arg("k"), py::arg("radius") = 8)
         .def("m",      &MIHBinaryNumpyAdapter::m)
         .def("n",      &MIHBinaryNumpyAdapter::n)
