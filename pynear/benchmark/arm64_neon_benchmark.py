@@ -20,9 +20,10 @@ There is no automated comparison to a "before" baseline here because the
 scalar fallback isn't compiled in once the NEON path is active. The way
 to compare is:
 
-  1. On ARM64, rebuild pynear with -DPYNEAR_FORCE_SCALAR (a #define you'd
-     manually add at the top of DistanceFunctions.hpp to short-circuit the
-     NEON #elif branch) and run this script — record the "scalar" numbers.
+  1. On ARM64, rebuild pynear with the PYNEAR_FORCE_SCALAR compile flag
+     (e.g. `CFLAGS="-DPYNEAR_FORCE_SCALAR" pip install -e .`), which makes
+     DistanceFunctions.hpp skip the SIMD branches and use the scalar
+     fallbacks, and run this script — record the "scalar" numbers.
   2. Restore the default build (NEON path active) and run this script
      again — record the "NEON" numbers.
   3. Ratio is the NEON speedup. Expected: ~2-4x on the float kernels,

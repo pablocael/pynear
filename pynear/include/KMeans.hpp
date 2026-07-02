@@ -6,7 +6,9 @@
  * Assignment step is parallelised with OpenMP; update step is serial
  * (O(N·D) memory-bound, negligible vs. assignment at typical k values).
  *
- * Distance is Euclidean (L2), computed via SIMD dist_l2_f_avx2.
+ * Distance is Euclidean (L2); internally squared L2 (SIMD dist_l2sq_f_avx2)
+ * is used everywhere — k-means++ weighting needs the squared value anyway and
+ * argmin is preserved under the monotone square root.
  */
 
 #include <algorithm>
@@ -50,8 +52,9 @@ inline KMeansResult kmeans_l2(
         for (int64_t i = 0; i < (int64_t)n; ++i) {
             FlatSpan a{data + i * d, d};
             FlatSpan b{prev, d};
-            float v = dist_l2_f_avx2(a, b);
-            v = v * v;  // squared distance for weighted selection
+            // Squared distance for weighted selection — computed directly,
+            // avoiding dist_l2_f_avx2's sqrt that was immediately undone.
+            float v = dist_l2sq_f_avx2(a, b);
             if (v < min_sq[i]) min_sq[i] = v;
         }
 
@@ -85,7 +88,8 @@ inline KMeansResult kmeans_l2(
             int32_t  best_c    = 0;
             for (size_t c = 0; c < k; ++c) {
                 FlatSpan cj{centroids.data() + c * d, d};
-                float dist = dist_l2_f_avx2(xi, cj);
+                // Squared L2: argmin-equivalent to L2 (and skips the sqrt).
+                float dist = dist_l2sq_f_avx2(xi, cj);
                 if (dist < best_dist) { best_dist = dist; best_c = (int32_t)c; }
             }
             if (labels[i] != best_c) {

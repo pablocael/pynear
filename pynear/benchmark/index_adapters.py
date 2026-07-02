@@ -281,6 +281,13 @@ class SKLearnL2Adapter(IndexAdapter):
         return time.time() - s
 
 
+def _parse_hnsw_params(index_name: str):
+    """Parse optional `_mN` / `_efN` suffixes (same convention as `_nprobeN`)."""
+    M = int(index_name.split("_m")[1].split("_")[0]) if "_m" in index_name else 16
+    ef_search = int(index_name.split("_ef")[1].split("_")[0]) if "_ef" in index_name else 50
+    return M, ef_search
+
+
 def create_index_adapter(index_name: str):
     """
     Factory for index adapters.
@@ -290,6 +297,9 @@ def create_index_adapter(index_name: str):
       IVFFlatL2Index, IVFFlatL2Index_nprobeN   (approximate, n_probe=N)
       FaissIndexFlatL2, FaissIndexBinaryFlat
       FaissIVFL2, FaissIVFL2_nprobeN             (approximate, n_probe=N)
+      HNSWL2Index, HNSWL2Index_mM_efE            (approximate, HNSW M / ef_search)
+      FaissHNSWL2, FaissHNSWL2_mM_efE            (approximate, HNSW M / ef_search)
+      MIHSeededHNSWBinaryIndex, MIHSeededHNSWBinaryIndex_mM_efE
       AnnoyL2, AnnoyManhattan, AnnoyHamming
       SKLearnL2, BKTreeBinaryIndex
     """
@@ -300,6 +310,18 @@ def create_index_adapter(index_name: str):
     if index_name.startswith("FaissIVFL2"):
         n_probe = int(index_name.split("_nprobe")[1]) if "_nprobe" in index_name else 10
         return FaissIVFAdapter(n_probe=n_probe)
+
+    if index_name.startswith("HNSWL2Index"):
+        M, ef_search = _parse_hnsw_params(index_name)
+        return HNSWL2Adapter(M=M, ef_search=ef_search)
+
+    if index_name.startswith("FaissHNSWL2"):
+        M, ef_search = _parse_hnsw_params(index_name)
+        return FaissHNSWAdapter(M=M, ef_search=ef_search)
+
+    if index_name.startswith("MIHSeededHNSWBinaryIndex"):
+        M, ef_search = _parse_hnsw_params(index_name)
+        return MIHSeededHNSWBinaryAdapter(M=M, ef_search=ef_search)
 
     if index_name.startswith("VPTree"):
         return PyNearVPAdapter(index_name)

@@ -155,13 +155,18 @@ public:
         // i should be size_t, however msvc requires signed integral loop variables (except with -openmp:llvm)
         for (int i = 0; i < static_cast<int>(queries.size()); ++i) {
             const T &query = queries[i];
-            std::priority_queue<VPTreeSearchElement> knnQueue;
-            searchKNN(_rootIdx, query, k, knnQueue);
+            // Thread-local vector-backed max-heap — reused across queries (no per-query allocation).
+            // std::priority_queue is specified as push_back+push_heap / pop_heap+pop_back over its
+            // container, so this preserves the exact admission/ordering semantics.
+            thread_local std::vector<VPTreeSearchElement> tl_knnHeap;
+            tl_knnHeap.clear();
+            tl_knnHeap.reserve(std::min<size_t>(_examples.size(), k));
+            searchKNN(_rootIdx, query, k, tl_knnHeap);
 
             // we must always return k elements for each search unless there is no k elements
-            assert(knnQueue.size() == std::min<size_t>(_examples.size(), k));
+            assert(tl_knnHeap.size() == std::min<size_t>(_examples.size(), k));
 
-            fillSearchResult(knnQueue, results[i]);
+            fillSearchResult(tl_knnHeap, results[i]);
         }
     }
 
@@ -240,6 +245,14 @@ public:
     }
 
 protected:
+    // Leaf bucketing: stop splitting once a node's range holds this many points
+    // or fewer. Such a node keeps its full [start, end] range, gets no children,
+    // and its radius stays 0 / vantage point unused (search never reads either
+    // for childless nodes — it scans the whole range linearly instead).
+    // Trees deserialized from older pickles simply have single-point leaves,
+    // which the same leaf-scan path handles (range size 1).
+    static constexpr int32_t kLeafSize = 32;
+
     /*
      *  Builds a Vantage Point tree using a level-parallel BFS strategy.
      *
@@ -279,7 +292,7 @@ protected:
                 int32_t nextSlot = (int32_t)_nodePool.size();
                 for (int32_t i = 0; i < nItems; i++) {
                     const int32_t s = current[i].start, e = current[i].end;
-                    if (s == e) continue;
+                    if (e - s + 1 <= kLeafSize) continue; // leaf bucket: no children
                     const int32_t median = (s + e) / 2;
                     if (s + 1   <= median) leftSlot[i]  = nextSlot++;
                     if (median + 1 <= e)   rightSlot[i] = nextSlot++;
@@ -292,7 +305,7 @@ protected:
             next.reserve(2 * nItems);
             for (int32_t i = 0; i < nItems; i++) {
                 const int32_t s = current[i].start, e = current[i].end;
-                if (s == e) continue;
+                if (e - s + 1 <= kLeafSize) continue; // leaf bucket: no children
                 const int32_t median = (s + e) / 2;
                 if (leftSlot[i]  >= 0) next.push_back({leftSlot[i],  s + 1,      median});
                 if (rightSlot[i] >= 0) next.push_back({rightSlot[i], median + 1, e});
@@ -309,7 +322,9 @@ protected:
                 const int32_t start   = current[i].start;
                 const int32_t end_    = current[i].end;
 
-                if (start == end_) continue;
+                // Leaf bucket: keep the whole [start, end_] range, no vantage
+                // point, radius 0, no children (defaults from construction).
+                if (end_ - start + 1 <= kLeafSize) continue;
 
                 const int32_t vpIndex = selectVantagePoint(start, end_);
                 std::swap(_indices[vpIndex], _indices[start]);
@@ -435,7 +450,7 @@ protected:
      * _examples[pos] (sequential memory) — no _indices lookup for data.
      */
     void searchKNN(int32_t partitionIdx, const T &val, size_t k,
-                   std::priority_queue<VPTreeSearchElement> &knnQueue) {
+                   std::vector<VPTreeSearchElement> &knnHeap) {
 
         auto tau = std::numeric_limits<distance_type>::max();
 
@@ -445,65 +460,112 @@ protected:
 
         static constexpr auto heap_cmp = std::greater<std::pair<distance_type, int32_t>>{};
 
-        tl_heap.push_back({(distance_type)0, partitionIdx});
-        // single-element "heap" is trivially valid
+        // Descend directly into the mandatory child (border bound 0) instead of
+        // push_heap+pop_heap cycling it through the frontier heap each level.
+        // A (0, idx) entry can only lose the pop against another 0-bound entry with a
+        // smaller partition index (pairs compare lexicographically), so we descend
+        // directly unless the heap minimum beats (0, mandatoryIdx) — this replicates
+        // the exact pop sequence (and hence distance-evaluation/tau-update order,
+        // including tie behavior) of the previous implementation.
+        int32_t currentIdx = partitionIdx;
 
-        while (!tl_heap.empty()) {
-            std::pop_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
-            auto [distToBorder, currentIdx] = tl_heap.back();
-            tl_heap.pop_back();
-
-            // Prune: lower bound on this partition > current search radius
-            if (distToBorder > tau && knnQueue.size() >= k) continue;
-
+        for (;;) {
             const VPLevelPartition<distance_type> &current = _nodePool[currentIdx];
 
-            // Access point data — for FlatSpan, _examples[pos] is direct after reorderForCache()
-            distance_type dist;
-            if constexpr (std::is_same_v<T, FlatSpan>) {
-                dist = distance(val, _examples[current.start()]);
-            } else {
-                dist = distance(val, _examples[_indices[current.start()]]);
-            }
+            if (current.left_idx() < 0 && current.right_idx() < 0) {
+                // Leaf bucket: childless node — scan every point in [start, end]
+                // linearly, feeding the k-NN heap with the same admission logic as
+                // individual points. After reorderForCache()/initFromSerialized()
+                // the FlatSpan rows are contiguous, so this is a sequential SIMD
+                // sweep. Handles any leaf range size, including the single-point
+                // leaves of trees deserialized from older versions.
+                const int32_t leafEnd = current.end();
+                for (int32_t pos = current.start(); pos <= leafEnd; ++pos) {
+                    distance_type dist;
+                    if constexpr (std::is_same_v<T, FlatSpan>) {
+                        dist = distance(val, FlatSpan{_flat_backing.data() + (size_t)pos * _dim, _dim});
+                    } else {
+                        dist = distance(val, _examples[_indices[pos]]);
+                    }
 
-            if (dist < tau || knnQueue.size() < k) {
-                if (knnQueue.size() == k) knnQueue.pop();
-                knnQueue.push(VPTreeSearchElement((int64_t)_indices[current.start()], dist));
-                tau = knnQueue.top().dist;
-            }
-
-            int32_t left_idx  = current.left_idx();
-            int32_t right_idx = current.right_idx();
-
-            if (dist > current.radius()) {
-                // Mandatory: right (outside sphere)
-                if (right_idx >= 0) {
-                    tl_heap.push_back({(distance_type)0, right_idx});
-                    std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
-                }
-                // Optional: left (inside sphere) — lower bound = dist - radius
-                if (left_idx >= 0) {
-                    auto toBorder = dist - current.radius();
-                    if (knnQueue.size() < k || toBorder <= tau) {
-                        tl_heap.push_back({toBorder, left_idx});
-                        std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
+                    if (dist < tau || knnHeap.size() < k) {
+                        if (knnHeap.size() == k) {
+                            std::pop_heap(knnHeap.begin(), knnHeap.end());
+                            knnHeap.pop_back();
+                        }
+                        knnHeap.emplace_back((int64_t)_indices[pos], dist);
+                        std::push_heap(knnHeap.begin(), knnHeap.end());
+                        tau = knnHeap.front().dist;
                     }
                 }
             } else {
-                // Mandatory: left (inside sphere)
-                if (left_idx >= 0) {
-                    tl_heap.push_back({(distance_type)0, left_idx});
+                // Internal node: evaluate the vantage point at start(), then descend.
+                // Access point data — for FlatSpan, after reorderForCache()/initFromSerialized()
+                // tree position i always maps to _flat_backing[i*_dim .. ), so build the span
+                // inline (avoids the dependent load through the _examples array).
+                distance_type dist;
+                if constexpr (std::is_same_v<T, FlatSpan>) {
+                    dist = distance(val, FlatSpan{_flat_backing.data() + (size_t)current.start() * _dim, _dim});
+                } else {
+                    dist = distance(val, _examples[_indices[current.start()]]);
+                }
+
+                if (dist < tau || knnHeap.size() < k) {
+                    if (knnHeap.size() == k) {
+                        std::pop_heap(knnHeap.begin(), knnHeap.end());
+                        knnHeap.pop_back();
+                    }
+                    knnHeap.emplace_back((int64_t)_indices[current.start()], dist);
+                    std::push_heap(knnHeap.begin(), knnHeap.end());
+                    tau = knnHeap.front().dist;
+                }
+
+                int32_t mandatoryIdx, optionalIdx;
+                distance_type toBorder;
+                if (dist > current.radius()) {
+                    // Mandatory: right (outside sphere); optional: left — bound = dist - radius
+                    mandatoryIdx = current.right_idx();
+                    optionalIdx  = current.left_idx();
+                    toBorder     = dist - current.radius();
+                } else {
+                    // Mandatory: left (inside sphere); optional: right — bound = radius - dist
+                    mandatoryIdx = current.left_idx();
+                    optionalIdx  = current.right_idx();
+                    toBorder     = current.radius() - dist;
+                }
+
+                if (optionalIdx >= 0 && (knnHeap.size() < k || toBorder <= tau)) {
+                    tl_heap.emplace_back(toBorder, optionalIdx);
                     std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
                 }
-                // Optional: right (outside sphere) — lower bound = radius - dist
-                if (right_idx >= 0) {
-                    auto toBorder = current.radius() - dist;
-                    if (knnQueue.size() < k || toBorder <= tau) {
-                        tl_heap.push_back({toBorder, right_idx});
-                        std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
+
+                if (mandatoryIdx >= 0) {
+                    if (tl_heap.empty() ||
+                        std::pair<distance_type, int32_t>((distance_type)0, mandatoryIdx) < tl_heap.front()) {
+                        // A 0-bound entry is never pruned (tau >= 0), so no prune check needed.
+                        currentIdx = mandatoryIdx;
+                        continue;
                     }
+                    tl_heap.emplace_back((distance_type)0, mandatoryIdx);
+                    std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
                 }
             }
+
+            // Pull the next non-pruned partition from the frontier heap
+            bool found = false;
+            while (!tl_heap.empty()) {
+                std::pop_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
+                auto [distToBorder, nextIdx] = tl_heap.back();
+                tl_heap.pop_back();
+
+                // Prune: lower bound on this partition > current search radius
+                if (distToBorder > tau && knnHeap.size() >= k) continue;
+
+                currentIdx = nextIdx;
+                found = true;
+                break;
+            }
+            if (!found) break;
         }
     }
 
@@ -517,61 +579,87 @@ protected:
 
         static constexpr auto heap_cmp = std::greater<std::pair<distance_type, int32_t>>{};
 
-        tl_heap.push_back({(distance_type)0, partitionIdx});
+        // Same direct-descent strategy as searchKNN — see comment there.
+        int32_t currentIdx = partitionIdx;
 
-        while (!tl_heap.empty()) {
-            std::pop_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
-            auto [distToBorder, currentIdx] = tl_heap.back();
-            tl_heap.pop_back();
-
-            if (distToBorder > resultDist) continue;
-
+        for (;;) {
             const VPLevelPartition<distance_type> &current = _nodePool[currentIdx];
 
-            distance_type dist;
-            if constexpr (std::is_same_v<T, FlatSpan>) {
-                dist = distance(val, _examples[current.start()]);
-            } else {
-                dist = distance(val, _examples[_indices[current.start()]]);
-            }
+            if (current.left_idx() < 0 && current.right_idx() < 0) {
+                // Leaf bucket: childless node — scan every point in [start, end]
+                // linearly (see searchKNN for details; also covers single-point
+                // leaves of trees deserialized from older versions).
+                const int32_t leafEnd = current.end();
+                for (int32_t pos = current.start(); pos <= leafEnd; ++pos) {
+                    distance_type dist;
+                    if constexpr (std::is_same_v<T, FlatSpan>) {
+                        dist = distance(val, FlatSpan{_flat_backing.data() + (size_t)pos * _dim, _dim});
+                    } else {
+                        dist = distance(val, _examples[_indices[pos]]);
+                    }
 
-            if (dist < resultDist) {
-                resultDist  = dist;
-                resultIndex = (int64_t)_indices[current.start()];
-            }
-
-            int32_t left_idx  = current.left_idx();
-            int32_t right_idx = current.right_idx();
-
-            if (dist > current.radius()) {
-                // Must search outside (right)
-                if (right_idx >= 0) {
-                    tl_heap.push_back({(distance_type)0, right_idx});
-                    std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
-                }
-                // May search inside (left)
-                if (left_idx >= 0) {
-                    auto toBorder = dist - current.radius();
-                    if (toBorder < resultDist) {
-                        tl_heap.push_back({toBorder, left_idx});
-                        std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
+                    if (dist < resultDist) {
+                        resultDist  = dist;
+                        resultIndex = (int64_t)_indices[pos];
                     }
                 }
             } else {
-                // Must search inside (left)
-                if (left_idx >= 0) {
-                    tl_heap.push_back({(distance_type)0, left_idx});
+                distance_type dist;
+                if constexpr (std::is_same_v<T, FlatSpan>) {
+                    dist = distance(val, FlatSpan{_flat_backing.data() + (size_t)current.start() * _dim, _dim});
+                } else {
+                    dist = distance(val, _examples[_indices[current.start()]]);
+                }
+
+                if (dist < resultDist) {
+                    resultDist  = dist;
+                    resultIndex = (int64_t)_indices[current.start()];
+                }
+
+                int32_t mandatoryIdx, optionalIdx;
+                distance_type toBorder;
+                if (dist > current.radius()) {
+                    // Must search outside (right); may search inside (left)
+                    mandatoryIdx = current.right_idx();
+                    optionalIdx  = current.left_idx();
+                    toBorder     = dist - current.radius();
+                } else {
+                    // Must search inside (left); may search outside (right)
+                    mandatoryIdx = current.left_idx();
+                    optionalIdx  = current.right_idx();
+                    toBorder     = current.radius() - dist;
+                }
+
+                if (optionalIdx >= 0 && toBorder < resultDist) {
+                    tl_heap.emplace_back(toBorder, optionalIdx);
                     std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
                 }
-                // May search outside (right)
-                if (right_idx >= 0) {
-                    auto toBorder = current.radius() - dist;
-                    if (toBorder < resultDist) {
-                        tl_heap.push_back({toBorder, right_idx});
-                        std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
+
+                if (mandatoryIdx >= 0) {
+                    if (tl_heap.empty() ||
+                        std::pair<distance_type, int32_t>((distance_type)0, mandatoryIdx) < tl_heap.front()) {
+                        // 0-bound entries are never pruned (resultDist >= 0), descend directly.
+                        currentIdx = mandatoryIdx;
+                        continue;
                     }
+                    tl_heap.emplace_back((distance_type)0, mandatoryIdx);
+                    std::push_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
                 }
             }
+
+            bool found = false;
+            while (!tl_heap.empty()) {
+                std::pop_heap(tl_heap.begin(), tl_heap.end(), heap_cmp);
+                auto [distToBorder, nextIdx] = tl_heap.back();
+                tl_heap.pop_back();
+
+                if (distToBorder > resultDist) continue;
+
+                currentIdx = nextIdx;
+                found = true;
+                break;
+            }
+            if (!found) break;
         }
     }
 
@@ -585,7 +673,9 @@ protected:
      */
     int32_t selectVantagePoint(int32_t fromIndex, int32_t toIndex) {
         int32_t range = (toIndex - fromIndex) + 1;
-        if (range <= 2) return fromIndex;
+        // For small partitions the ~S*S sampled distance evaluations cost more than
+        // any split-quality benefit they buy — just take the first element.
+        if (range < 32) return fromIndex;
 
         constexpr int S = 5;
         int nSample = std::min(range, (int32_t)S);
@@ -602,12 +692,16 @@ protected:
             const auto &cand = _examples[_indices[cand_pos]];
 
             float sum = 0.f, sum2 = 0.f;
+            int   nProbes = 0;
             for (int p = 0; p < nSample; ++p) {
                 int32_t probe_pos = uni(tl_rng);
+                if (probe_pos == cand_pos) continue; // skip self-probe (d == 0 would bias variance)
                 float d = (float)distance(cand, _examples[_indices[probe_pos]]);
                 sum += d; sum2 += d * d;
+                ++nProbes;
             }
-            float var = sum2 / nSample - (sum / nSample) * (sum / nSample);
+            if (nProbes == 0) continue;
+            float var = sum2 / nProbes - (sum / nProbes) * (sum / nProbes);
             if (var > best_spread) {
                 best_spread = var;
                 best_vp = cand_pos;
@@ -616,17 +710,20 @@ protected:
         return best_vp;
     }
 
-    // Fill result element from search element internal structure
-    // After a call to that function, knnQueue gets invalidated!
-    void fillSearchResult(std::priority_queue<VPTreeSearchElement> &knnQueue, VPTreeSearchResultElement &element) {
-        element.distances.reserve(knnQueue.size());
-        element.indexes.reserve(knnQueue.size());
+    // Fill result element from the vector-backed max-heap of search elements
+    // After a call to that function, knnHeap gets invalidated (emptied)!
+    // Emits elements in the same (descending-distance) order as the previous
+    // std::priority_queue-based implementation.
+    void fillSearchResult(std::vector<VPTreeSearchElement> &knnHeap, VPTreeSearchResultElement &element) {
+        element.distances.reserve(knnHeap.size());
+        element.indexes.reserve(knnHeap.size());
 
-        while (!knnQueue.empty()) {
-            const VPTreeSearchElement &top = knnQueue.top();
+        while (!knnHeap.empty()) {
+            std::pop_heap(knnHeap.begin(), knnHeap.end());
+            const VPTreeSearchElement &top = knnHeap.back();
             element.distances.push_back(top.dist);
             element.indexes.push_back(top.index);
-            knnQueue.pop();
+            knnHeap.pop_back();
         }
     }
 

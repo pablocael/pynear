@@ -11,6 +11,8 @@ import pytest
 
 import pynear
 
+from pynear.tests.helpers import _nearest_first, _reference_topk_cosine
+
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -21,23 +23,6 @@ def _brute_l2(db: np.ndarray, queries: np.ndarray, k: int):
     order = np.argsort(d, axis=1)[:, :k]
     sorted_d = np.take_along_axis(d, order, axis=1)
     return order, sorted_d
-
-
-def _brute_cosine(db: np.ndarray, queries: np.ndarray, k: int):
-    """Brute-force cosine top-k, returning nearest-first."""
-    db_n = db / np.linalg.norm(db, axis=1, keepdims=True)
-    q_n = queries / np.linalg.norm(queries, axis=1, keepdims=True)
-    d = 1.0 - q_n @ db_n.T
-    order = np.argsort(d, axis=1)[:, :k]
-    sorted_d = np.take_along_axis(d, order, axis=1)
-    return order, sorted_d
-
-
-def _nearest_first(indices, distances):
-    """Reverse pynear's farthest-first-within-top-k convention."""
-    indices = np.array(indices, dtype=np.int64)[:, ::-1]
-    distances = np.array(distances, dtype=np.float64)[:, ::-1]
-    return indices, distances
 
 
 def _recall_at_k(pred_idx, ref_idx, k):
@@ -134,27 +119,6 @@ def test_hnsw_l2_search1NN():
     assert matches >= len(queries) - 1, f"1NN exact matches = {matches}/{len(queries)}"
 
 
-def test_hnsw_l2_pickle_round_trip():
-    rng = np.random.default_rng(123)
-    db = rng.standard_normal((400, 24)).astype(np.float32)
-    queries = rng.standard_normal((10, 24)).astype(np.float32)
-
-    idx = pynear.HNSWL2Index(M=16, ef_construction=200, ef_search=100)
-    idx.set(db)
-    i1, d1 = idx.searchKNN(queries, k=5)
-
-    blob = pickle.dumps(idx)
-    restored = pickle.loads(blob)
-
-    assert restored.size == idx.size
-    assert restored.dim == idx.dim
-    assert restored.ef_search == idx.ef_search
-
-    i2, d2 = restored.searchKNN(queries, k=5)
-    np.testing.assert_array_equal(np.array(i1), np.array(i2))
-    np.testing.assert_allclose(np.array(d1), np.array(d2), rtol=1e-6)
-
-
 def test_hnsw_l2_zero_vector_safe():
     """Zero-vector query must not produce NaN/inf and must return k finite distances."""
     rng = np.random.default_rng(11)
@@ -206,7 +170,7 @@ def test_hnsw_cosine_matches_brute_force_at_high_ef():
     pred_idx, _ = idx.searchKNN(queries, k=k)
     pred_idx, _ = _nearest_first(pred_idx, _)
 
-    ref_idx, _ = _brute_cosine(db, queries, k)
+    ref_idx, _ = _reference_topk_cosine(db, queries, k)
     recall = _recall_at_k(pred_idx, ref_idx, k)
     assert recall >= 0.95, f"cosine recall@10 = {recall:.3f}"
 
@@ -230,22 +194,6 @@ def test_hnsw_cosine_distance_scale():
 
     assert py_idx.tolist() == [[0, 2, 1]]
     np.testing.assert_allclose(py_dist[0], [0.0, 1.0, 2.0], atol=1e-5)
-
-
-def test_hnsw_cosine_pickle_round_trip():
-    rng = np.random.default_rng(77)
-    db = rng.standard_normal((300, 16)).astype(np.float32)
-    queries = rng.standard_normal((5, 16)).astype(np.float32)
-
-    idx = pynear.HNSWCosineIndex(M=16, ef_construction=100, ef_search=100)
-    idx.set(db)
-    i1, d1 = idx.searchKNN(queries, k=5)
-
-    restored = pickle.loads(pickle.dumps(idx))
-    i2, d2 = restored.searchKNN(queries, k=5)
-
-    np.testing.assert_array_equal(np.array(i1), np.array(i2))
-    np.testing.assert_allclose(np.array(d1), np.array(d2), rtol=1e-6)
 
 
 def test_hnsw_sq8_recall_within_2pct_of_float():
@@ -600,44 +548,50 @@ def test_hnsw_deterministic_with_n_threads_one():
     np.testing.assert_allclose(np.array(da), np.array(db_), rtol=1e-6)
 
 
-# ─── Pickle round-trips for the remaining variants ──────────────────────────
+# ─── Pickle round-trips ─────────────────────────────────────────────────────
 
 
-def test_hnsw_sq8_pickle_round_trip():
-    """HNSWL2IndexSQ8 must round-trip through pickle, preserving scale + graph."""
-    rng = np.random.default_rng(101)
-    db = rng.standard_normal((400, 32)).astype(np.float32)
-    q = rng.standard_normal((10, 32)).astype(np.float32)
+def _float_pickle_data(seed, n, d, n_queries):
+    rng = np.random.default_rng(seed)
+    return (rng.standard_normal((n, d)).astype(np.float32),
+            rng.standard_normal((n_queries, d)).astype(np.float32))
 
-    idx = pynear.HNSWL2IndexSQ8(M=8, ef_construction=100, ef_search=100)
+
+def _binary_pickle_data(seed, n, d, n_queries):
+    rng = np.random.default_rng(seed)
+    return (rng.integers(0, 256, size=(n, d), dtype=np.uint8),
+            rng.integers(0, 256, size=(n_queries, d), dtype=np.uint8))
+
+
+@pytest.mark.parametrize("cls,ctor_kwargs,make_data,checked_attrs,exact_distances", [
+    (pynear.HNSWL2Index, dict(M=16, ef_construction=200, ef_search=100),
+     lambda: _float_pickle_data(123, 400, 24, 10), ("size", "dim", "ef_search"), False),
+    (pynear.HNSWCosineIndex, dict(M=16, ef_construction=100, ef_search=100),
+     lambda: _float_pickle_data(77, 300, 16, 5), (), False),
+    (pynear.HNSWL2IndexSQ8, dict(M=8, ef_construction=100, ef_search=100),
+     lambda: _float_pickle_data(101, 400, 32, 10), ("size", "ef_search", "scale"), False),
+    (pynear.HNSWBinaryIndex, dict(M=16, ef_construction=100, ef_search=100),
+     lambda: _binary_pickle_data(123, 400, 16, 10), (), True),
+], ids=["l2", "cosine", "sq8", "binary"])
+def test_hnsw_pickle_round_trip(cls, ctor_kwargs, make_data, checked_attrs, exact_distances):
+    """Pickle round-trips must preserve attributes (incl. SQ8 scale) and
+    reproduce bit-identical search results."""
+    db, queries = make_data()
+    idx = cls(**ctor_kwargs)
     idx.set(db)
-    i1, d1 = idx.searchKNN(q, k=5)
-    scale_before = idx.scale
+    i1, d1 = idx.searchKNN(queries, k=5)
+    attrs_before = {attr: getattr(idx, attr) for attr in checked_attrs}
 
     restored = pickle.loads(pickle.dumps(idx))
-    assert restored.size == idx.size
-    assert restored.ef_search == idx.ef_search
-    assert restored.scale == scale_before
-    i2, d2 = restored.searchKNN(q, k=5)
+    for attr, value in attrs_before.items():
+        assert getattr(restored, attr) == value, f"{attr} not preserved by pickle"
+
+    i2, d2 = restored.searchKNN(queries, k=5)
     np.testing.assert_array_equal(np.array(i1), np.array(i2))
-    np.testing.assert_allclose(np.array(d1), np.array(d2), rtol=1e-6)
-
-
-def test_hnsw_binary_pickle_round_trip():
-    rng = np.random.default_rng(123)
-    db = rng.integers(0, 256, size=(400, 16), dtype=np.uint8)
-    q = rng.integers(0, 256, size=(10, 16), dtype=np.uint8)
-
-    idx = pynear.HNSWBinaryIndex(M=16, ef_construction=100, ef_search=100)
-    idx.set(db)
-    i1, d1 = idx.searchKNN(q, k=5)
-
-    blob = pickle.dumps(idx)
-    restored = pickle.loads(blob)
-    i2, d2 = restored.searchKNN(q, k=5)
-
-    np.testing.assert_array_equal(np.array(i1), np.array(i2))
-    np.testing.assert_array_equal(np.array(d1), np.array(d2))
+    if exact_distances:
+        np.testing.assert_array_equal(np.array(d1), np.array(d2))
+    else:
+        np.testing.assert_allclose(np.array(d1), np.array(d2), rtol=1e-6)
 
 
 # ─── HNSWL2IndexSQ8 specifics ───────────────────────────────────────────────

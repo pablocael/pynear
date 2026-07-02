@@ -17,13 +17,13 @@ rows with 5 random bits flipped. All configurations reach **100% Recall@10**.
 
 | Index | ms / query | QPS | vs Faiss brute-force |
 | --- | --- | --- | --- |
-| **pynear `MIHBinaryIndex`** (m=8, radius=4) | **0.0083** | **120,515** | **~39× faster** |
-| pynear `IVFFlatBinaryIndex` (nlist=512, nprobe=16) | 1.824 | 548 | 0.18× |
-| Faiss `IndexBinaryFlat` (exact brute-force) | 0.3208 | 3,118 | 1× (baseline) |
-| Faiss `IndexBinaryMultiHash` | 22.113 | 45 | 0.01× |
+| **pynear `MIHBinaryIndex`** (m=8, radius=4) | **0.0088** | **114,039** | **~34× faster** |
+| pynear `IVFFlatBinaryIndex` (nlist=512, nprobe=16) | 0.021 | 47,993 | 14.36× |
+| Faiss `IndexBinaryFlat` (exact brute-force) | 0.2993 | 3,341 | 1× (baseline) |
+| Faiss `IndexBinaryMultiHash` | 21.612 | 46 | 0.01× |
 
 On wide descriptors, `MIHBinaryIndex` finds near-duplicates at 100% recall
-**~39× faster than Faiss's exact brute-force scan**, while Faiss's
+**~34× faster than Faiss's exact brute-force scan**, while Faiss's
 own Multi-Index Hashing is not competitive at this width.
 
 ## 2. SIFT1M (128-bit) — pynear MIH vs Faiss MIH at matched recall
@@ -34,16 +34,16 @@ At matched recall, `MIHBinaryIndex` is consistently faster than Faiss's own
 
 | Recall@10 | pynear MIH (m=4) | Faiss MIH (nhash=4) | speedup |
 | --- | --- | --- | --- |
-| 0.28 | 86,376 (r=6) | 47,875 (nflip=1) | 1.80× |
-| 0.53 | 23,481 (r=8) | 15,500 (nflip=2) | 1.51× |
-| 0.73 | 4,690 (r=14) | 3,032 (nflip=3) | 1.55× |
-| 0.82 | 809 (r=16) | 630 (nflip=4) | 1.28× |
-| 0.84 | 171 (r=20) | 154 (nflip=5) | 1.11× |
-| 0.84 | 43 (r=24) | 44 (nflip=6) | 0.97× |
+| 0.28 | 141,055 (r=6) | 52,346 (nflip=1) | 2.69× |
+| 0.53 | 9,053 (r=14) | 15,881 (nflip=2) | 0.57× |
+| 0.73 | 9,053 (r=14) | 3,456 (nflip=3) | 2.62× |
+| 0.82 | 789 (r=20) | 689 (nflip=4) | 1.15× |
+| 0.84 | 159 (r=24) | 166 (nflip=5) | 0.96× |
+| 0.84 | 159 (r=24) | 46 (nflip=6) | 3.45× |
 
 **The honest caveat:** on *narrow* 128-bit descriptors, an optimised
 brute-force POPCNT scan is hard to beat — Faiss `IndexBinaryFlat` does
-**22,559 QPS** (exact) here, faster than either MIH
+**23,572 QPS** (exact) here, faster than either MIH
 implementation above the ~0.5 recall mark. Multi-Index Hashing earns its keep
 on **wide descriptors** and **small-radius / near-duplicate** retrieval, as the
 512-bit table shows. For high-recall search on narrow descriptors, prefer

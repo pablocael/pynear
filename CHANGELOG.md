@@ -3,6 +3,55 @@
 All notable changes to PyNear are documented in this file. Versioning follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html): MAJOR.MINOR.PATCH.
 
+## Unreleased
+
+### Added
+
+- **`searchKNN_arrays`** — batch query API returning fixed-shape `(n, k)`
+  NumPy arrays (indices and distances) instead of per-query Python lists.
+  Results are sorted nearest-first; when fewer than `k` neighbours exist,
+  rows are padded with `-1`.
+- **`PYNEAR_MARCH` build override** — when building from source,
+  `PYNEAR_MARCH=native pip install .` compiles with `-march=native`
+  (enabling AVX-512 where present); `PYNEAR_MARCH=x86-64` produces a
+  portable pre-AVX2 build. `CFLAGS=-DPYNEAR_FORCE_SCALAR` still forces the
+  scalar kernels.
+
+### Changed
+
+- **Deterministic wheel SIMD baseline.** Builds no longer use
+  `-march=native`; x86-64 now compiles with explicit
+  `-mavx2 -mfma -mpopcnt` (Haswell 2013+), so wheels built in CI no longer
+  inherit the build runner's ISA (previously a runner with AVX-512 could
+  produce wheels that crash with SIGILL on CPUs without it, and macOS
+  x86-64 cross-builds ended up with no SIMD at all — they now get the same
+  AVX2 baseline). Explicit `-O3 -fno-math-errno` is now always passed on
+  gcc/clang. CI smoke-tests every wheel by importing pynear and running a
+  query.
+- **GIL release on heavy index calls** — `set`, `add`, `searchKNN` and the
+  other native entry points release the GIL while C++ runs. Concurrent
+  searches on one index are safe; mutating an index concurrently with any
+  other call on it is undefined (same semantics as faiss/hnswlib).
+- **VP-tree leaf bucketing** — small subtrees are stored as flat buckets
+  and scanned linearly instead of recursed. Exactness is preserved.
+
+### Performance
+
+- **MIH**: refined pigeonhole candidate filter — ~1.7× faster queries.
+- **Binary IVF**: ~10× faster batch queries.
+- **HNSW**: ~8× faster batch queries with `n_threads > 1`.
+- **`ShardedHNSWIndex`**: ~5–6× faster (parallel shard builds and
+  cross-shard queries).
+- **VPTree**: ~2× faster queries (leaf bucketing + kernel work).
+
+### Fixed
+
+- **`hamming_u8` / `hamming_u16` overflow** in the wide-descriptor
+  accumulation paths.
+- **aarch64 Linux source builds** — the unconditional x86-only `-mavx`
+  flag broke compilation on ARM; ARM builds now pass no x86 flags (NEON is
+  implied by the base ISA).
+
 ## 2.4.0 — 2026-05-21
 
 ### Added

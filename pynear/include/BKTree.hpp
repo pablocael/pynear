@@ -1,6 +1,9 @@
-#include <deque>
+#include <cstdint>
 #include <map>
 #include <optional>
+#include <tuple>
+#include <type_traits>
+#include <vector>
 
 typedef int64_t index_t;
 
@@ -62,7 +65,7 @@ public:
         ++index;
     }
 
-    void update(std::vector<key_t> keys) {
+    void update(const std::vector<key_t> &keys) {
         for (auto const &key : keys) {
             add(key);
         }
@@ -80,14 +83,20 @@ public:
             return std::make_tuple(indices, distances, keys);
         }
 
-        std::deque<BKNode<key_t, distance_t> *> candidates = {node};
+        // Reused FIFO frontier (head index instead of pop_front): preserves the exact
+        // BFS visit order (and thus result-row order) of the previous std::deque
+        // implementation while amortizing allocations across queries.
+        thread_local std::vector<BKNode<key_t, distance_t> *> tl_frontier;
+        tl_frontier.clear();
+        tl_frontier.push_back(node);
+        size_t head = 0;
+
         distance_t distance_cutoff, dist, lower, upper;
         BKNode<key_t, distance_t> *candidate;
         std::optional<distance_t> dist_opt;
 
-        while (!candidates.empty()) {
-            candidate = candidates.front();
-            candidates.pop_front();
+        while (head < tl_frontier.size()) {
+            candidate = tl_frontier[head++];
             distance_cutoff = candidate->max_distance.value_or(0) + threshold;
             dist_opt = metric::threshold_distance(key, candidate->key, distance_cutoff);
 
@@ -105,10 +114,11 @@ public:
 
             lower = dist - threshold;
             upper = dist + threshold;
-            for (auto [d, bknode] : candidate->leaves) {
-                if (lower <= d && d <= upper) {
-                    candidates.push_back(bknode);
-                }
+            // leaves is an ordered map — jump to the first child in range and stop
+            // past the upper bound instead of scanning all children.
+            for (auto it = candidate->leaves.lower_bound(lower);
+                 it != candidate->leaves.end() && it->first <= upper; ++it) {
+                tl_frontier.push_back(it->second);
             }
         }
         return std::make_tuple(indices, distances, keys);
@@ -121,7 +131,7 @@ public:
         std::vector<std::vector<key_t>> keys_out(keys.size());
 
 #if (ENABLE_OMP_PARALLEL)
-#pragma omp parallel for schedule(static, 1) if (keys.size() > 1)
+#pragma omp parallel for schedule(dynamic) if (keys.size() > 1)
 #endif
         // i should be size_t, however msvc requires signed integral loop variables (except with -openmp:llvm)
         for (int i = 0; i < static_cast<int>(keys.size()); ++i) {

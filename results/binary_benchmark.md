@@ -13,21 +13,21 @@ Multi-Index Hashing, see
 
 ![QPS vs Recall@10](binary_benchmark_qps.png)
 
-| Index                     | Configuration         | Build (s) | ms / query | QPS   | Recall@10 |
-| ------------------------- | --------------------- | --------- | ---------- | ----- | --------- |
-| numpy brute-force (naive) | N=1,000,000           | —         | 50.1       | 20    | 1.000     |
-| IVFFlatBinaryIndex        | nlist=500, nprobe=31  | 6.24      | 1.47       | 679   | 0.825     |
-| IVFFlatBinaryIndex        | nlist=500, nprobe=62  | 6.24      | 2.85       | 351   | 0.842     |
-| IVFFlatBinaryIndex        | nlist=500, nprobe=125 | 6.24      | 5.65       | 177   | 0.845     |
-| IVFFlatBinaryIndex        | nlist=500, nprobe=250 | 6.24      | 10.74      | 93    | 0.845     |
-| IVFFlatBinaryIndex        | nlist=500, nprobe=500 | 6.24      | 20.95      | 48    | 0.845     |
-| MIHBinaryIndex            | m=8, radius=4         | 2.81      | 0.09       | 10825 | 0.585     |
-| MIHBinaryIndex            | m=8, radius=8         | 2.81      | 0.97       | 1031  | 0.829     |
-| MIHBinaryIndex            | m=8, radius=12        | 2.81      | 0.95       | 1053  | 0.829     |
-| MIHBinaryIndex            | m=8, radius=16        | 2.81      | 4.73       | 211   | 0.842     |
-| MIHBinaryIndex            | m=8, radius=24        | 2.81      | 12.37      | 81    | 0.844     |
-| MIHBinaryIndex            | m=8, radius=32        | 2.81      | 19.79      | 51    | 0.843     |
-| MIHBinaryIndex            | m=8, radius=48        | 2.81      | 36.34      | 28    | 0.843     |
+| Index                     | Configuration         | Build (s) | ms / query | QPS    | Recall@10 |
+| ------------------------- | --------------------- | --------- | ---------- | ------ | --------- |
+| numpy brute-force (naive) | N=1,000,000           | —         | 47.7       | 21     | 1.000     |
+| IVFFlatBinaryIndex        | nlist=500, nprobe=31  | 3.10      | 0.01       | 125776 | 0.825     |
+| IVFFlatBinaryIndex        | nlist=500, nprobe=62  | 3.10      | 0.01       | 87783  | 0.842     |
+| IVFFlatBinaryIndex        | nlist=500, nprobe=125 | 3.10      | 0.02       | 56859  | 0.845     |
+| IVFFlatBinaryIndex        | nlist=500, nprobe=250 | 3.10      | 0.03       | 34433  | 0.845     |
+| IVFFlatBinaryIndex        | nlist=500, nprobe=500 | 3.10      | 0.05       | 19100  | 0.845     |
+| MIHBinaryIndex            | m=8, radius=4         | 2.64      | 0.03       | 38554  | 0.466     |
+| MIHBinaryIndex            | m=8, radius=8         | 2.64      | 0.06       | 18158  | 0.652     |
+| MIHBinaryIndex            | m=8, radius=12        | 2.64      | 0.14       | 7326   | 0.799     |
+| MIHBinaryIndex            | m=8, radius=16        | 2.64      | 0.24       | 4254   | 0.832     |
+| MIHBinaryIndex            | m=8, radius=24        | 2.64      | 0.65       | 1541   | 0.841     |
+| MIHBinaryIndex            | m=8, radius=32        | 2.64      | 1.37       | 731    | 0.840     |
+| MIHBinaryIndex            | m=8, radius=48        | 2.64      | 3.54       | 282    | 0.840     |
 
 > Recall@10 is the standard `|returned ∩ true| / k`, measured against a fixed
 > exact-Hamming ground truth. Because Hamming distances are integers, the
@@ -36,8 +36,8 @@ Multi-Index Hashing, see
 > neighbours.
 
 **Key takeaways:**
-- `IVFFlatBinaryIndex` (nprobe=125) reaches Recall@10=0.845 at **177 QPS** (**9× faster than the naive numpy scan**).
-- `MIHBinaryIndex` (radius=4) is the lowest-latency single configuration at **10825 QPS** (Recall@10=0.585).
+- `IVFFlatBinaryIndex` (nprobe=125) reaches Recall@10=0.845 at **56859 QPS** (**2385× faster than the naive numpy scan**).
+- `MIHBinaryIndex` (radius=4) is the lowest-latency single configuration at **38554 QPS** (Recall@10=0.466).
 - MIH's real advantage shows on **wide descriptors (256–512-bit)** and
   **small-radius / near-duplicate** retrieval. On narrow 128-bit data at high
   recall, an optimised brute-force scan can outperform it — pick the index to

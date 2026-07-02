@@ -22,8 +22,9 @@ Move right along a curve to gain recall at the cost of latency.
 ![Recall vs Time](../../docs/img/approximate-l2-high-dimensionality/recall_vs_time.png)
 
 **Key observations:**
-- At **128-D – 512-D** both indices reach 100% recall at `n_probe=5`, with Faiss IVF having lower raw latency due to its BLAS-optimised inner-cluster scan.
-- At **1024-D** FaissIVF reaches 100% recall at `n_probe=10` (~1 ms); IVFFlatL2Index needs `n_probe=20` (~10.6 ms) with the BLAS-backed flat scan.
+- Recall converges quickly for both indices: at **128-D** both reach 100% recall at `n_probe=5`; at **256-D** Faiss IVF gets there at `n_probe=5` while IVFFlatL2Index needs `n_probe=10` (80% at `n_probe=5`); at **512-D** IVFFlatL2Index reaches 100% at `n_probe=5` while Faiss IVF is at 99% there and 100% from `n_probe=10`.
+- At **1024-D** Faiss IVF is already at 100% recall with a single probe; IVFFlatL2Index reaches it at `n_probe=5` (~2.1 ms for the 32-query batch).
+- **Faiss IVF has lower raw latency at every dimensionality** (~8–32× at `n_probe=20`), thanks to its compiled, OpenMP-parallel inner-cluster scan.
 
 ## Query Latency vs Dimensionality (n_probe ≈ 20)
 
@@ -37,10 +38,10 @@ Move right along a curve to gain recall at the cost of latency.
 
 | Dim | IVFFlatL2 time | FaissIVF time | IVFFlatL2 recall | FaissIVF recall |
 |-----|---------------|--------------|-----------------|----------------|
-| 128 | 4.0 ms | 0.2 ms | 1.00 | 1.00 |
-| 256 | 6.0 ms | 0.6 ms | 1.00 | 1.00 |
-| 512 | 10.8 ms | 1.2 ms | 1.00 | 1.00 |
-| 1024 | 21.2 ms | 1.2 ms | 1.00 | 1.00 |
+| 128 | 5.6 ms | 0.2 ms | 1.00 | 1.00 |
+| 256 | 8.5 ms | 0.4 ms | 1.00 | 1.00 |
+| 512 | 9.7 ms | 0.8 ms | 1.00 | 1.00 |
+| 1024 | 21.5 ms | 2.8 ms | 1.00 | 1.00 |
 
 > **When to prefer IVFFlatL2Index over Faiss IVF:** pure-Python install (NumPy only, no
 > native Faiss build), need exact search via `n_probe=n_clusters`, or working in environments
