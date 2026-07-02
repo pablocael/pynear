@@ -97,9 +97,12 @@ points in 0.4--0.9 ms across $d = 2$--$16$ — $9\text{--}20\times$
 faster than Faiss's BLAS-backed \texttt{IndexFlatL2} scan measured in the
 same process — and at $d = 128$ ($N = 120\,000$) it is $11\times$ faster
 than Faiss and $83\times$ faster than scikit-learn.
-For exact Hamming search, \texttt{VPTreeBinaryIndex} now overtakes Faiss
-\texttt{IndexBinaryFlat} at 256-bit descriptors (15.9 ms vs.\ 36.3 ms),
-while Faiss remains faster at $\le 128$ bits.
+For exact Hamming search, Faiss \texttt{IndexBinaryFlat} remains the
+fastest method at every tested width when measured fairly in its own
+process (0.15--0.29 ms vs.\ 7.6--15.9 ms for \texttt{VPTreeBinaryIndex});
+the apparent 256-bit win for the VP-tree in the in-process suite is an
+artefact of the libgomp/libomp contention discussed in
+Section~\ref{sec:setup}.
 In the high-dimensionality approximate regime ($d = 128$--$1024$),
 \texttt{IVFFlatL2Index} attains perfect Recall@10 at
 $n_{\mathrm{probe}} = 20$ with 5.6--21.5 ms for 32 queries, but Faiss
@@ -455,27 +458,31 @@ local feature descriptors.
 \end{tikzpicture}
 \caption{Mean query latency (ms) vs.\ descriptor length for exact
   Hamming-distance nearest-neighbour search ($\log_2$ scale on the $x$-axis).
-  Faiss's flat binary index remains the fastest exact method at 32--128
-  bits, but at 256 bits \texttt{VPTreeBinaryIndex} (v2.4) is now
-  $2.3\times$ faster (15.9 ms vs.\ 36.3 ms).  Faiss is measured in-process
-  here; see the OpenMP caveat in Section~\ref{sec:setup}.
+  Faiss is measured in-process here, which depresses its popcount scan
+  severely (OpenMP caveat, Section~\ref{sec:setup}): measured in an
+  isolated process on the same dataset it answers the batch in 0.15 ms
+  (128-bit) and 0.29 ms (256-bit) and remains the fastest exact method
+  at every width; the apparent VP-tree win at 256 bits is a same-process
+  artefact.
   \texttt{BKTreeBinaryIndex} is optimised for radius/threshold queries
   rather than $k$-NN, explaining its comparatively higher $k$-NN latency.}
 \label{fig:binary}
 \end{figure}
 
-The binary experiments show a split landscape.  Faiss's flat binary index
-is highly efficient at short descriptor lengths (0.29 ms at 32 bits vs.\
-3.2 ms for \texttt{VPTreeBinaryIndex}, and still $4.3\times$ faster at 128
-bits), thanks to its batched hardware-popcount scan.  At 256 bits the
-ordering now reverses: \texttt{VPTreeBinaryIndex} answers the batch in
-15.9 ms against 36.3 ms for Faiss — the leaf-bucketed popcount sweeps
-introduced in v2.4 let the tree's pruning finally pay off at the widest
-descriptor length.  Two honesty notes apply: (i) these Faiss numbers are
-measured in the same process as PyNear and may be depressed by OpenMP
-runtime contention (Section~\ref{sec:setup}); the subprocess-isolated
-comparison of Section~\ref{sec:approx-binary} is the fair reference for
-Faiss's brute-force throughput; and (ii) \texttt{BKTreeBinaryIndex} is
+The binary experiments have one dominant conclusion: exact Hamming search
+is brute force's home turf.  Faiss's batched hardware-popcount scan,
+measured fairly in its own process, answers the 16-query batch in
+0.15--0.29 ms across all widths — well ahead of
+\texttt{VPTreeBinaryIndex} (3.2--15.9 ms), whose metric-tree pruning
+cannot cut deeply into uniformly random binary codes.  The in-process
+Faiss curve in Figure~\ref{fig:binary} crosses above the VP-tree at 256
+bits (36.3 ms), but that crossing is entirely explained by the OpenMP
+runtime contention of Section~\ref{sec:setup} — it is reproduced here
+because same-process deployment is common in practice, not because the
+tree wins fairly.  PyNear's competitive binary offerings are therefore
+the approximate/radius indices of Section~\ref{sec:approx-binary} (MIH
+and binary IVF), not exact tree search.  A further note:
+\texttt{BKTreeBinaryIndex} is
 architecturally designed for threshold (range) queries and incurs the
 highest $k$-NN latency in this benchmark; its inclusion demonstrates the
 broader metric-search capabilities of the PyNear ecosystem beyond $k$-NN.
@@ -1072,13 +1079,13 @@ the better choice on this hardware.
 
 \paragraph{Binary descriptors — exact.}
 Faiss's flat binary index is the fastest exact binary search method at
-32--128 bits, but at 256 bits \texttt{VPTreeBinaryIndex} (v2.4,
-leaf-bucketed popcount sweeps) is now $2.3\times$ faster (15.9 ms vs.\
-36.3 ms in-process).  Since the exact suite times Faiss in the same
-process as PyNear, its numbers may be depressed by the OpenMP runtime
-clash (Section~\ref{sec:setup}); the subprocess-isolated measurement of
-Section~\ref{sec:approx-binary} remains the fair reference for Faiss's
-brute-force throughput.
+every tested width when measured in its own process (0.15--0.29 ms for
+the 200k-code suite, vs.\ 3.2--15.9 ms for \texttt{VPTreeBinaryIndex}).
+The in-process suite shows the VP-tree ahead at 256 bits, but that
+ordering is an artefact of the OpenMP runtime clash
+(Section~\ref{sec:setup}).  For exact binary search, prefer a flat
+popcount scan; PyNear's binary strengths are MIH and binary IVF
+(Section~\ref{sec:approx-binary}).
 \texttt{BKTreeBinaryIndex} is best suited to range queries
 (\texttt{find\_threshold}), where its B-K tree structure is optimal, and
 should not be interpreted as a general-purpose $k$-NN competitor.
