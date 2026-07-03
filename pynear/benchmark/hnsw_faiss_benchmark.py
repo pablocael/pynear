@@ -62,9 +62,16 @@ json.dump(out, open(cfg["out"], "w"))
 """
 
 
-def clustered_dataset(n, dim, n_clusters, rng):
-    centers = rng.standard_normal((n_clusters, dim)).astype(np.float32) * 5.0
-    labels = rng.integers(0, n_clusters, n)
+def make_centers(dim, n_clusters, rng):
+    return rng.standard_normal((n_clusters, dim)).astype(np.float32) * 5.0
+
+
+def clustered_points(centers, n, rng):
+    """Sample points from the given cluster centers. Database and queries must
+    share centers — queries drawn from foreign clusters land in empty space
+    and make recall meaningless."""
+    dim = centers.shape[1]
+    labels = rng.integers(0, len(centers), n)
     return (centers[labels] + rng.standard_normal((n, dim)).astype(np.float32)).astype(np.float32)
 
 
@@ -89,8 +96,9 @@ def main():
     import pynear
 
     rng = np.random.default_rng(SEED)
-    db = clustered_dataset(N, DIM, 50, rng)
-    q = clustered_dataset(NQ, DIM, 50, np.random.default_rng(SEED + 1))
+    centers = make_centers(DIM, 50, rng)
+    db = clustered_points(centers, N, rng)
+    q = clustered_points(centers, NQ, np.random.default_rng(SEED + 1))
     print(f"Computing ground truth ({NQ} queries, k={K}) ...", flush=True)
     gt = brute_gt(db, q, K)
 
