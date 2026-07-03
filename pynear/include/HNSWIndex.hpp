@@ -917,16 +917,11 @@ private:
     // runs only when the graph is read-only: queries, and sequential
     // builds (which never set the flag). PARALLEL builds keep the exact
     // serial loop — not because the batch reads anything the serial loop
-    // doesn't (same ids, same derefs), but because its speed-up shifts
-    // inter-thread timing enough to make a LATENT pre-existing
-    // parallel-build race fire far more often: SIGSEGV in add_point →
-    // search_layer → batch_l2sq_sq8_avx2 on a null/torn example pointer,
-    // ~1 in 36 parallel 100k builds with the batch enabled vs 0 in 150
-    // without. (Root cause to fix separately: the "Link new node →
-    // chosen. No lock" writes in add_point are unlocked while concurrent
-    // inserters read those same lists via read_neighbours.) Gating
-    // restores the old build-time code path and exposure, and costs
-    // nothing — the measured QPS win is entirely post-build.
+    // doesn't (same ids, same derefs), but because build-time descent
+    // showed no measured win — the gain is entirely post-build, so builds
+    // keep the old serial path. (A parallel-build race this batching once
+    // exposed — unlocked own-node link writes in add_point — has since
+    // been fixed by taking the node's own lock there.)
     int32_t greedy_descent(const T& query, int32_t entry, int32_t layer,
                            const SQ8AsymQuery* q_asym = nullptr) const {
         int32_t current = entry;
@@ -1443,14 +1438,24 @@ private:
                                                                      candidates,
                                                                      _M);
 
-            // Link new node → chosen. No lock: this is our own node.
-            if (l == 0) {
-                for (size_t i = 0; i < chosen.size(); i++) {
-                    _layer0_adj[(size_t)pidx * _M_max0 + i] = chosen[i];
+            // Link new node → chosen, under pidx's own exclusive lock.
+            // "Our own node" is NOT private after the first layer: once the
+            // reverse edges of a higher layer are installed below, other
+            // threads can reach pidx and read these lists via
+            // read_neighbours() while we write them — an unlocked write here
+            // caused rare torn reads (garbage neighbour ids → SIGSEGV) in
+            // parallel builds. The lock is uncontended in the common case
+            // and is never held while acquiring another node's lock.
+            {
+                std::unique_lock<std::shared_mutex> own_lock(_node_locks[pidx]);
+                if (l == 0) {
+                    for (size_t i = 0; i < chosen.size(); i++) {
+                        _layer0_adj[(size_t)pidx * _M_max0 + i] = chosen[i];
+                    }
+                    _layer0_count[pidx] = static_cast<int32_t>(chosen.size());
+                } else {
+                    _adjacency[pidx][l] = chosen;
                 }
-                _layer0_count[pidx] = static_cast<int32_t>(chosen.size());
-            } else {
-                _adjacency[pidx][l] = chosen;
             }
 
             // Link reverse edges; prune neighbour's adjacency if it now
