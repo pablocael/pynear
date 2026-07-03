@@ -38,6 +38,16 @@ inline int omp_get_thread_num()  { return 0; }
 
 namespace hnsw {
 
+// Asymmetric (ADC) SQ8 query, threaded through the search paths when the
+// caller supplies a float query instead of quantising it. Carries the
+// per-query precomputes for the dot-form distance
+//   ||qp − alpha∘code||² = ||qp||² + node_norm − 2 (qp∘alpha)·code
+// where qp = raw_query − beta (see HNSWIndex::searchKNN_asym).
+struct SQ8AsymQuery {
+    const float* w;      // qp ∘ alpha, dim floats
+    float qnorm_sq;      // ||qp||²
+};
+
 // Pair sortable by distance (min-heap by .first if used directly in priority_queue<,,greater>)
 template <typename distT> struct DistNode {
     distT distance;
@@ -442,6 +452,83 @@ public:
         }
     }
 
+    // Asymmetric (ADC) batch search — T = SQ8Span only (instantiated lazily,
+    // other T's never call it). Queries are row-major float vectors, one
+    // `dim()` row per query, ALREADY shifted by the decode offset (caller
+    // subtracts beta per dim; beta = 0 for legacy global-scale codes).
+    // Requires set_sq8_alpha() to have been called with the per-dim decode
+    // scales. Distances returned are squared L2 in the original float space.
+    void searchKNN_asym(const float* queries, size_t nq, size_t k,
+                        std::vector<std::vector<int64_t>>& indices_out,
+                        std::vector<std::vector<distT>>& distances_out,
+                        const uint8_t* filter_mask = nullptr) {
+        indices_out.assign(nq, {});
+        distances_out.assign(nq, {});
+
+        if (_entry_point < 0 || _examples.empty()) return;
+        assert(_sq8_alpha.size() == _dim);
+        assert(_sq8_node_norms.size() == _examples.size());
+
+        const T shell{nullptr, _dim};  // dim carrier; never dereferenced (q_asym set)
+        auto process_query = [&](size_t qi) {
+            // Per-query precomputes for the dot-form distance: w = qp∘alpha
+            // and ||qp||² (see SQ8AsymQuery). ~dim floats, negligible next
+            // to the beam search itself.
+            const float* qp = queries + qi * _dim;
+            std::vector<float> w(_dim);
+            float qnorm_sq = 0.0f;
+            for (size_t j = 0; j < _dim; j++) {
+                w[j] = qp[j] * _sq8_alpha[j];
+                qnorm_sq += qp[j] * qp[j];
+            }
+            const SQ8AsymQuery q_asym{w.data(), qnorm_sq};
+
+            std::vector<DistNode<distT>> top =
+                search_one(shell, k, filter_mask, nullptr, &q_asym);
+            indices_out[qi].reserve(top.size());
+            distances_out[qi].reserve(top.size());
+            for (auto it = top.rbegin(); it != top.rend(); ++it) {
+                indices_out[qi].push_back(it->node_id);
+                distances_out[qi].push_back(it->distance);
+            }
+        };
+
+#ifdef _OPENMP
+        if (_n_threads > 1 && nq > 1) {
+#pragma omp parallel for schedule(dynamic) num_threads(_n_threads)
+            for (int64_t qi = 0; qi < static_cast<int64_t>(nq); qi++) {
+                process_query(static_cast<size_t>(qi));
+            }
+            return;
+        }
+#endif
+        for (size_t qi = 0; qi < nq; qi++) {
+            process_query(qi);
+        }
+    }
+
+    // Per-dimension SQ8 decode scales (alpha in: decoded[d] = alpha[d] *
+    // code[d] + beta[d]) for the asymmetric query path. Owned by the adapter
+    // (which also owns beta and pre-shifts queries by it); must be re-called
+    // after set()/add()/rebuild()/deserialize() — it also (re)computes the
+    // per-node decoded norms ||alpha∘code||² used by the dot-form distance.
+    // Deliberately NOT reset by clear(). T = SQ8Span only.
+    void set_sq8_alpha(std::vector<float> alpha) {
+        _sq8_alpha = std::move(alpha);
+        if constexpr (std::is_same_v<T, SQ8Span>) {
+            _sq8_node_norms.assign(_examples.size(), 0.0f);
+            for (size_t i = 0; i < _examples.size(); i++) {
+                const int8_t* c = _examples[i].ptr;
+                float s = 0.0f;
+                for (size_t j = 0; j < _dim; j++) {
+                    float v = _sq8_alpha[j] * static_cast<float>(c[j]);
+                    s += v * v;
+                }
+                _sq8_node_norms[i] = s;
+            }
+        }
+    }
+
     // Convenience wrapper: k=1 searchKNN unwrapped to flat outputs.
     // Queries with no eligible result (empty index / fully filtered)
     // keep the -1 / zero-distance placeholders.
@@ -691,18 +778,36 @@ private:
         return static_cast<int32_t>(-std::log(r) * _mL);
     }
 
+    // Distance from the query to a stored node. `q_asym` selects the SQ8
+    // asymmetric (ADC) path: a float query against the node's decoded int8
+    // codes via the dot-form (see SQ8AsymQuery / set_sq8_alpha). nullptr
+    // keeps the legacy behaviour: distance_fn on two stored-type values —
+    // used by construction (code vs code) and every non-SQ8 instantiation.
+    distT query_node_dist(const T& query, const SQ8AsymQuery* q_asym, int32_t node) const {
+        if constexpr (std::is_same_v<T, SQ8Span>) {
+            if (q_asym) {
+                float dsq = q_asym->qnorm_sq + _sq8_node_norms[node] -
+                            2.0f * dot_sq8_f_avx2(q_asym->w, _examples[node].ptr, _dim);
+                return static_cast<distT>(dsq < 0.0f ? 0.0f : dsq);
+            }
+        }
+        (void)q_asym;
+        return distance_fn(query, _examples[node]);
+    }
+
     // Greedy single-step search at upper layers: walk neighbours until no
     // closer one is found. Returns the closest node.
-    int32_t greedy_descent(const T& query, int32_t entry, int32_t layer) const {
+    int32_t greedy_descent(const T& query, int32_t entry, int32_t layer,
+                           const SQ8AsymQuery* q_asym = nullptr) const {
         int32_t current = entry;
-        distT current_d = distance_fn(query, _examples[current]);
+        distT current_d = query_node_dist(query, q_asym, current);
         bool changed = true;
         while (changed) {
             changed = false;
             NeighbourView nv = read_neighbours(current, layer);
             for (size_t i = 0; i < nv.count; i++) {
                 int32_t n = nv.ptr[i];
-                distT d = distance_fn(query, _examples[n]);
+                distT d = query_node_dist(query, q_asym, n);
                 if (d < current_d) {
                     current_d = d;
                     current = n;
@@ -773,10 +878,14 @@ private:
     // norm already sits in _norms_sq — passing it avoids recomputing it per
     // layer. The stored value comes from the exact same vec_l2sq_avx2 call
     // on the same data, so distances are bit-identical either way.
+    // Optional `q_asym` (SQ8 only): float query for asymmetric (ADC) search —
+    // see query_node_dist(). When set, `query` is only a dim-carrying shell
+    // and is never dereferenced.
     std::vector<DistNode<distT>>
     search_layer(const T& query, int32_t entry, size_t ef, int32_t layer,
                  const std::vector<int32_t>* extra_seeds = nullptr,
-                 const float* known_query_norm_sq = nullptr) const {
+                 const float* known_query_norm_sq = nullptr,
+                 const SQ8AsymQuery* q_asym = nullptr) const {
         // Check a visited-stamp array out of the pool for the duration of
         // this beam search (returned by the guard's destructor).
         VisitedGuard vguard(*_visited_pool);
@@ -827,7 +936,7 @@ private:
             if (node < 0 || node >= (int32_t)_examples.size()) return;
             if (vis[node] == ver) return;
             vis[node] = ver;
-            distT d = distance_fn(query, _examples[node]);
+            distT d = query_node_dist(query, q_asym, node);
             candidates.push_back({d, node});
             std::push_heap(candidates.begin(), candidates.end(), min_cmp);
             if (results.size() < ef || d < results.front().distance) {
@@ -912,14 +1021,32 @@ private:
             if (nv.count == 0) continue;
 
             if constexpr (std::is_same_v<T, SQ8Span>) {
-                // SQ8 fast path: int8 storage, int32 distance via
-                // batch_l2sq_sq8_avx2 (32 lanes per AVX2 op, 4× wider than
-                // float). Per-vector data is 4× smaller too — much friendlier
-                // to L2/L3 cache.
+                // SQ8 fast path: int8 storage. Query time (q_asym set) uses
+                // the asymmetric decode-FMA kernel — float query vs int8
+                // codes with per-dim scales — which keeps the query
+                // unquantised and lifts the recall ceiling. Build time
+                // (q_asym null) stays symmetric code-vs-code via
+                // batch_l2sq_sq8_avx2 (32 int8 lanes per AVX2 op). Either
+                // way the per-vector data is 4× smaller than float — much
+                // friendlier to L2/L3 cache.
                 process_batch(
                     nv,
                     [&](int32_t n) -> const int8_t* { return _examples[n].ptr; },
-                    [&](auto vptr, const int32_t*, size_t n, distT* dists) {
+                    [&](auto vptr, const int32_t* ids, size_t n, distT* dists) {
+                        if (q_asym) {
+                            // Dot-form ADC: one batched cross-term kernel,
+                            // then compose with the precomputed norms —
+                            // exactly the FlatSpan pattern below.
+                            float dots[kMaxBatch];
+                            batch_dot_sq8_f_avx2_8(q_asym->w, _dim, vptr, n, dots);
+                            for (size_t i = 0; i < n; i++) {
+                                float dsq = q_asym->qnorm_sq +
+                                            _sq8_node_norms[ids[i]] - 2.0f * dots[i];
+                                dists[i] = static_cast<distT>(dsq < 0.0f ? 0.0f : dsq);
+                            }
+                            return;
+                        }
+                        (void)ids;
 #if defined(__AVX512F__)
                         // AVX-512 SQ8: 64 int8 lanes/op (vs AVX2's 32), ~2×
                         // throughput on supporting hardware. We dispatch
@@ -1223,10 +1350,11 @@ private:
     // `extra_seeds` are forwarded to the layer-0 beam (see search_layer).
     std::vector<DistNode<distT>> search_one(const T& query, size_t k,
                                              const uint8_t* filter_mask = nullptr,
-                                             const std::vector<int32_t>* extra_seeds = nullptr) const {
+                                             const std::vector<int32_t>* extra_seeds = nullptr,
+                                             const SQ8AsymQuery* q_asym = nullptr) const {
         int32_t current = _entry_point;
         for (int32_t l = _top_level; l > 0; l--) {
-            current = greedy_descent(query, current, l);
+            current = greedy_descent(query, current, l, q_asym);
         }
         // If there are tombstones OR a filter, fetch more raw candidates
         // than k so we still return k *eligible* results after filtering.
@@ -1240,7 +1368,7 @@ private:
             fetch_k = std::min(k * 8, std::max<size_t>(k * 2, k + n_deleted));
         }
         size_t ef = std::max(_ef_search, fetch_k);
-        auto layer0 = search_layer(query, current, ef, 0, extra_seeds);
+        auto layer0 = search_layer(query, current, ef, 0, extra_seeds, nullptr, q_asym);
 
         std::sort(layer0.begin(), layer0.end(),
                   [](const DistNode<distT>& a, const DistNode<distT>& b) {
@@ -1304,6 +1432,12 @@ private:
     std::vector<T> _examples;
     std::vector<float> _flat_backing;            // owns the raw vectors when T = FlatSpan
     std::vector<int8_t> _sq8_backing;            // owns the raw vectors when T = SQ8Span
+    // Per-dim SQ8 decode scales for asymmetric queries (see set_sq8_alpha).
+    // Survives clear() by design (config, like _M / _ef_*).
+    std::vector<float> _sq8_alpha;
+    // Per-node decoded norms ||alpha∘code||² — the SQ8 analogue of _norms_sq,
+    // recomputed by set_sq8_alpha(). Derived state, never serialised.
+    std::vector<float> _sq8_node_norms;
     // Precomputed ||v_i||² for the dot-product distance trick:
     // ||q − v||² = ||q||² + ||v||² − 2 q·v. Halves the FMA count per
     // distance vs sub-then-square. Only populated for the float-vector

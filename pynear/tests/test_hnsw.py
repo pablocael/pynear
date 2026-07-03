@@ -608,6 +608,70 @@ def test_hnsw_sq8_handles_zero_vectors():
     assert np.all(np.isfinite(d[0]))
 
 
+def test_hnsw_sq8_asymmetric_recall_beats_symmetric_ceiling():
+    """Per-dim affine + asymmetric (ADC) search must beat the RECALL CEILING of
+    the old global-scale symmetric scheme (both sides quantised).
+
+    On this clustered set the old scheme's EXHAUSTIVE (graph-free) recall@10
+    ceiling is 0.943 — no ef could ever exceed it. The ADC index reaches
+    ~0.971 through the graph at ef=256, so 0.955 separates the two schemes
+    with margin on both sides.
+    """
+    rng = np.random.default_rng(42)
+    centers = rng.standard_normal((20, 64)).astype(np.float32) * 5.0
+    labels = rng.integers(0, 20, 8000)
+    db = (centers[labels] + rng.standard_normal((8000, 64)).astype(np.float32)).astype(np.float32)
+    qrng = np.random.default_rng(43)
+    qlabels = qrng.integers(0, 20, 100)
+    queries = (centers[qlabels] + qrng.standard_normal((100, 64)).astype(np.float32)).astype(np.float32)
+    k = 10
+
+    ref_idx, _ = _brute_l2(db, queries, k)
+
+    idx = pynear.HNSWL2IndexSQ8(M=16, ef_construction=200, ef_search=256, seed=42)
+    idx.set(db)
+    ids, _ = idx.searchKNN_arrays(queries, k)
+    r = _recall_at_k(ids, ref_idx, k)
+    assert r >= 0.955, f"SQ8 ADC recall {r:.3f} not above old symmetric ceiling (0.943)"
+
+
+def test_hnsw_sq8_legacy_global_scale_pickle_loads():
+    """Old-format SQ8 pickles (global symmetric scale, no per-dim params —
+    13-slot state tuple) must still load and search correctly."""
+    rng = np.random.default_rng(11)
+    db = rng.standard_normal((2000, 32)).astype(np.float32)
+    queries = rng.standard_normal((50, 32)).astype(np.float32)
+    k = 5
+
+    idx = pynear.HNSWL2IndexSQ8(M=16, ef_construction=200, ef_search=200, seed=42)
+    idx.set(db)
+    state = idx.__getstate__()
+    assert len(state) == 15  # scale(11), alpha(12), beta(13), deleted(14)
+
+    # Reconstruct the historical 13-slot layout: same graph, but codes
+    # quantised with the legacy global symmetric scheme (code = round(x/scale))
+    # and no alpha/beta slots.
+    scale = np.abs(db).max() / 127.0
+    legacy_codes = np.clip(np.round(db / scale), -128, 127).astype(np.int8)
+    legacy_state = tuple(
+        [legacy_codes.tobytes()] + list(state[1:11]) + [np.float32(scale), state[14]]
+    )
+
+    restored = pynear.HNSWL2IndexSQ8.__new__(pynear.HNSWL2IndexSQ8)
+    restored.__setstate__(legacy_state)
+    assert restored.size == len(db)
+    assert abs(restored.scale - scale) < 1e-6
+
+    ids, dists = restored.searchKNN_arrays(queries, k)
+    ref_idx, _ = _brute_l2(db, queries, k)
+    r = _recall_at_k(ids, ref_idx, k)
+    assert r >= 0.9, f"legacy-format SQ8 pickle recall {r:.3f} unexpectedly low"
+    # Distances must be true L2 (asymmetric search decodes the legacy codes
+    # as scale*code): compare top-1 against exact.
+    exact = np.sqrt(((db[np.asarray(ids)[:, 0]] - queries) ** 2).sum(1))
+    np.testing.assert_allclose(np.asarray(dists)[:, 0], exact, rtol=0.1, atol=0.1)
+
+
 def test_hnsw_sq8_extreme_value_range():
     """Very large and very small values in the same vector still quantise without overflow."""
     rng = np.random.default_rng(0)
