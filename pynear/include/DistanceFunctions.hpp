@@ -437,6 +437,205 @@ inline void batch_l2sq_sq8_avx2(const int8_t* query, size_t d,
 #endif
 }
 
+// ─── Asymmetric SQ8 distance kernels (ADC) ─────────────────────────────────
+// Float query vs int8 codes with per-dimension decode scales. The full
+// distance is
+//     dist = Σ_d (qp[d] − alpha[d]·code[d])²
+//          = ||qp||² + ||alpha∘code||² − 2 Σ_d (qp[d]·alpha[d])·code[d]
+// where qp is the query pre-shifted by the decode offset (qp = q − beta;
+// beta = 0 for legacy global-scale codes). Keeping the query in float
+// (one-sided quantisation noise) is what lifts the SQ8 recall ceiling; see
+// results/hnsw_faiss_comparison.md.
+//
+// Like the FlatSpan dot-product path, we implement only the cross term as a
+// kernel: the caller precomputes w = qp∘alpha once per query and the
+// per-node decoded norms ||alpha∘code||² once per build (HNSWIndex keeps
+// them next to the codes), leaving ONE fused op per 8 codes in the hot loop:
+// _mm_loadl_epi64 (8 codes) → cvtepi8_epi32 → cvtepi32_ps → FMA with w.
+
+inline float dot_sq8_f_avx2(const float* w, const int8_t* codes, size_t d) {
+    __m256 s0 = _mm256_setzero_ps();
+    __m256 s1 = _mm256_setzero_ps();
+    size_t i = 0;
+    for (; i + 16 <= d; i += 16) {
+        __m256 c0 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(
+            _mm_loadl_epi64(reinterpret_cast<const __m128i*>(codes + i))));
+        __m256 c1 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(
+            _mm_loadl_epi64(reinterpret_cast<const __m128i*>(codes + i + 8))));
+        s0 = _mm256_fmadd_ps(_mm256_loadu_ps(w + i), c0, s0);
+        s1 = _mm256_fmadd_ps(_mm256_loadu_ps(w + i + 8), c1, s1);
+    }
+    for (; i + 8 <= d; i += 8) {
+        __m256 c = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(
+            _mm_loadl_epi64(reinterpret_cast<const __m128i*>(codes + i))));
+        s0 = _mm256_fmadd_ps(_mm256_loadu_ps(w + i), c, s0);
+    }
+    float r = sum8(_mm256_add_ps(s0, s1));
+    for (; i < d; i++) {
+        r += w[i] * static_cast<float>(codes[i]);
+    }
+    return r;
+}
+
+// 4-way batched SQ8 cross-term dot — mirrors batch_dot_f_avx2's shape:
+// 4 independent accumulators (one per DB vector) expose ILP across the
+// cvt/FMA chain while the w load is shared across vectors.
+inline void batch_dot_sq8_f_avx2(const float* w, size_t d,
+                                 const int8_t* const* vectors,
+                                 size_t n,
+                                 float* out_dots) {
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        __m256 a0 = _mm256_setzero_ps();
+        __m256 a1 = _mm256_setzero_ps();
+        __m256 a2 = _mm256_setzero_ps();
+        __m256 a3 = _mm256_setzero_ps();
+        const int8_t* p0 = vectors[i + 0];
+        const int8_t* p1 = vectors[i + 1];
+        const int8_t* p2 = vectors[i + 2];
+        const int8_t* p3 = vectors[i + 3];
+        size_t j = 0;
+        for (; j + 8 <= d; j += 8) {
+            __m256 wv = _mm256_loadu_ps(w + j);
+            auto accum_one = [wv](__m256 acc, const int8_t* p) -> __m256 {
+                __m256 c = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(
+                    _mm_loadl_epi64(reinterpret_cast<const __m128i*>(p))));
+                return _mm256_fmadd_ps(wv, c, acc);
+            };
+            a0 = accum_one(a0, p0 + j);
+            a1 = accum_one(a1, p1 + j);
+            a2 = accum_one(a2, p2 + j);
+            a3 = accum_one(a3, p3 + j);
+        }
+        float r0 = sum8(a0), r1 = sum8(a1), r2 = sum8(a2), r3 = sum8(a3);
+        for (; j < d; j++) {
+            float wj = w[j];
+            r0 += wj * static_cast<float>(p0[j]);
+            r1 += wj * static_cast<float>(p1[j]);
+            r2 += wj * static_cast<float>(p2[j]);
+            r3 += wj * static_cast<float>(p3[j]);
+        }
+        out_dots[i + 0] = r0; out_dots[i + 1] = r1;
+        out_dots[i + 2] = r2; out_dots[i + 3] = r3;
+    }
+    for (; i < n; i++) {
+        out_dots[i] = dot_sq8_f_avx2(w, vectors[i], d);
+    }
+}
+
+// 8-way batched SQ8 cross-term dot — mirrors batch_dot_f_avx2_8: eight
+// accumulators keep both FMA ports fed on Skylake+/Zen+ while the int8 →
+// float widening runs on the shuffle/convert ports in parallel.
+inline void batch_dot_sq8_f_avx2_8(const float* w, size_t d,
+                                   const int8_t* const* vectors,
+                                   size_t n,
+                                   float* out_dots) {
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256 a0 = _mm256_setzero_ps(), a1 = _mm256_setzero_ps();
+        __m256 a2 = _mm256_setzero_ps(), a3 = _mm256_setzero_ps();
+        __m256 a4 = _mm256_setzero_ps(), a5 = _mm256_setzero_ps();
+        __m256 a6 = _mm256_setzero_ps(), a7 = _mm256_setzero_ps();
+        const int8_t* p[8];
+        for (int k = 0; k < 8; k++) p[k] = vectors[i + k];
+        size_t j = 0;
+        for (; j + 8 <= d; j += 8) {
+            __m256 wv = _mm256_loadu_ps(w + j);
+            auto cvt = [](const int8_t* ptr) -> __m256 {
+                return _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(
+                    _mm_loadl_epi64(reinterpret_cast<const __m128i*>(ptr))));
+            };
+            a0 = _mm256_fmadd_ps(wv, cvt(p[0] + j), a0);
+            a1 = _mm256_fmadd_ps(wv, cvt(p[1] + j), a1);
+            a2 = _mm256_fmadd_ps(wv, cvt(p[2] + j), a2);
+            a3 = _mm256_fmadd_ps(wv, cvt(p[3] + j), a3);
+            a4 = _mm256_fmadd_ps(wv, cvt(p[4] + j), a4);
+            a5 = _mm256_fmadd_ps(wv, cvt(p[5] + j), a5);
+            a6 = _mm256_fmadd_ps(wv, cvt(p[6] + j), a6);
+            a7 = _mm256_fmadd_ps(wv, cvt(p[7] + j), a7);
+        }
+        float r[8] = {sum8(a0), sum8(a1), sum8(a2), sum8(a3),
+                      sum8(a4), sum8(a5), sum8(a6), sum8(a7)};
+        for (; j < d; j++) {
+            float wj = w[j];
+            for (int k = 0; k < 8; k++) r[k] += wj * static_cast<float>(p[k][j]);
+        }
+        for (int k = 0; k < 8; k++) out_dots[i + k] = r[k];
+    }
+    // Tail: fall through to the 4-way batch for any remaining < 8 vectors.
+    if (i < n) {
+        batch_dot_sq8_f_avx2(w, d, vectors + i, n - i, out_dots + i);
+    }
+}
+
+// Greedy-descent batched ADC cross-term dot — out[i] = the EXACT value
+// dot_sq8_f_avx2(w, vectors[i], d) would return, bit-for-bit. Four vectors
+// are kept in flight for ILP/memory-level parallelism, but each vector's
+// accumulation replicates the single-vector kernel's structure verbatim
+// (s0/s1 pair, 16-lane main loop, 8-lane drain into s0, sum8(s0+s1),
+// scalar tail in the same order). greedy_descent() needs this stronger
+// guarantee than the beam-search batch kernels give: descent distances
+// previously came from the single-vector kernel, and changing their FP
+// rounding could flip an argmin and change the search/build results.
+// Measured (d=128, 32 MB arena, 16-vector calls): 11.5 ns/vec vs 17.4
+// serial — the win is memory-level parallelism, not arithmetic.
+inline void batch_dot_sq8_desc_avx2(const float* w, size_t d,
+                                    const int8_t* const* vectors,
+                                    size_t n,
+                                    float* out_dots) {
+    auto cvt = [](const int8_t* p) -> __m256 {
+        return _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(
+            _mm_loadl_epi64(reinterpret_cast<const __m128i*>(p))));
+    };
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        const int8_t* p0 = vectors[i + 0];
+        const int8_t* p1 = vectors[i + 1];
+        const int8_t* p2 = vectors[i + 2];
+        const int8_t* p3 = vectors[i + 3];
+        __m256 s00 = _mm256_setzero_ps(), s01 = _mm256_setzero_ps();
+        __m256 s10 = _mm256_setzero_ps(), s11 = _mm256_setzero_ps();
+        __m256 s20 = _mm256_setzero_ps(), s21 = _mm256_setzero_ps();
+        __m256 s30 = _mm256_setzero_ps(), s31 = _mm256_setzero_ps();
+        size_t j = 0;
+        for (; j + 16 <= d; j += 16) {
+            __m256 w0 = _mm256_loadu_ps(w + j);
+            __m256 w1 = _mm256_loadu_ps(w + j + 8);
+            s00 = _mm256_fmadd_ps(w0, cvt(p0 + j), s00);
+            s10 = _mm256_fmadd_ps(w0, cvt(p1 + j), s10);
+            s20 = _mm256_fmadd_ps(w0, cvt(p2 + j), s20);
+            s30 = _mm256_fmadd_ps(w0, cvt(p3 + j), s30);
+            s01 = _mm256_fmadd_ps(w1, cvt(p0 + j + 8), s01);
+            s11 = _mm256_fmadd_ps(w1, cvt(p1 + j + 8), s11);
+            s21 = _mm256_fmadd_ps(w1, cvt(p2 + j + 8), s21);
+            s31 = _mm256_fmadd_ps(w1, cvt(p3 + j + 8), s31);
+        }
+        for (; j + 8 <= d; j += 8) {
+            __m256 wv = _mm256_loadu_ps(w + j);
+            s00 = _mm256_fmadd_ps(wv, cvt(p0 + j), s00);
+            s10 = _mm256_fmadd_ps(wv, cvt(p1 + j), s10);
+            s20 = _mm256_fmadd_ps(wv, cvt(p2 + j), s20);
+            s30 = _mm256_fmadd_ps(wv, cvt(p3 + j), s30);
+        }
+        float r0 = sum8(_mm256_add_ps(s00, s01));
+        float r1 = sum8(_mm256_add_ps(s10, s11));
+        float r2 = sum8(_mm256_add_ps(s20, s21));
+        float r3 = sum8(_mm256_add_ps(s30, s31));
+        for (; j < d; j++) {
+            float wj = w[j];
+            r0 += wj * static_cast<float>(p0[j]);
+            r1 += wj * static_cast<float>(p1[j]);
+            r2 += wj * static_cast<float>(p2[j]);
+            r3 += wj * static_cast<float>(p3[j]);
+        }
+        out_dots[i + 0] = r0; out_dots[i + 1] = r1;
+        out_dots[i + 2] = r2; out_dots[i + 3] = r3;
+    }
+    for (; i < n; i++) {
+        out_dots[i] = dot_sq8_f_avx2(w, vectors[i], d);
+    }
+}
+
 // Squared sum of one vector — ||v||². Used to precompute per-DB norms.
 inline float vec_l2sq_avx2(const float* v, size_t d) {
     __m256 s0 = _mm256_setzero_ps();
@@ -1031,6 +1230,53 @@ inline void batch_l2sq_sq8_avx2(const int8_t* query, size_t d,
     }
 }
 
+// Asymmetric SQ8 (ADC) cross-term dot on NEON: widen 8 int8 codes → int16 →
+// 2×int32x4 → float32x4, then acc += w·c via vfmaq_f32. Same contract as the
+// AVX2 version (w = (query − beta) ∘ alpha; caller composes the distance
+// with the precomputed query/node norms).
+inline float dot_sq8_f_avx2(const float* w, const int8_t* codes, size_t d) {
+    float32x4_t s0 = vdupq_n_f32(0.0f), s1 = vdupq_n_f32(0.0f);
+    size_t i = 0;
+    for (; i + 8 <= d; i += 8) {
+        int16x8_t c16 = vmovl_s8(vld1_s8(codes + i));
+        float32x4_t clo = vcvtq_f32_s32(vmovl_s16(vget_low_s16(c16)));
+        float32x4_t chi = vcvtq_f32_s32(vmovl_s16(vget_high_s16(c16)));
+        s0 = vfmaq_f32(s0, vld1q_f32(w + i), clo);
+        s1 = vfmaq_f32(s1, vld1q_f32(w + i + 4), chi);
+    }
+    float r = vaddvq_f32(vaddq_f32(s0, s1));
+    for (; i < d; i++) {
+        r += w[i] * static_cast<float>(codes[i]);
+    }
+    return r;
+}
+
+inline void batch_dot_sq8_f_avx2(const float* w, size_t d,
+                                 const int8_t* const* vectors,
+                                 size_t n,
+                                 float* out_dots) {
+    for (size_t i = 0; i < n; i++) {
+        out_dots[i] = dot_sq8_f_avx2(w, vectors[i], d);
+    }
+}
+
+inline void batch_dot_sq8_f_avx2_8(const float* w, size_t d,
+                                   const int8_t* const* vectors,
+                                   size_t n,
+                                   float* out_dots) {
+    batch_dot_sq8_f_avx2(w, d, vectors, n, out_dots);
+}
+
+// Greedy-descent batch shim (NEON) — deliberately serial: out[i] must be
+// bit-identical to the single-vector kernel and we keep NEON conservative
+// (no interleaved variant validated on ARM hardware).
+inline void batch_dot_sq8_desc_avx2(const float* w, size_t d,
+                                    const int8_t* const* vectors,
+                                    size_t n,
+                                    float* out_dots) {
+    for (size_t i = 0; i < n; i++) out_dots[i] = dot_sq8_f_avx2(w, vectors[i], d);
+}
+
 #else // !(__AVX__ || __AVX2__) && !__ARM_NEON (or PYNEAR_FORCE_SCALAR) —
        // scalar fallbacks for any other platform, for x86 cross-compile
        // builds where -mavx isn't passed (macos cibuildwheel arm64→x86_64
@@ -1107,7 +1353,52 @@ inline void batch_l2sq_sq8_avx2(const int8_t* query, size_t d,
     }
 }
 
+// Asymmetric SQ8 (ADC) cross-term dot scalar fallbacks — same contract as
+// the SIMD versions (w = (query − beta) ∘ alpha).
+inline float dot_sq8_f_avx2(const float* w, const int8_t* codes, size_t d) {
+    float r = 0.0f;
+    for (size_t i = 0; i < d; i++) {
+        r += w[i] * static_cast<float>(codes[i]);
+    }
+    return r;
+}
+
+inline void batch_dot_sq8_f_avx2(const float* w, size_t d,
+                                 const int8_t* const* vectors,
+                                 size_t n,
+                                 float* out_dots) {
+    for (size_t i = 0; i < n; i++) {
+        out_dots[i] = dot_sq8_f_avx2(w, vectors[i], d);
+    }
+}
+
+inline void batch_dot_sq8_f_avx2_8(const float* w, size_t d,
+                                   const int8_t* const* vectors,
+                                   size_t n,
+                                   float* out_dots) {
+    batch_dot_sq8_f_avx2(w, d, vectors, n, out_dots);
+}
+
+// Greedy-descent batch shim (scalar) — serial; scalar single-vector
+// kernels are the reference semantics.
+inline void batch_dot_sq8_desc_avx2(const float* w, size_t d,
+                                    const int8_t* const* vectors,
+                                    size_t n,
+                                    float* out_dots) {
+    for (size_t i = 0; i < n; i++) out_dots[i] = dot_sq8_f_avx2(w, vectors[i], d);
+}
+
 #endif // __AVX__
+
+// Float-returning wrapper over the symmetric SQ8 code-vs-code distance.
+// Used as the distance-function template parameter for the SQ8 HNSW index,
+// whose distT is float so that build-time (symmetric, code space) and
+// query-time (asymmetric ADC, float space) distances share one type. The
+// two spaces never mix: symmetric distances only order candidates during
+// construction, asymmetric ones only during queries.
+inline float dist_l2sq_sq8_f(const SQ8Span& p1, const SQ8Span& p2) {
+    return static_cast<float>(dist_l2sq_sq8(p1, p2));
+}
 
 int64_t dist_hamming(const arrayli &p1, const arrayli &p2) {
     size_t size = p1.size();

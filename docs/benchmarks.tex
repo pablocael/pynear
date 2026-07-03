@@ -747,10 +747,10 @@ point).  Faiss is measured in a Faiss-only subprocess
   legend cell align=left,
 ]
 \addplot[color=colRed, mark=*]
-  coordinates {(0.721,328003)(0.873,218085)(0.969,130347)(0.994,91457)(0.998,58703)(0.998,41107)(0.998,31076)};
+  coordinates {(0.717,359084)(0.868,217249)(0.964,131038)(0.991,85711)(0.996,58235)(0.996,39090)(0.996,30712)};
 \addlegendentry{PyNear \texttt{HNSWL2Index}}
 \addplot[color=colRed, dashed, mark=o]
-  coordinates {(0.688,722626)(0.811,483515)(0.871,303362)(0.885,180001)(0.889,103056)(0.889,72326)(0.889,62117)};
+  coordinates {(0.693,568756)(0.838,401026)(0.911,291061)(0.936,174511)(0.940,100730)(0.940,75773)(0.940,60775)};
 \addlegendentry{PyNear \texttt{HNSWL2IndexSQ8}}
 \addplot[color=colOrange, mark=square*]
   coordinates {(0.726,553821)(0.875,335004)(0.967,203156)(0.995,129842)(1.000,90634)(1.000,61006)(1.000,28928)};
@@ -763,33 +763,38 @@ point).  Faiss is measured in a Faiss-only subprocess
 \caption{HNSW recall--throughput frontiers ($N = 10^5$, $d = 128$,
   $k = 10$, $M = 16$, 24 threads for both systems, log-scale QPS; markers
   are $\mathrm{ef}_{\mathrm{search}} = 16, 32, 64, 128, 256, 512, 1024$
-  left to right on each curve).  Faiss leads both like-for-like pairs by
-  $1.4$--$1.8\times$ at matched recall.  PyNear's
-  \texttt{HNSWL2IndexSQ8} nevertheless outruns even Faiss's \emph{float}
-  index below ${\sim}0.87$ recall at a quarter of the memory; its recall
-  ceiling (0.889 vs.\ 0.944) reflects the global symmetric int8 scale
-  versus Faiss's per-dimension trained quantiser.}
+  left to right on each curve).  Faiss leads both like-for-like pairs at
+  matched recall, but PyNear's \texttt{HNSWL2IndexSQ8} — per-dimension
+  affine quantisation with asymmetric search as of this edition — now
+  tracks or beats Faiss's \emph{float} index up to ${\sim}0.91$ recall
+  at a quarter of the vector memory, with a quantised recall ceiling of
+  0.940 vs.\ Faiss's 0.944.}
 \label{fig:hnsw-pareto}
 \end{figure}
 
-Faiss wins both like-for-like comparisons: \texttt{IndexHNSWFlat}
-delivers $1.4$--$1.7\times$ the throughput of \texttt{HNSWL2Index} at
-matched recall (203\,k vs.\ 130\,k QPS at $\mathrm{Recall}@10 \approx
-0.97$; 130\,k vs.\ 91\,k at ${\approx}0.995$) with essentially identical
-recall-per-$\mathrm{ef}$ (the two float curves overlap in recall at every
-sweep point, confirming equivalent graph construction quality), and
-\texttt{IndexHNSWSQ} leads \texttt{HNSWL2IndexSQ8} by a similar margin
-while reaching a higher quantised recall ceiling (0.944 vs.\ 0.889).
-Build times are comparable (float: 1.16\,s vs.\ 1.02\,s; quantised:
-0.68\,s vs.\ 0.84\,s, PyNear faster).  Two honest observations follow.
-First, PyNear's SQ8 index is the fastest option of the four below
-${\sim}0.87$ recall — ahead of Faiss's float index at $4\times$ less
-vector memory — making it a genuinely competitive operating point for
-recall-tolerant, memory-tight workloads.  Second, the quantised recall
-gap is a known, fixable design difference: PyNear quantises with a single
-global symmetric scale, Faiss trains per-dimension bounds; adopting
-per-dimension quantisation is on the roadmap.  Where PyNear's HNSW family
-differentiates itself today is capability rather than raw float
+Faiss wins both like-for-like comparisons, but the margins tightened in
+this edition.  \texttt{IndexHNSWFlat} delivers $1.5$--$1.6\times$ the
+throughput of \texttt{HNSWL2Index} at matched recall (203\,k vs.\
+131\,k QPS at $\mathrm{Recall}@10 \approx 0.97$) with essentially
+identical recall-per-$\mathrm{ef}$ — the two float curves overlap in
+recall at every sweep point, confirming equivalent graph construction
+quality.  In the quantised pair, PyNear's \texttt{HNSWL2IndexSQ8} was
+reworked for this edition: per-dimension affine int8 quantisation with
+\emph{asymmetric} search (float query against decoded codes, the Faiss
+ADC approach), chosen by simulating four quantisation schemes against
+exhaustive-search ground truth.  Its recall ceiling rose from 0.889 to
+0.940 (Faiss: 0.944; the scheme's own exhaustive ceiling is 0.941, which
+the graph attains), while a concurrently landed allocation-free search
+path (pooled per-thread scratch, results written directly into the
+output buffers) absorbed the decode-kernel cost — SQ8 throughput at
+$\mathrm{ef} \ge 64$ matches the previous lower-recall kernel.  Faiss's
+\texttt{IndexHNSWSQ} remains ${\sim}1.5$--$2\times$ faster at matched
+recall, but PyNear's SQ8 now tracks or beats Faiss's \emph{float} index
+up to ${\sim}0.91$ recall at $4\times$ less vector memory — a genuinely
+competitive operating point for recall-tolerant, memory-tight
+workloads.  Build times are comparable (float: 1.22\,s vs.\ 1.02\,s;
+quantised: 0.67\,s vs.\ 0.84\,s, PyNear faster).  Where PyNear's HNSW
+family differentiates itself is capability rather than raw float
 throughput: a binary/Hamming HNSW, the MIH-seeded variant of
 Section~\ref{sec:approx-binary}, in-place \texttt{add}/\texttt{remove}/%
 \texttt{rebuild} with filtered search, and per-shard pickling via

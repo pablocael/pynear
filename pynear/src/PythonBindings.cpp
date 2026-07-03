@@ -94,16 +94,6 @@ static void normalize_rows(const float* src, float* dst, size_t n, size_t d) {
     }
 }
 
-// Symmetric int8 scalar quantisation: dst[i] = clamp(round(src[i] * inv_scale), -128, 127).
-static void quantize_sq8(const float* src, size_t n, float inv_scale, int8_t* dst) {
-    for (size_t i = 0; i < n; i++) {
-        int v = static_cast<int>(std::round(src[i] * inv_scale));
-        if (v > 127) v = 127;
-        else if (v < -128) v = -128;
-        dst[i] = static_cast<int8_t>(v);
-    }
-}
-
 // ── searchKNN_arrays shared implementation ───────────────────────────────────
 // Allocates the two (n, k) output arrays with the GIL HELD, grabs their raw
 // buffers, then releases the GIL and invokes `core(idx, dist)` — a callable
@@ -149,6 +139,27 @@ knn_to_arrays(size_t n, size_t k, DistT pad_dist, bool core_farthest_first, Core
     return std::make_pair(std::move(ids), std::move(dists));
 }
 
+// Flat-buffer variant of knn_to_arrays for cores that already write
+// nearest-first rows (with -1 / pad-distance padding) DIRECTLY into the
+// output buffers — HNSWIndex::searchKNN_flat / searchKNN_asym_flat. Skips
+// the intermediate vector<vector<>> materialisation and the reversed copy
+// entirely. Same GIL discipline as knn_to_arrays: arrays allocated with the
+// GIL held, `core(ids_ptr, dists_ptr)` runs with it released and must not
+// touch the Python C API.
+template <class DistT, class CoreFn>
+static std::pair<py::array_t<int64_t>, py::array_t<DistT>>
+knn_arrays_direct(size_t n, size_t k, CoreFn&& core) {
+    py::array_t<int64_t> ids({(py::ssize_t)n, (py::ssize_t)k});
+    py::array_t<DistT> dists({(py::ssize_t)n, (py::ssize_t)k});
+    int64_t* ids_ptr = ids.mutable_data();
+    DistT* dists_ptr = dists.mutable_data();
+    {
+        py::gil_scoped_release release;
+        core(ids_ptr, dists_ptr);
+    }
+    return std::make_pair(std::move(ids), std::move(dists));
+}
+
 // ── Shared HNSW pickle helpers ───────────────────────────────────────────────
 // All four HNSW adapters use the same tuple layout for slots 0–10:
 //   (flat, levels, flat_adj, adj_offsets, entry, top_level, dim, seed,
@@ -156,7 +167,8 @@ knn_to_arrays(size_t n, size_t k, DistT pad_dist, bool core_farthest_first, Core
 // followed by optional per-class `extra` slots and finally the tombstone
 // bytes, so each class's historical layout is preserved exactly:
 //   - Float/Cosine/Binary: deleted at slot 11
-//   - SQ8:                 scale at slot 11, deleted at slot 12
+//   - SQ8:                 scale (11), alpha (12), beta (13), deleted (14);
+//                          legacy pickles had scale (11), deleted (12)
 
 template <class HNSW, class... Extra>
 static py::tuple hnsw_get_state(const HNSW& hnsw, Extra... extra) {
@@ -550,13 +562,14 @@ public:
                      py::object filter = py::none()) {
         std::vector<arrayf> spans = rows_to_spans(queries, "searchKNN_arrays");
         const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
-        return knn_to_arrays<float>(spans.size(), k, std::numeric_limits<float>::infinity(), true,
-            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<float>>& dist) {
-                hnsw.searchKNN(spans, k, idx, dist, mask);
-                // Same L2² → L2 conversion as searchKNN.
-                for (auto& row : dist) {
-                    for (float& v : row) v = std::sqrt(v);
-                }
+        const size_t n = spans.size();
+        return knn_arrays_direct<float>(n, k,
+            [&](int64_t* ids, float* dists) {
+                hnsw.searchKNN_flat(spans, k, ids, dists,
+                                    std::numeric_limits<float>::infinity(), mask);
+                // Same L2² → L2 conversion as searchKNN. Padded entries are
+                // +inf and sqrt(inf) == inf, so a full-buffer pass is safe.
+                for (size_t i = 0; i < n * k; i++) dists[i] = std::sqrt(dists[i]);
             });
     }
 
@@ -672,17 +685,18 @@ public:
                      py::object filter = py::none()) {
         Rows2D r = as_rows_2d(queries, "searchKNN_arrays");
         const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
-        return knn_to_arrays<float>(r.n, k, std::numeric_limits<float>::infinity(), true,
-            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<float>>& dist) {
+        return knn_arrays_direct<float>(r.n, k,
+            [&](int64_t* ids, float* dists) {
                 std::vector<float> qnorm(r.n * r.d);
                 normalize_rows(r.ptr, qnorm.data(), r.n, r.d);
                 std::vector<arrayf> spans = make_row_spans(qnorm.data(), r.n, r.d);
 
-                hnsw.searchKNN(spans, k, idx, dist, mask);
+                hnsw.searchKNN_flat(spans, k, ids, dists,
+                                    std::numeric_limits<float>::infinity(), mask);
                 // L2² → cosine distance (d_cos = L2² / 2 for unit vectors).
-                for (auto& row : dist) {
-                    for (float& v : row) v = v * 0.5f;
-                }
+                // Padded entries are +inf; inf * 0.5 == inf, so the
+                // full-buffer pass leaves them intact.
+                for (size_t i = 0; i < r.n * k; i++) dists[i] *= 0.5f;
             });
     }
 
@@ -752,14 +766,22 @@ public:
 
 // HNSWL2NumpyAdapterSQ8 — HNSW with scalar quantisation (int8 vectors).
 //
-// Stores each vector as int8 using a single global scale: int8_i = round(f_i / scale).
-// 4× memory bandwidth reduction vs float, plus AVX2 processes 32 int8 lanes
-// per op (vs 8 floats). Distance ordering is preserved (we multiply by
-// scale² to get true L2², but that's a constant so HNSW ordering is correct
-// without it). On exit we apply scale to recover float L2 distances.
+// Codes are per-dimension affine int8 (faiss QT_8bit-style): each dim d maps
+// [vmin_d, vmax_d] onto [-128, 127] via
+//     code = round((x − beta[d]) / alpha[d]),  decode = alpha[d]·code + beta[d]
+// with alpha[d] = (vmax−vmin)/255 and beta[d] = vmin + 128·alpha[d].
+// 4× memory bandwidth reduction vs float. Graph CONSTRUCTION uses the fast
+// symmetric int8 code-vs-code distance (topology tolerates the extra noise);
+// QUERIES are asymmetric (ADC): the float query is kept unquantised and
+// compared against decoded codes, which removes the query-side quantisation
+// noise and lifts the recall ceiling to within ~0.005 of faiss's
+// IndexHNSWSQ(QT_8bit). Scale handling: the adapter pre-subtracts beta from
+// each query row and hands the core per-dim alpha (set_sq8_alpha), so the
+// kernel's output is already true squared L2 in the original float space —
+// the adapter only applies the final sqrt.
 //
-// Recall typically drops 1-3 % vs full-float at the same params on Gaussian
-// data; users wanting maximum recall stick with HNSWL2Index.
+// Legacy pickles (global symmetric scale) load as alpha[d] = scale,
+// beta[d] = 0 — the identical decode — and search asymmetrically too.
 class HNSWL2NumpyAdapterSQ8 {
 public:
     HNSWL2NumpyAdapterSQ8(size_t M = 16,
@@ -774,24 +796,18 @@ public:
         Rows2D r = as_rows_2d(arr, "set");
         {
             py::gil_scoped_release release;
-            // Compute global max-abs for symmetric int8 quantisation.
-            float max_abs = 0.0f;
-            for (size_t i = 0; i < r.n * r.d; i++) {
-                float v = std::fabs(r.ptr[i]);
-                if (v > max_abs) max_abs = v;
-            }
-            _scale = (max_abs > 0.0f) ? (max_abs / 127.0f) : 1.0f;
+            train_quantiser(r.ptr, r.n, r.d);
 
             // Quantise into a temporary buffer — hnsw.set() copies the spans'
             // bytes into its own backing, so nothing here needs to outlive it.
-            std::vector<int8_t> quantised(r.n * r.d);
-            quantize_sq8(r.ptr, r.n * r.d, 1.0f / _scale, quantised.data());
+            std::vector<int8_t> quantised = encode_rows(r.ptr, r.n, r.d);
 
             std::vector<SQ8Span> spans(r.n);
             for (size_t i = 0; i < r.n; i++) {
                 spans[i] = SQ8Span{quantised.data() + i * r.d, r.d};
             }
             hnsw.set(spans);
+            hnsw.set_sq8_alpha(_alpha);
         }
     }
 
@@ -801,11 +817,12 @@ public:
         Rows2D r = as_rows_2d(queries, "searchKNN");
         size_t n = r.n;
         size_t d = r.d;
-        if (_scale <= 0.0f) {
+        if (_scale <= 0.0f || hnsw.size() == 0) {
             return std::make_tuple(
                 std::vector<std::vector<int64_t>>(n),
                 std::vector<std::vector<float>>(n));
         }
+        check_query_dim(d, "searchKNN");
 
         const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
 
@@ -813,23 +830,17 @@ public:
         std::vector<std::vector<float>> dist_f;
         {
             py::gil_scoped_release release;
-            // Quantise queries into a temporary int8 buffer.
-            std::vector<int8_t> q_buf(n * d);
-            quantize_sq8(r.ptr, n * d, 1.0f / _scale, q_buf.data());
-            std::vector<SQ8Span> qspans(n);
-            for (size_t i = 0; i < n; i++) {
-                qspans[i] = SQ8Span{q_buf.data() + i * d, d};
-            }
+            // Asymmetric search: float queries, pre-shifted by beta.
+            std::vector<float> q_buf = shift_queries(r.ptr, n, d);
 
-            std::vector<std::vector<int32_t>> dist_i;
-            hnsw.searchKNN(qspans, k, idx, dist_i, mask);
-            // Convert int32 squared-quantised distance → float L2 distance.
-            // L2 = scale * sqrt(d_int)   (scale² for L2², then sqrt)
+            std::vector<std::vector<float>> dist_sq;
+            hnsw.searchKNN_asym(q_buf.data(), n, k, idx, dist_sq, mask);
+            // Squared L2 (already in original float units) → L2.
             dist_f.resize(idx.size());
             for (size_t i = 0; i < idx.size(); i++) {
-                dist_f[i].reserve(dist_i[i].size());
-                for (int32_t di : dist_i[i]) {
-                    dist_f[i].push_back(_scale * std::sqrt(static_cast<float>(di)));
+                dist_f[i].reserve(dist_sq[i].size());
+                for (float di : dist_sq[i]) {
+                    dist_f[i].push_back(std::sqrt(di < 0.0f ? 0.0f : di));
                 }
             }
         }
@@ -840,30 +851,29 @@ public:
     searchKNN_arrays(py::array_t<float, py::array::c_style | py::array::forcecast> queries, size_t k,
                      py::object filter = py::none()) {
         Rows2D r = as_rows_2d(queries, "searchKNN_arrays");
-        if (_scale <= 0.0f) {
+        if (_scale <= 0.0f || hnsw.size() == 0) {
             // Empty index — every row is padding (mirrors searchKNN's early return).
-            return knn_to_arrays<float>(r.n, k, std::numeric_limits<float>::infinity(), true,
-                [](std::vector<std::vector<int64_t>>&, std::vector<std::vector<float>>&) {});
-        }
-        const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
-        return knn_to_arrays<float>(r.n, k, std::numeric_limits<float>::infinity(), true,
-            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<float>>& dist) {
-                std::vector<int8_t> q_buf(r.n * r.d);
-                quantize_sq8(r.ptr, r.n * r.d, 1.0f / _scale, q_buf.data());
-                std::vector<SQ8Span> qspans(r.n);
-                for (size_t i = 0; i < r.n; i++) {
-                    qspans[i] = SQ8Span{q_buf.data() + i * r.d, r.d};
-                }
-
-                std::vector<std::vector<int32_t>> dist_i;
-                hnsw.searchKNN(qspans, k, idx, dist_i, mask);
-                // int32 squared-quantised distance → float L2 (same as searchKNN).
-                dist.resize(idx.size());
-                for (size_t i = 0; i < idx.size(); i++) {
-                    dist[i].reserve(dist_i[i].size());
-                    for (int32_t di : dist_i[i]) {
-                        dist[i].push_back(_scale * std::sqrt(static_cast<float>(di)));
+            return knn_arrays_direct<float>(r.n, k,
+                [&](int64_t* ids, float* dists) {
+                    for (size_t i = 0; i < r.n * k; i++) {
+                        ids[i] = -1;
+                        dists[i] = std::numeric_limits<float>::infinity();
                     }
+                });
+        }
+        check_query_dim(r.d, "searchKNN_arrays");
+        const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
+        return knn_arrays_direct<float>(r.n, k,
+            [&](int64_t* ids, float* dists) {
+                std::vector<float> q_buf = shift_queries(r.ptr, r.n, r.d);
+
+                hnsw.searchKNN_asym_flat(q_buf.data(), r.n, k, ids, dists,
+                                         std::numeric_limits<float>::infinity(), mask);
+                // Squared L2 → L2 (same as searchKNN). Padded entries are
+                // +inf: not < 0, and sqrt(inf) == inf, so they pass through.
+                for (size_t i = 0; i < r.n * k; i++) {
+                    float di = dists[i];
+                    dists[i] = std::sqrt(di < 0.0f ? 0.0f : di);
                 }
             });
     }
@@ -892,25 +902,27 @@ public:
         Rows2D r = as_rows_2d(arr, "add");
         size_t n = r.n;
         size_t d = r.d;
-        // If the index is empty, seed the scale via set(). Otherwise we
-        // must reuse the existing scale (rescaling would invalidate prior
-        // quantisations).
+        // If the index is empty, train the quantiser via set(). Otherwise we
+        // must reuse the existing per-dim parameters (retraining would
+        // invalidate prior quantisations); out-of-range values clamp.
         if (size() == 0) {
             set(arr);
             std::vector<int32_t> ids(n);
             for (size_t i = 0; i < n; i++) ids[i] = static_cast<int32_t>(i);
             return ids;
         }
+        check_query_dim(d, "add");
         std::vector<int32_t> ids;
         {
             py::gil_scoped_release release;
-            std::vector<int8_t> quantised(n * d);
-            quantize_sq8(r.ptr, n * d, 1.0f / _scale, quantised.data());
+            std::vector<int8_t> quantised = encode_rows(r.ptr, n, d);
             std::vector<SQ8Span> spans(n);
             for (size_t i = 0; i < n; i++) {
                 spans[i] = SQ8Span{quantised.data() + i * d, d};
             }
             ids = hnsw.add(spans);
+            // Refresh the per-node decoded norms for the appended rows.
+            hnsw.set_sq8_alpha(_alpha);
         }
         return ids;
     }
@@ -922,30 +934,132 @@ public:
         {
             py::gil_scoped_release release;
             ids = hnsw.rebuild();
+            // Node ids were compacted — recompute the per-node decoded norms.
+            hnsw.set_sq8_alpha(_alpha);
         }
         return ids;
     }
 
     static py::tuple get_state(const HNSWL2NumpyAdapterSQ8& p) {
-        // Tuple layout: [...common fields..., scale (11), deleted (12)].
-        return hnsw_get_state(p.hnsw, p._scale);
+        // Tuple layout: [...common fields..., scale (11), alpha (12),
+        // beta (13), deleted (14)]. Slots 12-13 (per-dim float32 affine
+        // parameters) were appended for the ADC upgrade; the historical
+        // layout was [..., scale (11), deleted (12)] and set_state still
+        // accepts it (length-guarded) for old pickles.
+        py::bytes alpha_bytes(reinterpret_cast<const char*>(p._alpha.data()),
+                              p._alpha.size() * sizeof(float));
+        py::bytes beta_bytes(reinterpret_cast<const char*>(p._beta.data()),
+                             p._beta.size() * sizeof(float));
+        return hnsw_get_state(p.hnsw, p._scale, alpha_bytes, beta_bytes);
     }
 
     static HNSWL2NumpyAdapterSQ8 set_state(py::tuple t) {
-        HNSWPickledState s = hnsw_parse_state(t, 12);
+        // New format has >= 15 slots (see get_state); legacy formats have
+        // 12 (pre-tombstone) or 13 (scale + deleted) and carry only the
+        // global symmetric scale.
+        const bool per_dim_format = py::len(t) >= 15;
+        HNSWPickledState s = hnsw_parse_state(t, per_dim_format ? 14 : 12);
         float scale = t[11].cast<float>();
 
         HNSWL2NumpyAdapterSQ8 p(s.M, s.ef_construction, s.ef_search, s.seed);
         p._scale = scale;
+        if (per_dim_format) {
+            p._alpha = bytes_to_vec<float>(t[12].cast<py::bytes>());
+            p._beta = bytes_to_vec<float>(t[13].cast<py::bytes>());
+        }
         hnsw_restore(p.hnsw, std::move(s));
+        if (!per_dim_format) {
+            // Legacy global-scale codes decode as scale·code + 0 — express
+            // them in the per-dim affine form so asymmetric search works.
+            p._alpha.assign(p.hnsw.dim(), scale);
+            p._beta.assign(p.hnsw.dim(), 0.0f);
+        }
+        p.hnsw.set_sq8_alpha(p._alpha);
         return p;
     }
 
-    hnsw::HNSWIndex<SQ8Span, int32_t, dist_l2sq_sq8> hnsw;
+    hnsw::HNSWIndex<SQ8Span, float, dist_l2sq_sq8_f> hnsw;
 
-    // _scale is left as a member (not private) so get_state/set_state can
-    // read/write it directly without a separate accessor.
+    // Members are public (not private) so get_state/set_state can read/write
+    // them directly without separate accessors.
+    // _scale: legacy global symmetric scale (max|x|/127) — kept for the
+    // `scale` property, for legacy pickles and as the "index non-empty"
+    // sentinel. Quantisation itself uses the per-dim parameters below.
     float _scale;
+    std::vector<float> _alpha;   // per-dim decode scale
+    std::vector<float> _beta;    // per-dim decode offset
+
+private:
+    // Train the per-dim affine quantiser (+ legacy _scale) on the database.
+    void train_quantiser(const float* ptr, size_t n, size_t d) {
+        _alpha.assign(d, 1.0f);
+        _beta.assign(d, 0.0f);
+        if (n == 0 || d == 0) {
+            _scale = 0.0f;
+            return;
+        }
+        std::vector<float> vmin(ptr, ptr + d);
+        std::vector<float> vmax(ptr, ptr + d);
+        float max_abs = 0.0f;
+        for (size_t i = 0; i < n; i++) {
+            const float* row = ptr + i * d;
+            for (size_t j = 0; j < d; j++) {
+                float v = row[j];
+                if (v < vmin[j]) vmin[j] = v;
+                if (v > vmax[j]) vmax[j] = v;
+                float a = std::fabs(v);
+                if (a > max_abs) max_abs = a;
+            }
+        }
+        _scale = (max_abs > 0.0f) ? (max_abs / 127.0f) : 1.0f;
+        for (size_t j = 0; j < d; j++) {
+            float span = vmax[j] - vmin[j];
+            if (span > 0.0f) {
+                _alpha[j] = span / 255.0f;
+                _beta[j] = vmin[j] + 128.0f * _alpha[j];
+            } else {
+                // Degenerate dim (constant value): code 0 decodes exactly.
+                _alpha[j] = 1.0f;
+                _beta[j] = vmin[j];
+            }
+        }
+    }
+
+    // Encode rows with the trained per-dim parameters (clamped to int8).
+    std::vector<int8_t> encode_rows(const float* ptr, size_t n, size_t d) const {
+        std::vector<int8_t> out(n * d);
+        for (size_t i = 0; i < n; i++) {
+            const float* row = ptr + i * d;
+            for (size_t j = 0; j < d; j++) {
+                int v = static_cast<int>(std::round((row[j] - _beta[j]) / _alpha[j]));
+                if (v > 127) v = 127;
+                else if (v < -128) v = -128;
+                out[i * d + j] = static_cast<int8_t>(v);
+            }
+        }
+        return out;
+    }
+
+    // Pre-shift queries by beta for the asymmetric kernel (which computes
+    // Σ (q[d] − alpha[d]·code[d])² — see HNSWIndex::searchKNN_asym).
+    std::vector<float> shift_queries(const float* ptr, size_t n, size_t d) const {
+        std::vector<float> out(n * d);
+        for (size_t i = 0; i < n; i++) {
+            const float* row = ptr + i * d;
+            for (size_t j = 0; j < d; j++) {
+                out[i * d + j] = row[j] - _beta[j];
+            }
+        }
+        return out;
+    }
+
+    void check_query_dim(size_t d, const char* caller) const {
+        if (d != _alpha.size()) {
+            throw std::runtime_error(std::string(caller) + "(): vector dimension " +
+                                     std::to_string(d) + " does not match index dimension " +
+                                     std::to_string(_alpha.size()));
+        }
+    }
 };
 
 // HNSWBinaryNumpyAdapter — HNSW over Hamming distance.
@@ -981,9 +1095,10 @@ public:
     searchKNN_arrays(const ndarrayli& queries, size_t k,
                      py::object filter = py::none()) {
         const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
-        return knn_to_arrays<int64_t>(queries.size(), k, std::numeric_limits<int64_t>::max(), true,
-            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<int64_t>>& dist) {
-                hnsw.searchKNN(queries, k, idx, dist, mask);
+        return knn_arrays_direct<int64_t>(queries.size(), k,
+            [&](int64_t* ids, int64_t* dists) {
+                hnsw.searchKNN_flat(queries, k, ids, dists,
+                                    std::numeric_limits<int64_t>::max(), mask);
             });
     }
 
@@ -1514,9 +1629,11 @@ PYBIND11_MODULE(_pynear, m) {
         .def_property_readonly("dim", &HNSWCosineNumpyAdapter::dim);
 
     bind_hnsw_common<HNSWL2NumpyAdapterSQ8>(m, "HNSWL2IndexSQ8",
-        "HNSW with int8 scalar quantisation. ~4x less memory and faster "
-        "queries at large N, at the cost of ~1-3% recall vs HNSWL2Index. "
-        "Public API mirrors HNSWL2Index; distances returned are L2 (scaled).")
+        "HNSW with per-dimension affine int8 scalar quantisation and "
+        "asymmetric (float-query vs decoded-code) search. ~4x less memory "
+        "and faster queries at large N, at a small recall cost vs "
+        "HNSWL2Index. Public API mirrors HNSWL2Index; distances returned "
+        "are L2 in the original float units.")
         .def_property_readonly("scale", &HNSWL2NumpyAdapterSQ8::scale);
 
     bind_hnsw_common<HNSWBinaryNumpyAdapter<dist_hamming>>(m, "HNSWBinaryIndex");
