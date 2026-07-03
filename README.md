@@ -7,15 +7,21 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/pablocael/pynear?style=social)](https://github.com/pablocael/pynear/stargazers)
 
-> **Fast KNN search without compromise.** Exact when you need exact, approximate when you need speed.
+> **k-NN with guarantees.** Near-duplicate search that provably misses nothing,
+> quantised ANN that beats float indexes at 4× less RAM, and exact search when
+> exactness is mandatory.
 >
-> **HNSW** for text-embedding RAG · **SQ8** for 4× memory · **MIH** for binary descriptors,
-> ~34× faster than Faiss's brute-force scan at d=512, 100% recall · drop-in for scikit-learn ·
-> SIMD on x86 (AVX2/AVX-512) and ARM (NEON) · zero native deps beyond NumPy.
+> **MIH** — binary near-duplicate retrieval with a pigeonhole *completeness
+> guarantee* (every neighbour within your radius is found), up to 3.5× faster
+> than Faiss's MIH at matched recall · **SQ8 HNSW** — tracks or beats Faiss's
+> *float* HNSW up to ~0.91 recall at a quarter of the memory · **VP-trees** —
+> exact k-NN 12× faster than a flat scan for CV matching, dedup compliance,
+> and ANN ground truth · drop-in for scikit-learn · SIMD on x86 and ARM ·
+> zero native deps beyond NumPy.
 
 ![PyNear demo](docs/img/demo.gif)
 
-**PyNear** is a metric-space nearest-neighbour library with a C++ core covering **exact** (VP-Trees up to ~256-D), **approximate float** (HNSW + IVF-Flat, with optional int8 quantisation, for 384–1024-D embeddings / RAG), and **binary / Hamming** (MIH + IVF-Binary + the novel MIH-seeded HNSW) search — one small NumPy-only API with a scikit-learn drop-in and pre-built wheels (`pip install pynear`).
+**PyNear** is a metric-space nearest-neighbour library with a C++ core, built for the workloads *between* the embeddings world and brute force: **binary descriptors with recall guarantees** (MIH + IVF-Binary + the novel MIH-seeded HNSW — dedup, copy detection, ORB/BRIEF matching, robotics), **memory-tight ANN** (HNSW with int8 quantisation), and **exact search** (VP-trees, up to ~256-D) where a missed neighbour is a bug, not a recall statistic. One small NumPy-only API, scikit-learn drop-in, pre-built wheels (`pip install pynear`). For high-dimensional embedding retrieval at high recall, Faiss's HNSW is ~1.5× faster than ours — [we publish that number ourselves](#pynear-vs-faiss-in-numbers), along with every other one where Faiss wins.
 
 ---
 
@@ -84,7 +90,7 @@ all three regimes instead of forcing every problem through the same tool:
 |---|---|---|---|---|
 | **Metric agnostic** | ✅ L2, L1, L∞, cosine, Hamming | L2 / IP / cosine | L2 / cosine / Hamming | L2 / others |
 | **HNSW (incl. binary)** | ✅ + novel MIH-seeded variant for binary | ✅ | ❌ | ❌ |
-| **Binary / Hamming approx** | ✅ MIH + IVF, ~34× Faiss flat at d=512; faster than Faiss MIH at matched recall | ✅ MIH + IVF | ❌ | ❌ |
+| **Binary / Hamming with recall guarantee** | ✅ MIH pigeonhole guarantee at index speed; up to 3.5× Faiss's MIH at matched recall, ~2,500× at 512-bit | ✅ MIH (collapses at wide codes) + IVF | ❌ | ❌ |
 | **scikit-learn drop-in** | ✅ adapter classes | ❌ | ❌ | — |
 | **Zero native deps** | ✅ NumPy only | ❌ compiled lib + optional GPU | ❌ | ❌ |
 
@@ -144,7 +150,7 @@ dependencies, and a one-line `pip install`.
 | Same but **memory-tight** (millions of vectors on one box) | `HNSWL2IndexSQ8` — 4× less RAM, ~1-3% recall hit |
 | **Generic float L2 ANN** | `HNSWL2Index` |
 | **Exact answers** required (small / moderate D ≤ 256) | `VPTreeL2Index` (or `L1`, `Chebyshev`, `Cosine`) |
-| **Binary descriptors** (perceptual hash, ORB, BRIEF, SimHash) — near-duplicate detection | `MIHBinaryIndex` (exact at small Hamming radius; ~34× faster than Faiss brute-force `IndexBinaryFlat` on 512-bit near-duplicates at 100% recall) |
+| **Binary descriptors** (perceptual hash, ORB, BRIEF, SimHash) — near-duplicate detection | `MIHBinaryIndex` (pigeonhole guarantee: every neighbour within your radius is found; 34× faster than the exact scan, which is the only alternative with the same guarantee) |
 | Binary + want graph fallback for larger queries | `MIHSeededHNSWBinaryIndex` (novel — MIH seeds the HNSW beam search) |
 | **Range / threshold queries** on binary descriptors | `BKTreeBinaryIndex` |
 | Already on `sklearn.neighbors.*` | `pynear.sklearn_adapter.PyNearKNeighborsClassifier` etc. — drop-in |
