@@ -139,6 +139,27 @@ knn_to_arrays(size_t n, size_t k, DistT pad_dist, bool core_farthest_first, Core
     return std::make_pair(std::move(ids), std::move(dists));
 }
 
+// Flat-buffer variant of knn_to_arrays for cores that already write
+// nearest-first rows (with -1 / pad-distance padding) DIRECTLY into the
+// output buffers — HNSWIndex::searchKNN_flat / searchKNN_asym_flat. Skips
+// the intermediate vector<vector<>> materialisation and the reversed copy
+// entirely. Same GIL discipline as knn_to_arrays: arrays allocated with the
+// GIL held, `core(ids_ptr, dists_ptr)` runs with it released and must not
+// touch the Python C API.
+template <class DistT, class CoreFn>
+static std::pair<py::array_t<int64_t>, py::array_t<DistT>>
+knn_arrays_direct(size_t n, size_t k, CoreFn&& core) {
+    py::array_t<int64_t> ids({(py::ssize_t)n, (py::ssize_t)k});
+    py::array_t<DistT> dists({(py::ssize_t)n, (py::ssize_t)k});
+    int64_t* ids_ptr = ids.mutable_data();
+    DistT* dists_ptr = dists.mutable_data();
+    {
+        py::gil_scoped_release release;
+        core(ids_ptr, dists_ptr);
+    }
+    return std::make_pair(std::move(ids), std::move(dists));
+}
+
 // ── Shared HNSW pickle helpers ───────────────────────────────────────────────
 // All four HNSW adapters use the same tuple layout for slots 0–10:
 //   (flat, levels, flat_adj, adj_offsets, entry, top_level, dim, seed,
@@ -541,13 +562,14 @@ public:
                      py::object filter = py::none()) {
         std::vector<arrayf> spans = rows_to_spans(queries, "searchKNN_arrays");
         const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
-        return knn_to_arrays<float>(spans.size(), k, std::numeric_limits<float>::infinity(), true,
-            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<float>>& dist) {
-                hnsw.searchKNN(spans, k, idx, dist, mask);
-                // Same L2² → L2 conversion as searchKNN.
-                for (auto& row : dist) {
-                    for (float& v : row) v = std::sqrt(v);
-                }
+        const size_t n = spans.size();
+        return knn_arrays_direct<float>(n, k,
+            [&](int64_t* ids, float* dists) {
+                hnsw.searchKNN_flat(spans, k, ids, dists,
+                                    std::numeric_limits<float>::infinity(), mask);
+                // Same L2² → L2 conversion as searchKNN. Padded entries are
+                // +inf and sqrt(inf) == inf, so a full-buffer pass is safe.
+                for (size_t i = 0; i < n * k; i++) dists[i] = std::sqrt(dists[i]);
             });
     }
 
@@ -663,17 +685,18 @@ public:
                      py::object filter = py::none()) {
         Rows2D r = as_rows_2d(queries, "searchKNN_arrays");
         const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
-        return knn_to_arrays<float>(r.n, k, std::numeric_limits<float>::infinity(), true,
-            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<float>>& dist) {
+        return knn_arrays_direct<float>(r.n, k,
+            [&](int64_t* ids, float* dists) {
                 std::vector<float> qnorm(r.n * r.d);
                 normalize_rows(r.ptr, qnorm.data(), r.n, r.d);
                 std::vector<arrayf> spans = make_row_spans(qnorm.data(), r.n, r.d);
 
-                hnsw.searchKNN(spans, k, idx, dist, mask);
+                hnsw.searchKNN_flat(spans, k, ids, dists,
+                                    std::numeric_limits<float>::infinity(), mask);
                 // L2² → cosine distance (d_cos = L2² / 2 for unit vectors).
-                for (auto& row : dist) {
-                    for (float& v : row) v = v * 0.5f;
-                }
+                // Padded entries are +inf; inf * 0.5 == inf, so the
+                // full-buffer pass leaves them intact.
+                for (size_t i = 0; i < r.n * k; i++) dists[i] *= 0.5f;
             });
     }
 
@@ -830,24 +853,27 @@ public:
         Rows2D r = as_rows_2d(queries, "searchKNN_arrays");
         if (_scale <= 0.0f || hnsw.size() == 0) {
             // Empty index — every row is padding (mirrors searchKNN's early return).
-            return knn_to_arrays<float>(r.n, k, std::numeric_limits<float>::infinity(), true,
-                [](std::vector<std::vector<int64_t>>&, std::vector<std::vector<float>>&) {});
+            return knn_arrays_direct<float>(r.n, k,
+                [&](int64_t* ids, float* dists) {
+                    for (size_t i = 0; i < r.n * k; i++) {
+                        ids[i] = -1;
+                        dists[i] = std::numeric_limits<float>::infinity();
+                    }
+                });
         }
         check_query_dim(r.d, "searchKNN_arrays");
         const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
-        return knn_to_arrays<float>(r.n, k, std::numeric_limits<float>::infinity(), true,
-            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<float>>& dist) {
+        return knn_arrays_direct<float>(r.n, k,
+            [&](int64_t* ids, float* dists) {
                 std::vector<float> q_buf = shift_queries(r.ptr, r.n, r.d);
 
-                std::vector<std::vector<float>> dist_sq;
-                hnsw.searchKNN_asym(q_buf.data(), r.n, k, idx, dist_sq, mask);
-                // Squared L2 → L2 (same as searchKNN).
-                dist.resize(idx.size());
-                for (size_t i = 0; i < idx.size(); i++) {
-                    dist[i].reserve(dist_sq[i].size());
-                    for (float di : dist_sq[i]) {
-                        dist[i].push_back(std::sqrt(di < 0.0f ? 0.0f : di));
-                    }
+                hnsw.searchKNN_asym_flat(q_buf.data(), r.n, k, ids, dists,
+                                         std::numeric_limits<float>::infinity(), mask);
+                // Squared L2 → L2 (same as searchKNN). Padded entries are
+                // +inf: not < 0, and sqrt(inf) == inf, so they pass through.
+                for (size_t i = 0; i < r.n * k; i++) {
+                    float di = dists[i];
+                    dists[i] = std::sqrt(di < 0.0f ? 0.0f : di);
                 }
             });
     }
@@ -1069,9 +1095,10 @@ public:
     searchKNN_arrays(const ndarrayli& queries, size_t k,
                      py::object filter = py::none()) {
         const uint8_t* mask = extract_filter_mask(filter, hnsw.size());
-        return knn_to_arrays<int64_t>(queries.size(), k, std::numeric_limits<int64_t>::max(), true,
-            [&](std::vector<std::vector<int64_t>>& idx, std::vector<std::vector<int64_t>>& dist) {
-                hnsw.searchKNN(queries, k, idx, dist, mask);
+        return knn_arrays_direct<int64_t>(queries.size(), k,
+            [&](int64_t* ids, int64_t* dists) {
+                hnsw.searchKNN_flat(queries, k, ids, dists,
+                                    std::numeric_limits<int64_t>::max(), mask);
             });
     }
 

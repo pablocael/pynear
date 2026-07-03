@@ -66,65 +66,69 @@ template <typename distT> struct DistNodeMax {
     }
 };
 
-// Thread-safe pool of versioned visited-stamp arrays (hnswlib pattern).
-// A search checks a list out (RAII VisitedGuard below), bumps its epoch,
-// stamps nodes it visits, and returns the list on scope exit. The pool
-// grows on demand, so it works for any number of concurrent searches —
-// including searches running on non-OpenMP threads — and is just a
-// vector pop/push per search when uncontended.
-class VisitedListPool {
-public:
-    struct VisitedList {
-        std::vector<uint32_t> stamps;
-        uint32_t version = 0;
-        // Start a fresh visit epoch and make sure `stamps` covers n nodes.
-        // Same versioning scheme as before: a node is "visited" iff its
-        // stamp equals the current epoch; on wrap-around we zero the array.
-        uint32_t advance(size_t n) {
-            if (stamps.size() < n) stamps.resize(n, 0u);
-            ++version;
-            if (version == 0) {
-                std::fill(stamps.begin(), stamps.end(), 0u);
-                version = 1;
-            }
-            return version;
+// Versioned visited-stamp array (hnswlib pattern). A search bumps the
+// epoch, stamps nodes it visits; a node is "visited" iff its stamp equals
+// the current epoch. On wrap-around we zero the array.
+struct VisitedList {
+    std::vector<uint32_t> stamps;
+    uint32_t version = 0;
+    // Start a fresh visit epoch and make sure `stamps` covers n nodes.
+    uint32_t advance(size_t n) {
+        if (stamps.size() < n) stamps.resize(n, 0u);
+        ++version;
+        if (version == 0) {
+            std::fill(stamps.begin(), stamps.end(), 0u);
+            version = 1;
         }
-    };
+        return version;
+    }
+};
 
-    std::unique_ptr<VisitedList> acquire() {
+// Thread-safe object pool (generalisation of the hnswlib visited-list
+// pool). Objects are checked out per search / per batch (RAII PoolGuard
+// below), keep their internal allocations across checkouts, and the pool
+// grows on demand — so it works for any number of concurrent searches,
+// including searches running on non-OpenMP (e.g. external Python)
+// threads, and is just a vector pop/push per checkout when uncontended.
+// Pooling — NOT thread_local — is required: thread_local buffers would
+// leak per-thread copies under arbitrary external threads and interact
+// badly with OpenMP thread teams.
+template <class Obj> class ObjectPool {
+public:
+    std::unique_ptr<Obj> acquire() {
         {
             std::lock_guard<std::mutex> lock(_mtx);
             if (!_free.empty()) {
-                std::unique_ptr<VisitedList> vl = std::move(_free.back());
+                std::unique_ptr<Obj> o = std::move(_free.back());
                 _free.pop_back();
-                return vl;
+                return o;
             }
         }
-        return std::make_unique<VisitedList>();
+        return std::make_unique<Obj>();
     }
 
-    void release(std::unique_ptr<VisitedList> vl) {
+    void release(std::unique_ptr<Obj> o) {
         std::lock_guard<std::mutex> lock(_mtx);
-        _free.push_back(std::move(vl));
+        _free.push_back(std::move(o));
     }
 
 private:
     std::mutex _mtx;
-    std::vector<std::unique_ptr<VisitedList>> _free;
+    std::vector<std::unique_ptr<Obj>> _free;
 };
 
-// RAII checkout of a VisitedList from a VisitedListPool.
-class VisitedGuard {
+// RAII checkout of an object from an ObjectPool.
+template <class Obj> class PoolGuard {
 public:
-    explicit VisitedGuard(VisitedListPool& pool) : _pool(&pool), _vl(pool.acquire()) {}
-    ~VisitedGuard() { _pool->release(std::move(_vl)); }
-    VisitedGuard(const VisitedGuard&) = delete;
-    VisitedGuard& operator=(const VisitedGuard&) = delete;
-    VisitedListPool::VisitedList& operator*() { return *_vl; }
+    explicit PoolGuard(ObjectPool<Obj>& pool) : _pool(&pool), _obj(pool.acquire()) {}
+    ~PoolGuard() { _pool->release(std::move(_obj)); }
+    PoolGuard(const PoolGuard&) = delete;
+    PoolGuard& operator=(const PoolGuard&) = delete;
+    Obj& operator*() { return *_obj; }
 
 private:
-    VisitedListPool* _pool;
-    std::unique_ptr<VisitedListPool::VisitedList> _vl;
+    ObjectPool<Obj>* _pool;
+    std::unique_ptr<Obj> _obj;
 };
 
 template <typename T, typename distT, distT (*distance_fn)(const T&, const T&)>
@@ -409,7 +413,7 @@ public:
     // returned farthest-first (caller reverses if they need nearest-first).
     // Optional `filter_mask`: byte-per-node array of length `size()`. When
     // non-null, only nodes with mask[id] != 0 are eligible for the top-k.
-    // Implemented as a post-filter with inflation in search_one() — works
+    // Implemented as a post-filter with inflation in search_one_into() — works
     // best when filter selectivity ≥ 10 %; very selective filters fall
     // back to scanning more candidates (capped at 8×k).
     void searchKNN(const std::vector<T>& queries,
@@ -423,8 +427,13 @@ public:
 
         if (_entry_point < 0 || _examples.empty()) return;
 
-        auto process_query = [&](size_t qi) {
-            std::vector<DistNode<distT>> top = search_one(queries[qi], k, filter_mask);
+        // Queries are independent and the graph is read-only during
+        // search (per-query scratch comes from the thread-safe pool, and
+        // _dist_calls is a relaxed atomic), so each query produces
+        // exactly the same result whether the loop runs serial or parallel.
+        for_each_query(nq, [&](size_t qi, SearchScratch& scratch) {
+            search_one_into(queries[qi], k, scratch, filter_mask);
+            const auto& top = scratch.results;
             // top is sorted nearest → farthest. Reverse for pynear's convention.
             indices_out[qi].reserve(top.size());
             distances_out[qi].reserve(top.size());
@@ -432,24 +441,26 @@ public:
                 indices_out[qi].push_back(it->node_id);
                 distances_out[qi].push_back(it->distance);
             }
-        };
+        });
+    }
 
-#ifdef _OPENMP
-        if (_n_threads > 1 && nq > 1) {
-            // Queries are independent and the graph is read-only during
-            // search (visited state comes from the thread-safe pool, and
-            // _dist_calls is a relaxed atomic), so each query produces
-            // exactly the same result as in the serial loop below.
-#pragma omp parallel for schedule(dynamic) num_threads(_n_threads)
-            for (int64_t qi = 0; qi < static_cast<int64_t>(nq); qi++) {
-                process_query(static_cast<size_t>(qi));
-            }
+    // Arrays-API core: writes each query's top-k DIRECTLY into the caller's
+    // flat row-major (nq × k) buffers, NEAREST-first, padding short rows
+    // with id −1 / distance `pad_dist`. Runs the exact same per-query search
+    // as searchKNN (same ids, distances, order — the list API just reverses
+    // rows), minus the per-query nested-vector materialisation and copies.
+    void searchKNN_flat(const std::vector<T>& queries, size_t k,
+                        int64_t* ids_out, distT* dists_out, distT pad_dist,
+                        const uint8_t* filter_mask = nullptr) {
+        const size_t nq = queries.size();
+        if (_entry_point < 0 || _examples.empty()) {
+            pad_all_rows(ids_out, dists_out, nq, k, pad_dist);
             return;
         }
-#endif
-        for (size_t qi = 0; qi < nq; qi++) {
-            process_query(qi);
-        }
+        for_each_query(nq, [&](size_t qi, SearchScratch& scratch) {
+            search_one_into(queries[qi], k, scratch, filter_mask);
+            write_row(scratch.results, k, ids_out + qi * k, dists_out + qi * k, pad_dist);
+        });
     }
 
     // Asymmetric (ADC) batch search — T = SQ8Span only (instantiated lazily,
@@ -470,41 +481,37 @@ public:
         assert(_sq8_node_norms.size() == _examples.size());
 
         const T shell{nullptr, _dim};  // dim carrier; never dereferenced (q_asym set)
-        auto process_query = [&](size_t qi) {
-            // Per-query precomputes for the dot-form distance: w = qp∘alpha
-            // and ||qp||² (see SQ8AsymQuery). ~dim floats, negligible next
-            // to the beam search itself.
-            const float* qp = queries + qi * _dim;
-            std::vector<float> w(_dim);
-            float qnorm_sq = 0.0f;
-            for (size_t j = 0; j < _dim; j++) {
-                w[j] = qp[j] * _sq8_alpha[j];
-                qnorm_sq += qp[j] * qp[j];
-            }
-            const SQ8AsymQuery q_asym{w.data(), qnorm_sq};
-
-            std::vector<DistNode<distT>> top =
-                search_one(shell, k, filter_mask, nullptr, &q_asym);
+        for_each_query(nq, [&](size_t qi, SearchScratch& scratch) {
+            const SQ8AsymQuery q_asym = prepare_asym_query(queries + qi * _dim, scratch);
+            search_one_into(shell, k, scratch, filter_mask, nullptr, &q_asym);
+            const auto& top = scratch.results;
             indices_out[qi].reserve(top.size());
             distances_out[qi].reserve(top.size());
             for (auto it = top.rbegin(); it != top.rend(); ++it) {
                 indices_out[qi].push_back(it->node_id);
                 distances_out[qi].push_back(it->distance);
             }
-        };
+        });
+    }
 
-#ifdef _OPENMP
-        if (_n_threads > 1 && nq > 1) {
-#pragma omp parallel for schedule(dynamic) num_threads(_n_threads)
-            for (int64_t qi = 0; qi < static_cast<int64_t>(nq); qi++) {
-                process_query(static_cast<size_t>(qi));
-            }
+    // Flat-buffer variant of searchKNN_asym — same output convention as
+    // searchKNN_flat (nearest-first rows, −1 / pad_dist padding).
+    void searchKNN_asym_flat(const float* queries, size_t nq, size_t k,
+                             int64_t* ids_out, distT* dists_out, distT pad_dist,
+                             const uint8_t* filter_mask = nullptr) {
+        if (_entry_point < 0 || _examples.empty()) {
+            pad_all_rows(ids_out, dists_out, nq, k, pad_dist);
             return;
         }
-#endif
-        for (size_t qi = 0; qi < nq; qi++) {
-            process_query(qi);
-        }
+        assert(_sq8_alpha.size() == _dim);
+        assert(_sq8_node_norms.size() == _examples.size());
+
+        const T shell{nullptr, _dim};  // dim carrier; never dereferenced (q_asym set)
+        for_each_query(nq, [&](size_t qi, SearchScratch& scratch) {
+            const SQ8AsymQuery q_asym = prepare_asym_query(queries + qi * _dim, scratch);
+            search_one_into(shell, k, scratch, filter_mask, nullptr, &q_asym);
+            write_row(scratch.results, k, ids_out + qi * k, dists_out + qi * k, pad_dist);
+        });
     }
 
     // Per-dimension SQ8 decode scales (alpha in: decoded[d] = alpha[d] *
@@ -754,7 +761,7 @@ public:
         _adjacency.clear();
         _layer0_adj.clear();
         _layer0_count.clear();
-        _visited_pool.reset();
+        _scratch_pool.reset();
         _rng_per_thread.clear();
         _node_locks.reset();
         _num_locks = 0;
@@ -766,6 +773,94 @@ public:
 
 private:
     // ─── Algorithm core ─────────────────────────────────────────────────────
+
+    // Per-search scratch, pooled the same way the visited lists always were
+    // (see ObjectPool). Buffers keep their capacity across checkouts, so a
+    // steady-state query performs ZERO heap allocations inside the search
+    // core (previously: fresh candidates/results vectors per search_layer
+    // call plus a per-query `w` vector on the SQ8 asymmetric path).
+    struct SearchScratch {
+        VisitedList visited;
+        std::vector<DistNode<distT>> candidates;  // beam min-heap
+        std::vector<DistNode<distT>> results;     // beam max-heap → final top-k
+        std::vector<float> asym_w;                // SQ8 ADC per-query weights
+    };
+    using ScratchPool = ObjectPool<SearchScratch>;
+    using ScratchGuard = PoolGuard<SearchScratch>;
+
+    // Run `process(qi, scratch)` for every query index, parallelising across
+    // _n_threads when OpenMP is available. One scratch checkout per thread
+    // per batch (rather than per query) — a single pool mutex round-trip per
+    // thread; correctness is unaffected because every per-query routine
+    // fully resets the scratch state it uses.
+    //
+    // schedule(guided): with ~2–5 µs per query at low ef, dynamic's default
+    // chunk of 1 pays one scheduler transaction per query, which is
+    // measurable. Measured on the N=100k/d=128/M=16/24-thread benchmark
+    // workload (1000-query batches, best-of-15, pooled over ≥5 independent
+    // graph builds per variant): guided ≥ both dynamic,1 and dynamic,8 at
+    // every ef tried — ef=16: ~352k vs ~345k/~337k QPS; ef=32: ~230k vs
+    // ~218k/~224k; ef=64: ~142k vs ~138k/~134k. Guided's geometrically
+    // shrinking chunks amortise dispatch up front yet still balance the tail.
+    template <class F>
+    void for_each_query(size_t nq, F&& process) const {
+#ifdef _OPENMP
+        if (_n_threads > 1 && nq > 1) {
+#pragma omp parallel num_threads(_n_threads)
+            {
+                ScratchGuard sguard(*_scratch_pool);
+#pragma omp for schedule(guided)
+                for (int64_t qi = 0; qi < static_cast<int64_t>(nq); qi++) {
+                    process(static_cast<size_t>(qi), *sguard);
+                }
+            }
+            return;
+        }
+#endif
+        ScratchGuard sguard(*_scratch_pool);
+        for (size_t qi = 0; qi < nq; qi++) {
+            process(qi, *sguard);
+        }
+    }
+
+    // Per-query precomputes for the SQ8 dot-form distance: w = qp∘alpha and
+    // ||qp||² (see SQ8AsymQuery). ~dim floats into pooled scratch, negligible
+    // next to the beam search itself. The returned view points into
+    // scratch.asym_w and stays valid for the duration of the query.
+    SQ8AsymQuery prepare_asym_query(const float* qp, SearchScratch& scratch) const {
+        scratch.asym_w.resize(_dim);
+        float* w = scratch.asym_w.data();
+        float qnorm_sq = 0.0f;
+        for (size_t j = 0; j < _dim; j++) {
+            w[j] = qp[j] * _sq8_alpha[j];
+            qnorm_sq += qp[j] * qp[j];
+        }
+        return SQ8AsymQuery{w, qnorm_sq};
+    }
+
+    // Write one query's top-k (sorted nearest-first) into flat output rows,
+    // padding the tail with id −1 / pad_dist. Same padding convention as the
+    // arrays API always used.
+    static void write_row(const std::vector<DistNode<distT>>& top, size_t k,
+                          int64_t* ids, distT* dists, distT pad_dist) {
+        const size_t m = std::min(top.size(), k);
+        for (size_t j = 0; j < m; j++) {
+            ids[j] = top[j].node_id;
+            dists[j] = top[j].distance;
+        }
+        for (size_t j = m; j < k; j++) {
+            ids[j] = -1;
+            dists[j] = pad_dist;
+        }
+    }
+
+    static void pad_all_rows(int64_t* ids, distT* dists, size_t nq, size_t k,
+                             distT pad_dist) {
+        for (size_t i = 0; i < nq * k; i++) {
+            ids[i] = -1;
+            dists[i] = pad_dist;
+        }
+    }
 
     int32_t random_level() {
         std::uniform_real_distribution<double> u(0.0, 1.0);
@@ -881,15 +976,17 @@ private:
     // Optional `q_asym` (SQ8 only): float query for asymmetric (ADC) search —
     // see query_node_dist(). When set, `query` is only a dim-carrying shell
     // and is never dereferenced.
-    std::vector<DistNode<distT>>
+    //
+    // Results are left in `scratch.results` in heap order (caller sorts).
+    // The scratch's visited list gets a fresh epoch here, so one scratch can
+    // serve any number of consecutive search_layer calls.
+    void
     search_layer(const T& query, int32_t entry, size_t ef, int32_t layer,
+                 SearchScratch& scratch,
                  const std::vector<int32_t>* extra_seeds = nullptr,
                  const float* known_query_norm_sq = nullptr,
                  const SQ8AsymQuery* q_asym = nullptr) const {
-        // Check a visited-stamp array out of the pool for the duration of
-        // this beam search (returned by the guard's destructor).
-        VisitedGuard vguard(*_visited_pool);
-        auto& vlist = *vguard;
+        auto& vlist = scratch.visited;
         const uint32_t ver = vlist.advance(_examples.size());
 
         DistNodeMin<distT> min_cmp;
@@ -906,8 +1003,13 @@ private:
 
         // Candidates: min-heap by distance (explore nearest first).
         // Results:    max-heap by distance (drop the farthest when full).
-        std::vector<DistNode<distT>> candidates;
-        std::vector<DistNode<distT>> results;
+        // Both live in the pooled scratch — clear() keeps capacity, so after
+        // the first query at a given ef these reserves are no-ops and the
+        // beam search runs allocation-free.
+        std::vector<DistNode<distT>>& candidates = scratch.candidates;
+        std::vector<DistNode<distT>>& results = scratch.results;
+        candidates.clear();
+        results.clear();
         candidates.reserve(ef * 2 + (extra_seeds ? extra_seeds->size() : 0) + 8);
         results.reserve(ef + 1);
 
@@ -1100,8 +1202,7 @@ private:
             }
         }
 
-        // Results are in heap order; caller does the final sort.
-        return results;
+        // scratch.results holds the beam in heap order; caller sorts.
     }
 
     // α-heuristic from §4 of the HNSW paper. Selects up to M items from
@@ -1222,11 +1323,20 @@ private:
             known_norm_sq = &_norms_sq[pidx];
         }
 
+        // One pooled scratch reused across every layer of this insertion —
+        // search_layer starts a fresh visited epoch per call, same semantics
+        // as the old per-call checkout.
+        ScratchGuard sguard(*_scratch_pool);
+        SearchScratch& scratch = *sguard;
+
         // From min(level, top_level) down to layer 0, build candidates and connect.
         int32_t start_layer = std::min(level, snap_top);
         for (int32_t l = start_layer; l >= 0; l--) {
-            auto candidates = search_layer(_examples[pidx], current, _ef_construction, l,
-                                           nullptr, known_norm_sq);
+            search_layer(_examples[pidx], current, _ef_construction, l, scratch,
+                         nullptr, known_norm_sq);
+            // NB: scratch.results stays valid (and untouched) until the next
+            // search_layer call — the loop below reads it after linking.
+            const std::vector<DistNode<distT>>& candidates = scratch.results;
 
             std::vector<int32_t> chosen = select_neighbours_heuristic(_examples[pidx],
                                                                      candidates,
@@ -1346,12 +1456,13 @@ private:
     }
 
     // Query path: greedy descent to layer 0, then full beam search.
-    // Returns up to k results sorted nearest → farthest. Optional
-    // `extra_seeds` are forwarded to the layer-0 beam (see search_layer).
-    std::vector<DistNode<distT>> search_one(const T& query, size_t k,
-                                             const uint8_t* filter_mask = nullptr,
-                                             const std::vector<int32_t>* extra_seeds = nullptr,
-                                             const SQ8AsymQuery* q_asym = nullptr) const {
+    // Leaves up to k results sorted nearest → farthest in scratch.results.
+    // Optional `extra_seeds` are forwarded to the layer-0 beam (see
+    // search_layer).
+    void search_one_into(const T& query, size_t k, SearchScratch& scratch,
+                         const uint8_t* filter_mask = nullptr,
+                         const std::vector<int32_t>* extra_seeds = nullptr,
+                         const SQ8AsymQuery* q_asym = nullptr) const {
         int32_t current = _entry_point;
         for (int32_t l = _top_level; l > 0; l--) {
             current = greedy_descent(query, current, l, q_asym);
@@ -1368,7 +1479,8 @@ private:
             fetch_k = std::min(k * 8, std::max<size_t>(k * 2, k + n_deleted));
         }
         size_t ef = std::max(_ef_search, fetch_k);
-        auto layer0 = search_layer(query, current, ef, 0, extra_seeds, nullptr, q_asym);
+        search_layer(query, current, ef, 0, scratch, extra_seeds, nullptr, q_asym);
+        auto& layer0 = scratch.results;
 
         std::sort(layer0.begin(), layer0.end(),
                   [](const DistNode<distT>& a, const DistNode<distT>& b) {
@@ -1376,20 +1488,21 @@ private:
                   });
 
         // Single filter pass — combines tombstone + user filter checks.
+        // In-place compaction (order-preserving), same output as the old
+        // copy-to-`live` loop without the extra vector.
         if (has_tombstones || has_filter) {
-            std::vector<DistNode<distT>> live;
-            live.reserve(std::min(k, layer0.size()));
-            for (const auto& dn : layer0) {
+            size_t w = 0;
+            for (size_t i = 0; i < layer0.size() && w < k; i++) {
+                const DistNode<distT> dn = layer0[i];
                 if (dn.node_id < 0 || (size_t)dn.node_id >= _examples.size()) continue;
                 if (has_tombstones && _deleted[dn.node_id]) continue;
                 if (has_filter && !filter_mask[dn.node_id]) continue;
-                live.push_back(dn);
-                if (live.size() >= k) break;
+                layer0[w++] = dn;
             }
-            return live;
+            layer0.resize(w);
+            return;
         }
         if (layer0.size() > k) layer0.resize(k);
-        return layer0;
     }
 
 public:
@@ -1407,7 +1520,9 @@ public:
     search_one_with_seeds(const T& query, size_t k,
                           const std::vector<int32_t>& extra_seeds) const {
         if (_entry_point < 0 || _examples.empty()) return {};
-        return search_one(query, k, nullptr, &extra_seeds);
+        ScratchGuard sguard(*_scratch_pool);
+        search_one_into(query, k, *sguard, nullptr, &extra_seeds);
+        return (*sguard).results;
     }
 
 private:
@@ -1470,10 +1585,11 @@ private:
     uint64_t _seed_used = 42;
     int _n_threads = 1;
 
-    // Pool of versioned visited lists — each search (build-time or query)
-    // checks one out for its duration, so any number of concurrent searches
-    // work regardless of which thread runs them (OpenMP or not).
-    mutable std::unique_ptr<VisitedListPool> _visited_pool;
+    // Pool of per-search scratch (visited list + beam buffers) — each search
+    // (build-time or query) checks one out for its duration, so any number
+    // of concurrent searches work regardless of which thread runs them
+    // (OpenMP or not).
+    mutable std::unique_ptr<ScratchPool> _scratch_pool;
 
     // Per-thread RNGs for parallel random_level(). Each is seeded from
     // (_seed_used + thread_id) to keep per-thread sequences distinct and
@@ -1496,7 +1612,7 @@ private:
         // larger so the index can never run past the end.
         int max_threads = std::max(1, omp_get_max_threads());
         max_threads = std::max(max_threads, _n_threads);
-        _visited_pool = std::make_unique<VisitedListPool>();
+        _scratch_pool = std::make_unique<ScratchPool>();
         _rng_per_thread.clear();
         _rng_per_thread.reserve(max_threads);
         for (int t = 0; t < max_threads; t++) {
