@@ -107,7 +107,7 @@ Faiss's scans — see the methodology note below). Reproducible via
 | **IVF build time**, 50k float vectors, 128–1024-D | **0.37–1.5 s** | 0.51–3.7 s | **PyNear 1.4–2.4× faster builds** |
 | Exact **binary** k-NN (brute force's home turf) | `VPTreeBinaryIndex` 3.2–15.9 ms | `IndexBinaryFlat` **0.15–0.29 ms** | **Faiss wins at every width** — use PyNear's MIH/IVF for binary instead |
 | Approximate **float** L2 raw latency, 128–1024-D | `IVFFlatL2Index` 5.6–21.5 ms | `IndexIVFFlat` **0.2–2.8 ms** | **Faiss wins 8–32×** (BLAS inner scan) |
-| **HNSW** batch queries, 100k × 128-D, matched recall | `HNSWL2Index` 130k QPS @ 0.97 | `IndexHNSWFlat` **203k QPS @ 0.97** | **Faiss 1.4–1.7× faster** (identical recall-per-ef; PyNear's SQ8 still beats Faiss's *float* index below ~0.87 recall at 4× less RAM) |
+| **HNSW** batch queries, 100k × 128-D, matched recall | `HNSWL2Index` 131k QPS @ 0.96 | `IndexHNSWFlat` **203k QPS @ 0.97** | **Faiss ~1.5× faster** (identical recall-per-ef; PyNear's SQ8 tracks or beats Faiss's *float* index up to ~0.91 recall at 4× less RAM) |
 
 The last two rows are deliberate: where Faiss is better we say so, and the
 [full PDF report](./docs/benchmarks.pdf) keeps every losing number. PyNear's
@@ -436,25 +436,25 @@ See [docs/demos.md](./docs/demos.md) for full details.
 
 ## Benchmarks
 
-### HNSW family (v2.5) — throughput vs Faiss, thread-matched
+### HNSW family — throughput vs Faiss, thread-matched
 
 N=100k × 128-D (clustered), k=10, M=16, ef_construction=200, batches of 1,000
 queries, **24 threads for both systems**, Faiss in an isolated subprocess:
 
 | Recall@10 | `HNSWL2Index` | `HNSWL2IndexSQ8` | Faiss `IndexHNSWFlat` | Faiss `IndexHNSWSQ` |
 |:---|---:|---:|---:|---:|
-| ~0.72 | 328k QPS | **723k QPS** (@0.69) | 554k QPS | 1,185k QPS |
-| ~0.87 | 218k QPS (@0.87) | **303k QPS** (@0.87) | 335k QPS (@0.88) | 731k QPS (@0.85) |
-| ~0.97 | 130k QPS | — (ceiling 0.889) | **203k QPS** | 439k QPS (@0.92) |
-| ~0.995 | 91k QPS | — | **130k QPS** | — (ceiling 0.944) |
+| ~0.72 | 359k QPS | **569k QPS** (@0.69) | 554k QPS | 1,185k QPS |
+| ~0.87 | 217k QPS | **291k QPS** (@0.91) | 335k QPS (@0.88) | 731k QPS (@0.85) |
+| ~0.97 | 131k QPS (@0.96) | — (ceiling 0.940) | **203k QPS** | 439k QPS (@0.92) |
+| ~0.995 | 86k QPS (@0.99) | — | **130k QPS** | — (ceiling 0.944) |
 
-**Honest verdict:** Faiss leads both like-for-like pairs by 1.4–1.8× at matched
+**Honest verdict:** Faiss leads both like-for-like pairs ~1.5× at matched
 recall, with identical recall-per-ef (graph quality is equivalent). PyNear's
-SQ8 is the fastest option of the four below ~0.87 recall — ahead of Faiss's
-*float* index at 4× less vector memory. The SQ8 recall ceiling (0.889 vs
-Faiss's 0.944) comes from our global int8 scale vs their per-dimension trained
-quantiser — a known, fixable difference. Build times are comparable
-(float 1.16s vs 1.02s; SQ8 0.68s vs 0.84s, PyNear faster).
+SQ8 — now per-dimension affine quantisation with asymmetric search — tracks
+or beats Faiss's *float* index up to ~0.91 recall at 4× less vector memory,
+with its recall ceiling raised from 0.889 to 0.940 (Faiss SQ8: 0.944). The
+search path is allocation-free (0.00 mallocs/query). Build times comparable
+(float 1.22s vs 1.02s; SQ8 0.67s vs 0.84s, PyNear faster).
 
 > Earlier editions showed pynear at 88µs vs Faiss at 9µs per query — that
 > compared single-threaded pynear against Faiss using every core, measured

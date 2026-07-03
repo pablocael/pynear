@@ -3,6 +3,22 @@
 All notable changes to PyNear are documented in this file. Versioning follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html): MAJOR.MINOR.PATCH.
 
+## Unreleased
+
+### Changed
+- `HNSWL2IndexSQ8` now uses per-dimension affine int8 quantization with
+  asymmetric search (float query vs decoded codes, Faiss-ADC style):
+  Recall@10 ceiling 0.889 -> 0.940 on the reference benchmark (Faiss
+  IndexHNSWSQ: 0.944). Queries are no longer quantized. Legacy pickles
+  load unchanged (and gain recall from the asymmetric search).
+
+### Performance
+- HNSW search path is allocation-free in steady state (pooled per-thread
+  scratch; 2.77 -> 0.00 mallocs/query); `searchKNN_arrays` writes results
+  directly into the numpy buffers with the GIL released. SQ8 throughput
+  at ef>=64 matches the previous lower-recall kernel despite the decode
+  cost; results bit-identical on fixed graphs.
+
 ## 2.5.0 — 2026-07-02
 
 ### Added
