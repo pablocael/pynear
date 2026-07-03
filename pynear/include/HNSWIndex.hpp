@@ -892,21 +892,122 @@ private:
 
     // Greedy single-step search at upper layers: walk neighbours until no
     // closer one is found. Returns the closest node.
+    //
+    // For SQ8 the neighbour distances are computed with prefetch +
+    // descent-batch kernels (batch_dot_sq8_desc_avx2 for the asymmetric
+    // ADC query path, batch_l2sq_sq8_avx2 for the symmetric path)
+    // instead of one single-vector kernel call per neighbour. The win is
+    // memory-level parallelism: several load streams in flight instead of
+    // one serial latency-bound kernel per node (measured +23–28 % SQ8
+    // query QPS at ef 16/32/64 on the N=100k/d=128 benchmark). Both
+    // kernels return bit-identical values to the single-vector path this
+    // replaces (the ADC one replicates dot_sq8_f_avx2's accumulation
+    // order verbatim; the symmetric one is exact integer math), and the
+    // argmin scan below visits neighbours in list order with the same
+    // strict `<`, so the walk — and therefore build and search results —
+    // is unchanged.
+    //
+    // The float (FlatSpan) path deliberately stays serial: its upper-layer
+    // working set (~N/M vectors) is effectively cache-resident under load,
+    // and a measured batched+prefetch variant (2-way interleaved sub-square
+    // kernel, bit-identical) was 0–6 % SLOWER at ef 16–64 — prefetch and
+    // interleave overhead with no misses to hide.
+    //
+    // The batched path is additionally gated on !_during_build, i.e. it
+    // runs only when the graph is read-only: queries, and sequential
+    // builds (which never set the flag). PARALLEL builds keep the exact
+    // serial loop — not because the batch reads anything the serial loop
+    // doesn't (same ids, same derefs), but because its speed-up shifts
+    // inter-thread timing enough to make a LATENT pre-existing
+    // parallel-build race fire far more often: SIGSEGV in add_point →
+    // search_layer → batch_l2sq_sq8_avx2 on a null/torn example pointer,
+    // ~1 in 36 parallel 100k builds with the batch enabled vs 0 in 150
+    // without. (Root cause to fix separately: the "Link new node →
+    // chosen. No lock" writes in add_point are unlocked while concurrent
+    // inserters read those same lists via read_neighbours.) Gating
+    // restores the old build-time code path and exposure, and costs
+    // nothing — the measured QPS win is entirely post-build.
     int32_t greedy_descent(const T& query, int32_t entry, int32_t layer,
                            const SQ8AsymQuery* q_asym = nullptr) const {
         int32_t current = entry;
         distT current_d = query_node_dist(query, q_asym, current);
+        bool use_batch = false;
+        if constexpr (std::is_same_v<T, SQ8Span>) {
+            use_batch = !_during_build;
+        }
         bool changed = true;
         while (changed) {
             changed = false;
             NeighbourView nv = read_neighbours(current, layer);
-            for (size_t i = 0; i < nv.count; i++) {
-                int32_t n = nv.ptr[i];
-                distT d = query_node_dist(query, q_asym, n);
-                if (d < current_d) {
-                    current_d = d;
-                    current = n;
-                    changed = true;
+
+            if (use_batch) {
+                if constexpr (std::is_same_v<T, SQ8Span>) {
+                    // Chunked so any neighbour count works; lists are ≤ 2M in
+                    // practice so this is one iteration.
+                    for (size_t base = 0; base < nv.count; base += kMaxBatch) {
+                        const size_t n = std::min(nv.count - base, kMaxBatch);
+                        distT dists[kMaxBatch];
+
+                        const int8_t* vptr[kMaxBatch];
+                        for (size_t i = 0; i < n; i++) {
+                            vptr[i] = _examples[nv.ptr[base + i]].ptr;
+                        }
+#if defined(__AVX__) || defined(__AVX2__)
+                        // Prefetch every cache line of every neighbour's codes
+                        // (d=128 → 2 lines) before the batched compute.
+                        for (size_t i = 0; i < n; i++) {
+                            for (size_t off = 0; off < _dim; off += 64) {
+                                _mm_prefetch(reinterpret_cast<const char*>(vptr[i]) + off,
+                                             _MM_HINT_T0);
+                            }
+                        }
+#endif
+                        if (q_asym) {
+                            // Asymmetric ADC — same composition as
+                            // query_node_dist's asym branch, dot computed by
+                            // the bit-identical descent batch kernel.
+                            float dots[kMaxBatch];
+                            batch_dot_sq8_desc_avx2(q_asym->w, _dim, vptr, n, dots);
+                            for (size_t i = 0; i < n; i++) {
+                                float dsq = q_asym->qnorm_sq +
+                                            _sq8_node_norms[nv.ptr[base + i]] -
+                                            2.0f * dots[i];
+                                dists[i] = static_cast<distT>(dsq < 0.0f ? 0.0f : dsq);
+                            }
+                        } else {
+                            // Symmetric code-vs-code (sequential build &
+                            // symmetric queries) — integer kernel, exact in
+                            // any order; the float cast matches
+                            // dist_l2sq_sq8_f.
+                            int32_t d32[kMaxBatch];
+                            batch_l2sq_sq8_avx2(query.ptr, query.sz, vptr, n, d32);
+                            for (size_t i = 0; i < n; i++) {
+                                dists[i] = static_cast<distT>(d32[i]);
+                            }
+                        }
+
+                        // Argmin in neighbour-list order with strict < — the
+                        // exact comparison sequence of the serial loop.
+                        for (size_t i = 0; i < n; i++) {
+                            if (dists[i] < current_d) {
+                                current_d = dists[i];
+                                current = nv.ptr[base + i];
+                                changed = true;
+                            }
+                        }
+                    }
+                }  // if constexpr (SQ8Span)
+            } else {
+                // Serial path — float (see header comment), parallel-build
+                // SQ8, binary/Hamming and any other T. Behaviour unchanged.
+                for (size_t i = 0; i < nv.count; i++) {
+                    int32_t n = nv.ptr[i];
+                    distT d = query_node_dist(query, q_asym, n);
+                    if (d < current_d) {
+                        current_d = d;
+                        current = n;
+                        changed = true;
+                    }
                 }
             }
         }

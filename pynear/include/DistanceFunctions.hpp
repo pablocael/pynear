@@ -568,6 +568,74 @@ inline void batch_dot_sq8_f_avx2_8(const float* w, size_t d,
     }
 }
 
+// Greedy-descent batched ADC cross-term dot — out[i] = the EXACT value
+// dot_sq8_f_avx2(w, vectors[i], d) would return, bit-for-bit. Four vectors
+// are kept in flight for ILP/memory-level parallelism, but each vector's
+// accumulation replicates the single-vector kernel's structure verbatim
+// (s0/s1 pair, 16-lane main loop, 8-lane drain into s0, sum8(s0+s1),
+// scalar tail in the same order). greedy_descent() needs this stronger
+// guarantee than the beam-search batch kernels give: descent distances
+// previously came from the single-vector kernel, and changing their FP
+// rounding could flip an argmin and change the search/build results.
+// Measured (d=128, 32 MB arena, 16-vector calls): 11.5 ns/vec vs 17.4
+// serial — the win is memory-level parallelism, not arithmetic.
+inline void batch_dot_sq8_desc_avx2(const float* w, size_t d,
+                                    const int8_t* const* vectors,
+                                    size_t n,
+                                    float* out_dots) {
+    auto cvt = [](const int8_t* p) -> __m256 {
+        return _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(
+            _mm_loadl_epi64(reinterpret_cast<const __m128i*>(p))));
+    };
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        const int8_t* p0 = vectors[i + 0];
+        const int8_t* p1 = vectors[i + 1];
+        const int8_t* p2 = vectors[i + 2];
+        const int8_t* p3 = vectors[i + 3];
+        __m256 s00 = _mm256_setzero_ps(), s01 = _mm256_setzero_ps();
+        __m256 s10 = _mm256_setzero_ps(), s11 = _mm256_setzero_ps();
+        __m256 s20 = _mm256_setzero_ps(), s21 = _mm256_setzero_ps();
+        __m256 s30 = _mm256_setzero_ps(), s31 = _mm256_setzero_ps();
+        size_t j = 0;
+        for (; j + 16 <= d; j += 16) {
+            __m256 w0 = _mm256_loadu_ps(w + j);
+            __m256 w1 = _mm256_loadu_ps(w + j + 8);
+            s00 = _mm256_fmadd_ps(w0, cvt(p0 + j), s00);
+            s10 = _mm256_fmadd_ps(w0, cvt(p1 + j), s10);
+            s20 = _mm256_fmadd_ps(w0, cvt(p2 + j), s20);
+            s30 = _mm256_fmadd_ps(w0, cvt(p3 + j), s30);
+            s01 = _mm256_fmadd_ps(w1, cvt(p0 + j + 8), s01);
+            s11 = _mm256_fmadd_ps(w1, cvt(p1 + j + 8), s11);
+            s21 = _mm256_fmadd_ps(w1, cvt(p2 + j + 8), s21);
+            s31 = _mm256_fmadd_ps(w1, cvt(p3 + j + 8), s31);
+        }
+        for (; j + 8 <= d; j += 8) {
+            __m256 wv = _mm256_loadu_ps(w + j);
+            s00 = _mm256_fmadd_ps(wv, cvt(p0 + j), s00);
+            s10 = _mm256_fmadd_ps(wv, cvt(p1 + j), s10);
+            s20 = _mm256_fmadd_ps(wv, cvt(p2 + j), s20);
+            s30 = _mm256_fmadd_ps(wv, cvt(p3 + j), s30);
+        }
+        float r0 = sum8(_mm256_add_ps(s00, s01));
+        float r1 = sum8(_mm256_add_ps(s10, s11));
+        float r2 = sum8(_mm256_add_ps(s20, s21));
+        float r3 = sum8(_mm256_add_ps(s30, s31));
+        for (; j < d; j++) {
+            float wj = w[j];
+            r0 += wj * static_cast<float>(p0[j]);
+            r1 += wj * static_cast<float>(p1[j]);
+            r2 += wj * static_cast<float>(p2[j]);
+            r3 += wj * static_cast<float>(p3[j]);
+        }
+        out_dots[i + 0] = r0; out_dots[i + 1] = r1;
+        out_dots[i + 2] = r2; out_dots[i + 3] = r3;
+    }
+    for (; i < n; i++) {
+        out_dots[i] = dot_sq8_f_avx2(w, vectors[i], d);
+    }
+}
+
 // Squared sum of one vector — ||v||². Used to precompute per-DB norms.
 inline float vec_l2sq_avx2(const float* v, size_t d) {
     __m256 s0 = _mm256_setzero_ps();
@@ -1199,6 +1267,16 @@ inline void batch_dot_sq8_f_avx2_8(const float* w, size_t d,
     batch_dot_sq8_f_avx2(w, d, vectors, n, out_dots);
 }
 
+// Greedy-descent batch shim (NEON) — deliberately serial: out[i] must be
+// bit-identical to the single-vector kernel and we keep NEON conservative
+// (no interleaved variant validated on ARM hardware).
+inline void batch_dot_sq8_desc_avx2(const float* w, size_t d,
+                                    const int8_t* const* vectors,
+                                    size_t n,
+                                    float* out_dots) {
+    for (size_t i = 0; i < n; i++) out_dots[i] = dot_sq8_f_avx2(w, vectors[i], d);
+}
+
 #else // !(__AVX__ || __AVX2__) && !__ARM_NEON (or PYNEAR_FORCE_SCALAR) —
        // scalar fallbacks for any other platform, for x86 cross-compile
        // builds where -mavx isn't passed (macos cibuildwheel arm64→x86_64
@@ -1299,6 +1377,15 @@ inline void batch_dot_sq8_f_avx2_8(const float* w, size_t d,
                                    size_t n,
                                    float* out_dots) {
     batch_dot_sq8_f_avx2(w, d, vectors, n, out_dots);
+}
+
+// Greedy-descent batch shim (scalar) — serial; scalar single-vector
+// kernels are the reference semantics.
+inline void batch_dot_sq8_desc_avx2(const float* w, size_t d,
+                                    const int8_t* const* vectors,
+                                    size_t n,
+                                    float* out_dots) {
+    for (size_t i = 0; i < n; i++) out_dots[i] = dot_sq8_f_avx2(w, vectors[i], d);
 }
 
 #endif // __AVX__
