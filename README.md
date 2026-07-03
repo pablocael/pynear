@@ -92,29 +92,40 @@ all three regimes instead of forcing every problem through the same tool:
 
 ### PyNear vs Faiss, in numbers
 
-All measured July 2026 on a 24-core machine, **with Faiss running in its own
-process** so the numbers are fair (two OpenMP runtimes in one process throttle
-Faiss's scans — see the methodology note below). Reproducible via
+All measured July 2026 on a 24-core machine, **index vs index, with Faiss
+running in its own process** so the numbers are fair (two OpenMP runtimes in
+one process throttle Faiss — see the methodology note below). Reproducible via
 `demo_faiss_comparison.py` and the [benchmark suite](./pynear/benchmark/).
+
+**Index vs index — where PyNear wins:**
 
 | Workload | PyNear | Faiss | Verdict |
 |---|---|---|---|
-| **Exact float k-NN**, 2.5M × 16-D, batch of 16 | `VPTreeL2Index` **0.86 ms** | `IndexFlatL2` 11.4 ms | **PyNear 13× faster** — and exact, no recall loss |
-| **Exact float k-NN**, 120k × 128-D | `VPTreeL2Index` **0.49 ms** | `IndexFlatL2` 5.7 ms | **PyNear 12× faster** |
-| **512-bit near-duplicates**, 1M codes, 100% Recall@10 | `MIHBinaryIndex` **114,039 QPS** | `IndexBinaryFlat` 3,341 QPS | **PyNear 34× faster** |
-| Same workload vs Faiss's own MIH | **114,039 QPS** | `IndexBinaryMultiHash` 46 QPS | **PyNear ~2,500× faster** |
-| **SIFT1M 128-bit**, MIH vs MIH at matched recall | — | — | **PyNear up to 3.5× faster** across the recall curve |
+| **SIFT1M 128-bit**, MIH vs MIH at matched recall | `MIHBinaryIndex` | `IndexBinaryMultiHash` | **PyNear up to 3.5× faster** across the recall curve |
+| **512-bit near-duplicates**, 1M codes, 100% Recall@10 | `MIHBinaryIndex` **114,039 QPS** | `IndexBinaryMultiHash` 46 QPS | **PyNear ~2,500× faster** — Faiss's MIH is not viable at this width |
+| **Quantised vs float ANN**: SQ8 HNSW vs Faiss's float HNSW, 100k × 128-D | `HNSWL2IndexSQ8` **291k QPS @ 0.91 recall** | `IndexHNSWFlat` ~260k QPS | **PyNear tracks or beats it up to ~0.91 recall at 4× less vector memory** |
+| **Guaranteed-complete near-duplicate retrieval** (every neighbour within the radius, by pigeonhole) | `MIHBinaryIndex` **114,039 QPS** | exact scan is the only alternative with the same guarantee: 3,341 QPS | **PyNear 34× faster at 100% recall** |
 | **IVF build time**, 50k float vectors, 128–1024-D | **0.37–1.5 s** | 0.51–3.7 s | **PyNear 1.4–2.4× faster builds** |
-| Exact **binary** k-NN (brute force's home turf) | `VPTreeBinaryIndex` 3.2–15.9 ms | `IndexBinaryFlat` **0.15–0.29 ms** | **Faiss wins at every width** — use PyNear's MIH/IVF for binary instead |
-| Approximate **float** L2 raw latency, 128–1024-D | `IVFFlatL2Index` 5.6–21.5 ms | `IndexIVFFlat` **0.2–2.8 ms** | **Faiss wins 8–32×** (BLAS inner scan) |
-| **HNSW** batch queries, 100k × 128-D, matched recall | `HNSWL2Index` 131k QPS @ 0.96 | `IndexHNSWFlat` **203k QPS @ 0.97** | **Faiss ~1.5× faster** (identical recall-per-ef; PyNear's SQ8 tracks or beats Faiss's *float* index up to ~0.91 recall at 4× less RAM) |
+| **Exactness required** (CV feature matching, dedup compliance, ANN ground truth), ≤256-D | `VPTreeL2Index` **0.49–0.86 ms**/batch | `IndexFlatL2` (Faiss's only exact option) 5.7–11.4 ms | **PyNear 12–13×** — a pruning tree vs a scan |
 
-The last two rows are deliberate: where Faiss is better we say so, and the
-[full PDF report](./docs/benchmarks.pdf) keeps every losing number. PyNear's
-case is **exact search that prunes** (metric trees beat brute force by an
-order of magnitude below ~256-D), **wide-binary/near-duplicate retrieval**
-(MIH's pigeonhole guarantee at 100% recall), zero native dependencies, and a
-one-line `pip install`.
+**Index vs index — where Faiss wins (kept on purpose):**
+
+| Workload | PyNear | Faiss | Verdict |
+|---|---|---|---|
+| **Float HNSW**, matched recall | `HNSWL2Index` 131k QPS @ 0.96 | `IndexHNSWFlat` **203k QPS @ 0.97** | **Faiss ~1.5× faster** (recall-per-ef identical — graph quality is at parity) |
+| **Quantised HNSW**, like for like | `HNSWL2IndexSQ8` (ceiling 0.940) | `IndexHNSWSQ` **(ceiling 0.944)** | **Faiss ~1.5–1.8× faster** at matched recall |
+| Approximate **float** L2 raw latency, 128–1024-D | `IVFFlatL2Index` 5.6–21.5 ms | `IndexIVFFlat` **0.2–2.8 ms** | **Faiss wins 8–32×** (BLAS inner scan) |
+| Exact **binary** k-NN | `VPTreeBinaryIndex` 3.2–15.9 ms | `IndexBinaryFlat` **0.15–0.29 ms** | **Faiss wins at every width** — use PyNear's MIH/IVF for binary instead |
+
+If your workload is high-dimensional embedding retrieval, Faiss's HNSW/IVF
+are faster and we say so with numbers — the
+[full PDF report](./docs/benchmarks.pdf) keeps every losing figure. PyNear's
+case is the workloads *between* the embeddings world and brute force:
+**binary descriptors with completeness guarantees** (dedup, copy detection,
+ORB/BRIEF matching), **memory-tight ANN** (SQ8 ahead of Faiss's float index
+below ~0.91 recall at a quarter of the RAM), **exactness where it's
+mandatory** (CV matching, compliance, ground-truth generation), zero native
+dependencies, and a one-line `pip install`.
 
 > **Methodology note:** PyNear links libgomp and `faiss-cpu` links libomp.
 > Loaded into one process, the two OpenMP runtimes contend and Faiss's flat
