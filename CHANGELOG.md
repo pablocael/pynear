@@ -18,6 +18,15 @@ All notable changes to PyNear are documented in this file. Versioning follows
   directly into the numpy buffers with the GIL released. SQ8 throughput
   at ef>=64 matches the previous lower-recall kernel despite the decode
   cost; results bit-identical on fixed graphs.
+- SQ8 greedy descent batched with prefetch: +20-25% SQ8 query throughput
+  at ef=16-64 (results bit-identical).
+
+### Fixed
+- Data race in parallel HNSW builds (n_threads > 1): the new node's
+  neighbour lists were written without a lock while concurrent inserters
+  could already read them, causing rare torn reads and a possible crash
+  (~1/160 24-thread 100k builds; affects all releases since HNSW landed,
+  including 2.5.0). Own-node link writes now take the node's lock.
 
 ## 2.5.0 — 2026-07-02
 
