@@ -7,8 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/pablocael/pynear?style=social)](https://github.com/pablocael/pynear/stargazers)
 
-**PyNear** is a metric-space nearest-neighbour library with a C++ core, built for the workloads *between* the embeddings world and brute force: **binary descriptors with recall guarantees** (MIH + IVF-Binary + the novel MIH-seeded HNSW — dedup, copy detection, ORB/BRIEF matching, robotics), **memory-tight ANN** (HNSW with int8 quantisation), and **exact search** (VP-trees, up to ~256-D) where a missed neighbour is a bug, not a recall statistic. One small NumPy-only API, scikit-learn drop-in, pre-built wheels (`pip install pynear`). For high-dimensional embedding retrieval at high recall, Faiss's HNSW is ~1.5× faster than ours — [we publish that number ourselves](#pynear-vs-faiss-in-numbers), along with every other one where Faiss wins.
-
+**PyNear** is a metric-space nearest-neighbour library with a C++ core, built for the workloads *between* the embeddings world and brute force: **binary descriptors with recall guarantees** (MIH + IVF-Binary + the novel MIH-seeded HNSW — dedup, copy detection, ORB/BRIEF matching, robotics), **memory-tight ANN** (HNSW with int8 quantisation), and **exact search** (VP-trees, up to ~256-D) where a missed neighbour is a bug, not a recall statistic. One small NumPy-only API, scikit-learn drop-in, pre-built wheels (`pip install pynear`). 
 ![PyNear demo](docs/img/demo.gif)
 
 
@@ -103,6 +102,8 @@ All measured July 2026 on a 24-core machine, **index vs index, with Faiss
 running in its own process** so the numbers are fair (two OpenMP runtimes in
 one process throttle Faiss — see the methodology note below). Reproducible via
 `demo_faiss_comparison.py` and the [benchmark suite](./pynear/benchmark/).
+
+For high-dimensional embedding retrieval at high recall, Faiss's HNSW is ~1.5× faster than ours — [we publish that number ourselves](#pynear-vs-faiss-in-numbers), along with every other one where Faiss wins.
 
 **Index vs index — where PyNear wins:**
 
