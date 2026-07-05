@@ -7,6 +7,12 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/pablocael/pynear?style=social)](https://github.com/pablocael/pynear/stargazers)
 
+**PyNear** is a metric-space nearest-neighbour library with a C++ core, built for the workloads *between* the embeddings world and brute force: **binary descriptors with recall guarantees** (MIH + IVF-Binary + the novel MIH-seeded HNSW — dedup, copy detection, ORB/BRIEF matching, robotics), **memory-tight ANN** (HNSW with int8 quantisation), and **exact search** (VP-trees, up to ~256-D) where a missed neighbour is a bug, not a recall statistic. One small NumPy-only API, scikit-learn drop-in, pre-built wheels (`pip install pynear`). For high-dimensional embedding retrieval at high recall, Faiss's HNSW is ~1.5× faster than ours — [we publish that number ourselves](#pynear-vs-faiss-in-numbers), along with every other one where Faiss wins.
+
+![PyNear demo](docs/img/demo.gif)
+
+
+
 > **k-NN with guarantees.** Near-duplicate search that provably misses nothing,
 > quantised ANN that beats float indexes at 4× less RAM, and exact search when
 > exactness is mandatory.
@@ -18,11 +24,6 @@
 > exact k-NN 12× faster than a flat scan for CV matching, dedup compliance,
 > and ANN ground truth · drop-in for scikit-learn · SIMD on x86 and ARM ·
 > zero native deps beyond NumPy.
-
-![PyNear demo](docs/img/demo.gif)
-
-**PyNear** is a metric-space nearest-neighbour library with a C++ core, built for the workloads *between* the embeddings world and brute force: **binary descriptors with recall guarantees** (MIH + IVF-Binary + the novel MIH-seeded HNSW — dedup, copy detection, ORB/BRIEF matching, robotics), **memory-tight ANN** (HNSW with int8 quantisation), and **exact search** (VP-trees, up to ~256-D) where a missed neighbour is a bug, not a recall statistic. One small NumPy-only API, scikit-learn drop-in, pre-built wheels (`pip install pynear`). For high-dimensional embedding retrieval at high recall, Faiss's HNSW is ~1.5× faster than ours — [we publish that number ourselves](#pynear-vs-faiss-in-numbers), along with every other one where Faiss wins.
-
 ---
 
 ## Table of Contents
