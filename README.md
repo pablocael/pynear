@@ -8,8 +8,8 @@
 [![GitHub stars](https://img.shields.io/github/stars/pablocael/pynear?style=social)](https://github.com/pablocael/pynear/stargazers)
 
 **PyNear** is a metric-space nearest-neighbour library with a C++ core, built for the workloads *between* the embeddings world and brute force: **binary descriptors with recall guarantees** (MIH + IVF-Binary + the novel MIH-seeded HNSW — dedup, copy detection, ORB/BRIEF matching, robotics), **memory-tight ANN** (HNSW with int8 quantisation), and **exact search** (VP-trees, up to ~256-D) where a missed neighbour is a bug, not a recall statistic. One small NumPy-only API, scikit-learn drop-in, pre-built wheels (`pip install pynear`). 
-![PyNear demo](docs/img/demo.gif)
 
+![PyNear demo](docs/img/demo.gif)
 
 
 > **k-NN with guarantees.** Near-duplicate search that provably misses nothing,
