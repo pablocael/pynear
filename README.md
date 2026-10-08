@@ -86,15 +86,44 @@ all three regimes instead of forcing every problem through the same tool:
 
 ## Why PyNear?
 
-| | PyNear | Faiss | Annoy | scikit-learn |
-|---|---|---|---|---|
-| **Metric agnostic** | ✅ L2, L1, L∞, cosine, Hamming | L2 / IP / cosine | L2 / cosine / Hamming | L2 / others |
-| **HNSW (incl. binary)** | ✅ + novel MIH-seeded variant for binary | ✅ | ❌ | ❌ |
-| **Binary / Hamming with recall guarantee** | ✅ MIH pigeonhole guarantee at index speed; up to 3.5× Faiss's MIH at matched recall, ~2,500× at 512-bit | ✅ MIH (collapses at wide codes) + IVF | ❌ | ❌ |
-| **scikit-learn drop-in** | ✅ adapter classes | ❌ | ❌ | — |
-| **Zero native deps** | ✅ NumPy only | ❌ compiled lib + optional GPU | ❌ | ❌ |
+**Choose PyNear for CPU workloads built around binary near-duplicates, exact
+metric-tree search, or scikit-learn integration.** These are its clearest
+reasons to consider it alongside Faiss:
 
-[Full comparison →](./docs/comparison.md)
+| Your use case | Why consider PyNear? | Start with |
+|---|---|---|
+| **Image deduplication and copy detection** using perceptual hashes or ORB/BRIEF descriptors | Multi-Index Hashing targets nearby binary codes without scanning the whole database. It is especially worth benchmarking for wide codes and small Hamming radii. | `MIHBinaryIndex` |
+| **Exact nearest neighbours** for geometric data, feature matching, or ANN ground truth | VP-trees use metric bounds to prune work while preserving exact results. They can outperform a flat scan when the data permits effective pruning; dimension alone does not predict the crossover. | `VPTreeL2Index`, `VPTreeL1Index`, `VPTreeChebyshevIndex` |
+| **All binary matches within a threshold**, such as finding every hash within a fixed number of bit flips | A dedicated BK-tree API returns all matches within the threshold, without choosing a top-k limit. | `BKTreeBinaryIndex.find_threshold()` |
+| **Existing scikit-learn classification, regression, or neighbour lookup** | Adapters expose familiar `fit`, `predict`, and `kneighbors` methods backed by VP-trees, reducing integration work for supported metrics and options. | [scikit-learn adapters](#migrating-from-scikit-learn) |
+
+PyNear also offers **memory-conscious CPU ANN** through `HNSWL2IndexSQ8`:
+int8 vector storage uses one quarter of the bytes of float32 vector storage.
+Graph and metadata overhead remain, so this is **not a 4× reduction in total
+index RAM**. Faiss also offers quantised indexes; compare equivalent indexes
+at your target recall before choosing either library.
+
+**What does the MIH guarantee mean?** Every code within the configured
+Hamming radius is considered as a candidate. `searchKNN(..., k=k, radius=r)`
+still returns at most `k` results and may include candidates beyond `r`.
+It recovers the exact top-k distances when the true kth neighbour is within
+`r` (IDs can differ on ties). Use `BKTreeBinaryIndex.find_threshold()` when
+you need *all* matches within a threshold. This guarantee concerns descriptor
+distance, not whether a perceptual hash detects every real-world duplicate.
+
+**When should you choose Faiss?** Start with Faiss when you need GPU search,
+PQ/OPQ compression, or large-scale dense embedding retrieval. It also wins
+several of our CPU benchmarks below, including float HNSW and IVF. Exact
+search, Hamming support, and L1/L∞ metrics are not exclusive to PyNear:
+see Faiss's [metric documentation](https://github.com/facebookresearch/faiss/wiki/MetricType-and-distances),
+[binary indexes and range search](https://github.com/facebookresearch/faiss/wiki/Binary-indexes),
+and [index guide](https://github.com/facebookresearch/faiss/wiki/Faiss-indexes).
+
+The practical question is whether PyNear's index and API fit your workload.
+Compare query time, build time, total memory, and recall on your own data;
+the measurements below are examples, not universal speed guarantees.
+
+[More selection guidance →](./docs/comparison.md)
 
 ### PyNear vs Faiss, in numbers
 
@@ -110,9 +139,8 @@ one process throttle Faiss — see the methodology note below). Reproducible via
 | **SIFT1M 128-bit**, MIH vs MIH at matched recall | `MIHBinaryIndex` | `IndexBinaryMultiHash` | **PyNear up to 3.5× faster** across the recall curve |
 | **512-bit near-duplicates**, 1M codes, 100% Recall@10 | `MIHBinaryIndex` **114,039 QPS** | `IndexBinaryMultiHash` 46 QPS | **PyNear ~2,500× faster** — Faiss's MIH is not viable at this width |
 | **Quantised vs float ANN**: SQ8 HNSW vs Faiss's float HNSW, 100k × 128-D | `HNSWL2IndexSQ8` **291k QPS @ 0.91 recall** | `IndexHNSWFlat` ~260k QPS | **PyNear tracks or beats it up to ~0.91 recall at 4× less vector memory** |
-| **Guaranteed-complete near-duplicate retrieval** (every neighbour within the radius, by pigeonhole) | `MIHBinaryIndex` **114,039 QPS** | exact scan is the only alternative with the same guarantee: 3,341 QPS | **PyNear 34× faster at 100% recall** |
 | **IVF build time**, 50k float vectors, 128–1024-D | **0.37–1.5 s** | 0.51–3.7 s | **PyNear 1.4–2.4× faster builds** |
-| **Exactness required** (CV feature matching, dedup compliance, ANN ground truth), ≤256-D | `VPTreeL2Index` **0.49–0.86 ms**/batch | `IndexFlatL2` (Faiss's only exact option) 5.7–11.4 ms | **PyNear 12–13×** — a pruning tree vs a scan |
+| **Exactness required** (CV feature matching, dedup compliance, ANN ground truth), ≤256-D | `VPTreeL2Index` **0.49–0.86 ms**/batch | `IndexFlatL2` (exact flat scan) 5.7–11.4 ms | **PyNear 12–13×** — a pruning tree vs a scan |
 
 **Index vs index — where Faiss wins (kept on purpose):**
 
@@ -123,15 +151,11 @@ one process throttle Faiss — see the methodology note below). Reproducible via
 | Approximate **float** L2 raw latency, 128–1024-D | `IVFFlatL2Index` 5.6–21.5 ms | `IndexIVFFlat` **0.2–2.8 ms** | **Faiss wins 8–32×** (BLAS inner scan) |
 | Exact **binary** k-NN | `VPTreeBinaryIndex` 3.2–15.9 ms | `IndexBinaryFlat` **0.15–0.29 ms** | **Faiss wins at every width** — use PyNear's MIH/IVF for binary instead |
 
-If your workload is high-dimensional embedding retrieval, Faiss's HNSW/IVF
-are faster and we say so with numbers — the
-[full PDF report](./docs/benchmarks.pdf) keeps every losing figure. PyNear's
-case is the workloads *between* the embeddings world and brute force:
-**binary descriptors with completeness guarantees** (dedup, copy detection,
-ORB/BRIEF matching), **memory-tight ANN** (SQ8 ahead of Faiss's float index
-below ~0.91 recall at a quarter of the RAM), **exactness where it's
-mandatory** (CV matching, compliance, ground-truth generation), zero native
-dependencies, and a one-line `pip install`.
+In these measurements, Faiss wins on high-dimensional float retrieval while
+PyNear has advantages on selected binary near-duplicate and exact tree-search
+workloads. The [full PDF report](./docs/benchmarks.pdf) includes results where
+Faiss wins. SQ8-versus-float figures compare different storage formats; use
+the like-for-like quantised comparison when evaluating an SQ8 deployment.
 
 > **Methodology note:** PyNear links libgomp and `faiss-cpu` links libomp.
 > Loaded into one process, the two OpenMP runtimes contend and Faiss's flat
@@ -150,7 +174,7 @@ dependencies, and a one-line `pip install`.
 | Same but **memory-tight** (millions of vectors on one box) | `HNSWL2IndexSQ8` — 4× less RAM, ~1-3% recall hit |
 | **Generic float L2 ANN** | `HNSWL2Index` |
 | **Exact answers** required (small / moderate D ≤ 256) | `VPTreeL2Index` (or `L1`, `Chebyshev`, `Cosine`) |
-| **Binary descriptors** (perceptual hash, ORB, BRIEF, SimHash) — near-duplicate detection | `MIHBinaryIndex` (pigeonhole guarantee: every neighbour within your radius is found; 34× faster than the exact scan, which is the only alternative with the same guarantee) |
+| **Binary descriptors** (perceptual hash, ORB, BRIEF, SimHash) — near-duplicate detection | `MIHBinaryIndex` (complete candidate discovery within the configured radius; output limited to top-k) |
 | Binary + want graph fallback for larger queries | `MIHSeededHNSWBinaryIndex` (novel — MIH seeds the HNSW beam search) |
 | **Range / threshold queries** on binary descriptors | `BKTreeBinaryIndex` |
 | Already on `sklearn.neighbors.*` | `pynear.sklearn_adapter.PyNearKNeighborsClassifier` etc. — drop-in |
