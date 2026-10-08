@@ -25,6 +25,15 @@ jobs:
         CIBW_ARCHS_LINUX: auto64
         CIBW_ARCHS_WINDOWS: auto64
         CIBW_BEFORE_ALL_MACOS: brew install llvm libomp
+        # The wheel test runs inside the manylinux2014 (glibc 2.17) image,
+        # whose GCC is 10.2.1. numpy >= 2.3 dropped manylinux2014 wheels
+        # (it ships manylinux_2_28 only), so pip would fall back to building
+        # numpy from source in the test venv — and numpy's meson build
+        # requires GCC >= 10.3, which the image doesn't have. Pre-install a
+        # numpy that still publishes manylinux2014 wheels so the smoke test
+        # installs a binary instead of compiling from source. This only
+        # affects the CI test environment, not the numpy users get at runtime.
+        CIBW_BEFORE_TEST_LINUX: pip install "numpy<2.3"
         # Include both Homebrew prefixes: /opt/homebrew (arm64) and /usr/local (x86_64/Rosetta)
         CIBW_ENVIRONMENT_MACOS: >-
           CC="clang" CXX="clang++"
